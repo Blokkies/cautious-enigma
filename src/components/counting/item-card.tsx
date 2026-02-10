@@ -191,19 +191,27 @@ interface QueueItemRowProps {
 
 export function QueueItemRow({ item, position }: QueueItemRowProps) {
   return (
-    <div className="flex items-center gap-3 px-3 py-2 text-sm border-b last:border-b-0">
-      <span className="text-muted-foreground w-6 text-right flex-shrink-0">
-        {position}
-      </span>
-      <span className="font-mono font-medium w-28 flex-shrink-0 truncate">
-        {item.itemCode}
-      </span>
-      <span className="text-muted-foreground flex-1 truncate">
-        {item.description}
-      </span>
-      <span className="font-medium w-12 text-right flex-shrink-0">
-        {item.onHand ?? 0}
-      </span>
+    <div className="px-3 py-2 text-sm border-b last:border-b-0">
+      <div className="flex items-start gap-3">
+        <span className="text-muted-foreground w-6 text-right flex-shrink-0">
+          {position}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono font-medium">
+              {item.itemCode}
+            </span>
+            <span className="font-medium flex-shrink-0">
+              {item.onHand ?? 0}
+            </span>
+          </div>
+          {item.description && (
+            <p className="text-muted-foreground text-xs mt-0.5 leading-snug">
+              {item.description}
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams, queries, breakdowns } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
@@ -23,11 +23,11 @@ export async function GET(request: NextRequest) {
     if (latest) eventId = latest.id;
   }
 
-  // Overall stats
+  // Overall stats (only assigned items count toward completion)
   const totalItems = db
     .select({ count: sql<number>`count(*)` })
     .from(items)
-    .where(eq(items.eventId, eventId))
+    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)))
     .get();
 
   const totalCounted = db

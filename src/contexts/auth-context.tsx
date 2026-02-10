@@ -7,12 +7,13 @@ interface User {
   type: "team" | "supervisor" | "admin";
   name: string;
   eventId?: number;
+  eventName?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (type: string, id: number, pin: string) => Promise<{ success: boolean; error?: string }>;
+  login: (type: string, id: number, pin: string, eventId?: number) => Promise<{ success: boolean; error?: string }>;
   adminLogin: (password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
@@ -43,12 +44,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkAuth();
   }, [checkAuth]);
 
-  const login = async (type: string, id: number, pin: string) => {
+  const login = async (type: string, id: number, pin: string, eventId?: number) => {
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, id, pin }),
+        body: JSON.stringify({ type, id, pin, eventId }),
       });
       const data = await res.json();
       if (data.success) {

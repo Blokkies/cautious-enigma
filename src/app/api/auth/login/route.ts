@@ -6,7 +6,7 @@ import { verifyPin, createToken, getTokenCookieOptions } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
-    const { type, id, pin } = await request.json();
+    const { type, id, pin, eventId } = await request.json();
 
     if (!type || !id || !pin) {
       return NextResponse.json(
@@ -15,14 +15,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find active event
-    const activeEvent = db
-      .select()
-      .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.status, "active"))
-      .get();
+    // Resolve the event: use provided eventId, or fall back to finding active event
+    let event;
+    if (eventId) {
+      event = db
+        .select()
+        .from(stocktakeEvents)
+        .where(eq(stocktakeEvents.id, Number(eventId)))
+        .get();
+    } else {
+      event = db
+        .select()
+        .from(stocktakeEvents)
+        .where(eq(stocktakeEvents.status, "active"))
+        .get();
+    }
 
-    if (!activeEvent) {
+    if (!event) {
       return NextResponse.json(
         { error: "No active stocktake event" },
         { status: 400 }
@@ -33,7 +42,7 @@ export async function POST(request: NextRequest) {
       const team = db
         .select()
         .from(teams)
-        .where(and(eq(teams.id, Number(id)), eq(teams.eventId, activeEvent.id)))
+        .where(and(eq(teams.id, Number(id)), eq(teams.eventId, event.id)))
         .get();
 
       if (!team) {
@@ -49,12 +58,13 @@ export async function POST(request: NextRequest) {
         id: team.id,
         type: "team",
         name: team.name,
-        eventId: activeEvent.id,
+        eventId: event.id,
+        eventName: event.name,
       });
 
       const response = NextResponse.json({
         success: true,
-        user: { id: team.id, type: "team", name: team.name },
+        user: { id: team.id, type: "team", name: team.name, eventId: event.id, eventName: event.name },
       });
 
       response.cookies.set({
@@ -72,7 +82,7 @@ export async function POST(request: NextRequest) {
         .where(
           and(
             eq(supervisors.id, Number(id)),
-            eq(supervisors.eventId, activeEvent.id)
+            eq(supervisors.eventId, event.id)
           )
         )
         .get();
@@ -93,7 +103,8 @@ export async function POST(request: NextRequest) {
         id: supervisor.id,
         type: "supervisor",
         name: supervisor.name,
-        eventId: activeEvent.id,
+        eventId: event.id,
+        eventName: event.name,
       });
 
       const response = NextResponse.json({
@@ -102,6 +113,8 @@ export async function POST(request: NextRequest) {
           id: supervisor.id,
           type: "supervisor",
           name: supervisor.name,
+          eventId: event.id,
+          eventName: event.name,
         },
       });
 

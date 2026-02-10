@@ -42,8 +42,14 @@ export default function SupervisorLayout({
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
         <div className="flex items-center justify-between px-4 h-14">
-          <div className="font-semibold text-primary">
-            Supervisor: {user?.name}
+          <div className="flex items-center gap-1.5 font-semibold text-primary">
+            {user?.eventName && (
+              <>
+                <span className="text-sm font-normal text-muted-foreground">{user.eventName}</span>
+                <span className="text-muted-foreground font-normal">·</span>
+              </>
+            )}
+            <span>Supervisor: {user?.name}</span>
           </div>
           <Button
             variant="ghost"

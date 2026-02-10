@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
       type: "admin",
       name: "Admin",
       eventId: 0,
+      eventName: "",
     });
 
     const response = NextResponse.json({

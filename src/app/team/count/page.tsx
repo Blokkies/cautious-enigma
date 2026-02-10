@@ -20,6 +20,24 @@ import { v4 as uuidv4 } from "uuid";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing";
 
+function naturalCompare(a: string, b: string): number {
+  const ax = a.match(/(\d+|\D+)/g) || [];
+  const bx = b.match(/(\d+|\D+)/g) || [];
+  for (let i = 0; i < Math.max(ax.length, bx.length); i++) {
+    if (i >= ax.length) return -1;
+    if (i >= bx.length) return 1;
+    const an = parseInt(ax[i], 10);
+    const bn = parseInt(bx[i], 10);
+    if (!isNaN(an) && !isNaN(bn)) {
+      if (an !== bn) return an - bn;
+    } else {
+      const cmp = ax[i].localeCompare(bx[i]);
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return 0;
+}
+
 export default function CountingPage() {
   const router = useRouter();
 
@@ -108,7 +126,7 @@ export default function CountingPage() {
       if (aComplete === 1 && bComplete === 1) {
         if (aStats.variances !== bStats.variances) return bStats.variances - aStats.variances;
       }
-      return a.localeCompare(b);
+      return naturalCompare(a, b);
     });
     return entries;
   }, [items]);

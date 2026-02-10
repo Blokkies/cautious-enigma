@@ -11,6 +11,7 @@ export interface TokenPayload {
   type: "team" | "supervisor" | "admin";
   name: string;
   eventId: number;
+  eventName: string;
 }
 
 export async function createToken(payload: TokenPayload): Promise<string> {

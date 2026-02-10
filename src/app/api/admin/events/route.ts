@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { stocktakeEvents, items, teams, supervisors } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 
+const VALID_STATUSES = ["setup", "active", "completed", "locked"] as const;
+
 export async function GET() {
   const events = db
     .select()
@@ -67,6 +69,52 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("Create event error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PUT(request: NextRequest) {
+  try {
+    const { id, status } = await request.json();
+
+    if (!id || !status) {
+      return NextResponse.json(
+        { error: "Missing id or status" },
+        { status: 400 }
+      );
+    }
+
+    if (!VALID_STATUSES.includes(status)) {
+      return NextResponse.json(
+        { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}` },
+        { status: 400 }
+      );
+    }
+
+    const existing = db
+      .select()
+      .from(stocktakeEvents)
+      .where(eq(stocktakeEvents.id, Number(id)))
+      .get();
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: "Event not found" },
+        { status: 404 }
+      );
+    }
+
+    db.update(stocktakeEvents)
+      .set({ status, updatedAt: new Date().toISOString() })
+      .where(eq(stocktakeEvents.id, Number(id)))
+      .run();
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Update event status error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

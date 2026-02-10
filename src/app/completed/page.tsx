@@ -5,6 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   CheckCircle2,
   AlertTriangle,
   Package,
@@ -13,6 +20,7 @@ import {
   BarChart3,
   TrendingDown,
 } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context";
 
 interface DashboardData {
   event: {
@@ -60,14 +68,44 @@ interface DashboardData {
   }[];
 }
 
+interface EventOption {
+  id: number;
+  name: string;
+  status: string;
+}
+
 export default function CompletedDashboard() {
+  const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [events, setEvents] = useState<EventOption[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const isAdmin = user?.type === "admin";
 
+  // Load event list for admin
+  useEffect(() => {
+    if (!isAdmin) return;
+    async function loadEvents() {
+      try {
+        const res = await fetch("/api/admin/events");
+        if (res.ok) {
+          const data = await res.json();
+          setEvents(data.events || []);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    loadEvents();
+  }, [isAdmin]);
+
+  // Load dashboard data
   useEffect(() => {
     async function load() {
+      setLoading(true);
       try {
-        const res = await fetch("/api/completed/dashboard");
+        const params = selectedEventId ? `?eventId=${selectedEventId}` : "";
+        const res = await fetch(`/api/completed/dashboard${params}`);
         if (res.ok) {
           setData(await res.json());
         }
@@ -78,7 +116,7 @@ export default function CompletedDashboard() {
       }
     }
     load();
-  }, []);
+  }, [selectedEventId]);
 
   if (loading) {
     return (
@@ -111,17 +149,33 @@ export default function CompletedDashboard() {
               : ""}
           </p>
         </div>
-        <Badge
-          className={
-            event.status === "completed"
-              ? "bg-green-100 text-green-800"
-              : event.status === "locked"
-              ? "bg-gray-100 text-gray-800"
-              : "bg-blue-100 text-blue-800"
-          }
-        >
-          {event.status}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {isAdmin && events.length > 1 && (
+            <Select value={selectedEventId || String(event.id)} onValueChange={setSelectedEventId}>
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Switch event..." />
+              </SelectTrigger>
+              <SelectContent>
+                {events.map((ev) => (
+                  <SelectItem key={ev.id} value={String(ev.id)}>
+                    {ev.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Badge
+            className={
+              event.status === "completed"
+                ? "bg-green-100 text-green-800"
+                : event.status === "locked"
+                ? "bg-gray-100 text-gray-800"
+                : "bg-blue-100 text-blue-800"
+            }
+          >
+            {event.status}
+          </Badge>
+        </div>
       </div>
 
       {/* Completion Overview */}

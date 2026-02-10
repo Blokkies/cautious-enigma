@@ -67,12 +67,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Deactivate any other active events
-    db.update(stocktakeEvents)
-      .set({ status: "completed" })
-      .where(eq(stocktakeEvents.status, "active"))
-      .run();
-
     // Activate this event
     db.update(stocktakeEvents)
       .set({ status: "active", updatedAt: new Date().toISOString() })

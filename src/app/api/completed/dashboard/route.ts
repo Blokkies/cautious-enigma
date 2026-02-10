@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
@@ -10,7 +10,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let eventId = user.eventId;
+  // Allow explicit eventId param (for admin switching between events)
+  const eventIdParam = request.nextUrl.searchParams.get("eventId");
+  let eventId = eventIdParam ? Number(eventIdParam) : user.eventId;
 
   // Admin has eventId=0, find the latest active/completed event
   if (!eventId || eventId === 0) {
@@ -34,11 +36,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Event not found" }, { status: 404 });
   }
 
-  // Overall stats
+  // Overall stats (only assigned items count toward completion)
   const totalItems = db
     .select({ count: sql<number>`count(*)` })
     .from(items)
-    .where(eq(items.eventId, eventId))
+    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)))
     .get();
 
   const totalCounted = db
@@ -68,7 +70,7 @@ export async function GET(request: NextRequest) {
   const totalStockValue = db
     .select({ total: sql<number>`COALESCE(sum(total_value), 0)` })
     .from(items)
-    .where(eq(items.eventId, eventId))
+    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)))
     .get();
 
   // Per-team final stats

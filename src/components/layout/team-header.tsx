@@ -24,7 +24,15 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
     <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
       <div className="flex items-center justify-between px-4 h-14">
         <div className="flex items-center gap-3">
-          <div className="font-semibold text-primary">{user?.name}</div>
+          <div className="flex items-center gap-1.5">
+            {user?.eventName && (
+              <>
+                <span className="text-sm text-muted-foreground">{user.eventName}</span>
+                <span className="text-muted-foreground">·</span>
+              </>
+            )}
+            <span className="font-semibold text-primary">{user?.name}</span>
+          </div>
           <div className="flex items-center gap-1">
             {isOnline ? (
               <Wifi className="h-4 w-4 text-green-500" />

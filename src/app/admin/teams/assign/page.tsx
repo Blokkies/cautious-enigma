@@ -23,8 +23,47 @@ import {
   Package,
   Scale,
   Loader2,
+  ArrowUpDown,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
+
+type BinSortMode = "natural" | "alpha" | "items-desc" | "value-desc";
+type BalanceMode = "equal-bins" | "equal-items";
+
+function naturalCompare(a: string, b: string): number {
+  const re = /(\d+)|(\D+)/g;
+  const ax: (string | number)[] = [];
+  const bx: (string | number)[] = [];
+
+  let m;
+  while ((m = re.exec(a)) !== null) {
+    ax.push(m[1] ? parseInt(m[1], 10) : m[2]);
+  }
+  re.lastIndex = 0;
+  while ((m = re.exec(b)) !== null) {
+    bx.push(m[1] ? parseInt(m[1], 10) : m[2]);
+  }
+
+  const len = Math.min(ax.length, bx.length);
+  for (let i = 0; i < len; i++) {
+    const ai = ax[i];
+    const bi = bx[i];
+    if (typeof ai === "number" && typeof bi === "number") {
+      if (ai !== bi) return ai - bi;
+    } else {
+      const cmp = String(ai).localeCompare(String(bi), undefined, { sensitivity: "base" });
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return ax.length - bx.length;
+}
+
+interface EventOption {
+  id: number;
+  name: string;
+  status: string;
+}
 
 interface BinInfo {
   bin_number: string;
@@ -55,13 +94,14 @@ interface BinItem {
 }
 
 export default function AssignPage() {
+  const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>("");
   const [unassignedBins, setUnassignedBins] = useState<BinInfo[]>([]);
   const [teamDetails, setTeamDetails] = useState<TeamDetail[]>([]);
   const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
   const [loading, setLoading] = useState(true);
 
-  // Bin selection
+  // Bin selection (unassigned)
   const [selectedBins, setSelectedBins] = useState<Set<string>>(new Set());
   const [binSearch, setBinSearch] = useState("");
   const [assignToTeam, setAssignToTeam] = useState<string>("");
@@ -70,29 +110,40 @@ export default function AssignPage() {
   // Team expand state
   const [expandedTeams, setExpandedTeams] = useState<Set<number>>(new Set());
 
-  // Filters (Feature 3)
+  // Filters
   const [warehouseFilter, setWarehouseFilter] = useState<string>("");
   const [brandFilter, setBrandFilter] = useState<string>("");
   const [filterOptions, setFilterOptions] = useState<{ warehouses: string[]; brands: string[] }>({ warehouses: [], brands: [] });
 
-  // Bin items expansion (Feature 4)
+  // Bin items expansion
   const [expandedBins, setExpandedBins] = useState<Set<string>>(new Set());
   const [binItemsCache, setBinItemsCache] = useState<Record<string, BinItem[]>>({});
   const [loadingBinItems, setLoadingBinItems] = useState<Set<string>>(new Set());
 
-  // Auto-balance (Feature 5)
+  // Sorting
+  const [binSort, setBinSort] = useState<BinSortMode>("natural");
+
+  // Auto-balance
   const [balancing, setBalancing] = useState(false);
+  const [balanceMode, setBalanceMode] = useState<BalanceMode>("equal-items");
+  const [balanceTeams, setBalanceTeams] = useState<Set<number>>(new Set());
+
+  // Team bin selection (for bulk removal)
+  const [selectedTeamBins, setSelectedTeamBins] = useState<Record<number, Set<string>>>({});
 
   const loadEvents = useCallback(async () => {
     const res = await fetch("/api/admin/events");
     if (res.ok) {
       const data = await res.json();
-      const ev = data.events?.find(
-        (e: { status: string }) => e.status === "setup" || e.status === "active"
+      const allEvents: EventOption[] = (data.events || []).filter(
+        (e: EventOption) => e.status === "setup" || e.status === "active"
       );
-      if (ev) setEventId(String(ev.id));
+      setEvents(allEvents);
+      if (allEvents.length > 0 && !eventId) {
+        setEventId(String(allEvents[0].id));
+      }
     }
-  }, []);
+  }, [eventId]);
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -123,7 +174,21 @@ export default function AssignPage() {
     loadData();
   }, [loadData]);
 
-  // Group unassigned bins by prefix (e.g., "6A", "3B")
+  // Sort comparator for bins
+  const binComparator = useMemo(() => {
+    switch (binSort) {
+      case "natural":
+        return (a: BinInfo, b: BinInfo) => naturalCompare(a.bin_number, b.bin_number);
+      case "alpha":
+        return (a: BinInfo, b: BinInfo) => a.bin_number.localeCompare(b.bin_number);
+      case "items-desc":
+        return (a: BinInfo, b: BinInfo) => b.item_count - a.item_count || naturalCompare(a.bin_number, b.bin_number);
+      case "value-desc":
+        return (a: BinInfo, b: BinInfo) => b.total_value - a.total_value || naturalCompare(a.bin_number, b.bin_number);
+    }
+  }, [binSort]);
+
+  // Group unassigned bins by prefix
   const groupedBins = useMemo(() => {
     let filtered = unassignedBins;
     if (binSearch.trim()) {
@@ -133,16 +198,28 @@ export default function AssignPage() {
       );
     }
 
+    const sorted = [...filtered].sort(binComparator);
+
     const groups: Record<string, BinInfo[]> = {};
-    for (const bin of filtered) {
-      // Extract prefix: everything before the first dot or first 2-3 chars
+    const groupOrder: string[] = [];
+    for (const bin of sorted) {
       const match = bin.bin_number.match(/^([A-Za-z0-9]+?)[\.\-\s]/);
       const prefix = match ? match[1] : bin.bin_number.substring(0, 2);
-      if (!groups[prefix]) groups[prefix] = [];
+      if (!groups[prefix]) {
+        groups[prefix] = [];
+        groupOrder.push(prefix);
+      }
       groups[prefix].push(bin);
     }
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
-  }, [unassignedBins, binSearch]);
+
+    if (binSort === "natural") {
+      groupOrder.sort(naturalCompare);
+    } else if (binSort === "alpha") {
+      groupOrder.sort((a, b) => a.localeCompare(b));
+    }
+
+    return groupOrder.map((prefix) => [prefix, groups[prefix]] as [string, BinInfo[]]);
+  }, [unassignedBins, binSearch, binComparator, binSort]);
 
   const toggleBin = (binNumber: string) => {
     setSelectedBins((prev) => {
@@ -188,15 +265,12 @@ export default function AssignPage() {
     setExpandedBins(new Set());
   };
 
-  // Bin items expansion (Feature 4)
+  // Bin items expansion
   const toggleBinExpand = async (binNumber: string) => {
     setExpandedBins((prev) => {
       const next = new Set(prev);
-      if (next.has(binNumber)) {
-        next.delete(binNumber);
-      } else {
-        next.add(binNumber);
-      }
+      if (next.has(binNumber)) next.delete(binNumber);
+      else next.add(binNumber);
       return next;
     });
 
@@ -221,29 +295,76 @@ export default function AssignPage() {
     }
   };
 
-  // Auto-balance (Feature 5)
+  // ── Balance logic ───────────────────────────────────────────────────────────
+
+  const toggleBalanceTeam = (teamId: number) => {
+    setBalanceTeams((prev) => {
+      const next = new Set(prev);
+      if (next.has(teamId)) next.delete(teamId);
+      else next.add(teamId);
+      return next;
+    });
+  };
+
+  const selectAllTeamsForBalance = () => {
+    setBalanceTeams(new Set(teamDetails.map((t) => t.id)));
+  };
+
+  const clearBalanceTeams = () => {
+    setBalanceTeams(new Set());
+  };
+
   const handleAutoBalance = async () => {
-    if (unassignedBins.length === 0) {
+    const binsToBalance = unassignedBins; // already filtered by warehouse/brand
+    if (binsToBalance.length === 0) {
       toast.error("No unassigned bins to distribute");
       return;
     }
-    if (teamDetails.length === 0) {
-      toast.error("No teams to assign to");
+
+    const targetTeams = teamDetails.filter((t) => balanceTeams.has(t.id));
+    if (targetTeams.length === 0) {
+      toast.error("Select at least one team");
       return;
     }
-    if (!confirm(`Auto-balance ${unassignedBins.length} unassigned bins across ${teamDetails.length} teams?`)) return;
+
+    const binCount = binsToBalance.length;
+    const teamCount = targetTeams.length;
+    const modeLabel = balanceMode === "equal-bins" ? "equal bins" : "equal items";
+    if (!confirm(`Distribute ${binCount} bins across ${teamCount} teams (${modeLabel})?`)) return;
 
     setBalancing(true);
     try {
-      // Greedy algorithm: sort bins by item_count descending, assign each to team with lowest current total
-      const sorted = [...unassignedBins].sort((a, b) => b.item_count - a.item_count);
-      const teamTotals = teamDetails.map((t) => ({ teamId: t.id, name: t.name, total: t.itemCount, bins: [] as string[] }));
+      const sorted = [...binsToBalance].sort((a, b) => b.item_count - a.item_count);
 
-      for (const bin of sorted) {
-        // Find team with lowest current total
-        teamTotals.sort((a, b) => a.total - b.total);
-        teamTotals[0].bins.push(bin.bin_number);
-        teamTotals[0].total += bin.item_count;
+      let teamTotals: { teamId: number; name: string; total: number; bins: string[] }[];
+
+      if (balanceMode === "equal-bins") {
+        // Equal bins: each team gets the same number of bins, considering existing bin count
+        teamTotals = targetTeams.map((t) => ({
+          teamId: t.id,
+          name: t.name,
+          total: t.bins.length, // existing bin count
+          bins: [],
+        }));
+
+        for (const bin of sorted) {
+          teamTotals.sort((a, b) => (a.total + a.bins.length) - (b.total + b.bins.length));
+          teamTotals[0].bins.push(bin.bin_number);
+        }
+      } else {
+        // Equal items: balance by item count, considering existing item counts
+        teamTotals = targetTeams.map((t) => ({
+          teamId: t.id,
+          name: t.name,
+          total: t.itemCount, // existing item count
+          bins: [],
+        }));
+
+        for (const bin of sorted) {
+          teamTotals.sort((a, b) => a.total - b.total);
+          teamTotals[0].bins.push(bin.bin_number);
+          teamTotals[0].total += bin.item_count;
+        }
       }
 
       const assignments = teamTotals
@@ -268,6 +389,7 @@ export default function AssignPage() {
           .join(", ");
         toast.success(`Assigned ${data.assignedCount} items (${summary})`);
         setSelectedBins(new Set());
+        setBalanceTeams(new Set());
         loadData();
       }
     } catch {
@@ -276,6 +398,54 @@ export default function AssignPage() {
       setBalancing(false);
     }
   };
+
+  // ── Team bin selection (for bulk removal) ───────────────────────────────────
+
+  const toggleTeamBin = (teamId: number, binNumber: string) => {
+    setSelectedTeamBins((prev) => {
+      const teamSet = new Set(prev[teamId] || []);
+      if (teamSet.has(binNumber)) teamSet.delete(binNumber);
+      else teamSet.add(binNumber);
+      return { ...prev, [teamId]: teamSet };
+    });
+  };
+
+  const toggleAllTeamBins = (teamId: number, bins: BinInfo[]) => {
+    setSelectedTeamBins((prev) => {
+      const teamSet = new Set(prev[teamId] || []);
+      const allSelected = bins.every((b) => teamSet.has(b.bin_number));
+      if (allSelected) {
+        return { ...prev, [teamId]: new Set() };
+      } else {
+        return { ...prev, [teamId]: new Set(bins.map((b) => b.bin_number)) };
+      }
+    });
+  };
+
+  const getSelectedTeamBinCount = (teamId: number) => {
+    return selectedTeamBins[teamId]?.size || 0;
+  };
+
+  const handleBulkUnassign = async (teamId: number) => {
+    const bins = Array.from(selectedTeamBins[teamId] || []);
+    if (bins.length === 0) return;
+    try {
+      const res = await fetch("/api/admin/assign", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId: Number(eventId), teamId, bins }),
+      });
+      if (res.ok) {
+        toast.success(`Removed ${bins.length} bin(s)`);
+        setSelectedTeamBins((prev) => ({ ...prev, [teamId]: new Set() }));
+        loadData();
+      }
+    } catch {
+      toast.error("Failed to unassign");
+    }
+  };
+
+  // ── Existing handlers ───────────────────────────────────────────────────────
 
   const handleAssign = async () => {
     if (!assignToTeam || selectedBins.size === 0) {
@@ -334,6 +504,7 @@ export default function AssignPage() {
       });
       if (res.ok) {
         toast.success("All items unassigned");
+        setSelectedTeamBins((prev) => ({ ...prev, [teamId]: new Set() }));
         loadData();
       }
     } catch {
@@ -367,7 +538,30 @@ export default function AssignPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Assign Items to Teams</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Assign Items to Teams</h1>
+        {events.length > 1 && (
+          <Select value={eventId} onValueChange={(v) => {
+            setEventId(v);
+            setSelectedBins(new Set());
+            setBinItemsCache({});
+            setExpandedBins(new Set());
+            setBalanceTeams(new Set());
+            setSelectedTeamBins({});
+          }}>
+            <SelectTrigger className="w-64">
+              <SelectValue placeholder="Select event..." />
+            </SelectTrigger>
+            <SelectContent>
+              {events.map((ev) => (
+                <SelectItem key={ev.id} value={String(ev.id)}>
+                  {ev.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
 
       {/* Progress */}
       <Card>
@@ -389,23 +583,29 @@ export default function AssignPage() {
         </CardContent>
       </Card>
 
-      {/* Team Assignments - expandable */}
+      {/* Team Assignments */}
       <Card>
         <CardHeader>
           <CardTitle className="text-lg flex items-center justify-between">
             <span>Team Assignments</span>
-            {teamDetails.length > 0 && unassignedBins.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleAutoBalance}
-                disabled={balancing}
-                className="gap-1"
-              >
-                {balancing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />}
-                Auto-Balance
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {balanceTeams.size > 0 && (
+                <Button variant="ghost" size="sm" onClick={clearBalanceTeams} className="text-xs gap-1 h-7">
+                  <X className="h-3 w-3" />
+                  Clear
+                </Button>
+              )}
+              {teamDetails.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => balanceTeams.size === teamDetails.length ? clearBalanceTeams() : selectAllTeamsForBalance()}
+                  className="text-xs h-7"
+                >
+                  {balanceTeams.size === teamDetails.length ? "Deselect All" : "Select All"}
+                </Button>
+              )}
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -416,36 +616,60 @@ export default function AssignPage() {
           ) : (
             teamDetails.map((team) => {
               const isExpanded = expandedTeams.has(team.id);
+              const isBalanceSelected = balanceTeams.has(team.id);
+              const selectedCount = getSelectedTeamBinCount(team.id);
+              const teamBinSet = selectedTeamBins[team.id] || new Set<string>();
+              const allBinsSelected = team.bins.length > 0 && team.bins.every((b) => teamBinSet.has(b.bin_number));
+              const someBinsSelected = team.bins.some((b) => teamBinSet.has(b.bin_number));
+
               return (
-                <div key={team.id} className="border rounded-lg">
-                  <div
-                    className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-50"
-                    onClick={() => toggleTeamExpand(team.id)}
-                  >
+                <div key={team.id} className={`border rounded-lg ${isBalanceSelected ? "border-blue-300 bg-blue-50/30" : ""}`}>
+                  <div className="flex items-center justify-between p-3 hover:bg-gray-50">
                     <div className="flex items-center gap-2">
-                      {isExpanded ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      )}
-                      <div>
-                        <span className="font-medium">{team.name}</span>
-                        <span className="text-sm text-muted-foreground ml-2">
-                          {team.itemCount.toLocaleString()} items
-                        </span>
-                        <span className="text-sm text-muted-foreground ml-2">
-                          {team.bins.length} bins
-                        </span>
+                      {/* Balance selection checkbox */}
+                      <input
+                        type="checkbox"
+                        checked={isBalanceSelected}
+                        onChange={() => toggleBalanceTeam(team.id)}
+                        className="rounded"
+                        title="Include in auto-balance"
+                      />
+                      <div
+                        className="flex items-center gap-2 cursor-pointer"
+                        onClick={() => toggleTeamExpand(team.id)}
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        <div>
+                          <span className="font-medium">{team.name}</span>
+                          <span className="text-sm text-muted-foreground ml-2">
+                            {team.itemCount.toLocaleString()} items
+                          </span>
+                          <span className="text-sm text-muted-foreground ml-2">
+                            {team.bins.length} bins
+                          </span>
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-muted-foreground">
-                        R
-                        {team.totalValue.toLocaleString(undefined, {
-                          maximumFractionDigits: 0,
-                        })}
+                        R{team.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </span>
-                      {team.itemCount > 0 && (
+                      {selectedCount > 0 && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleBulkUnassign(team.id)}
+                          className="h-7 text-xs gap-1"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Remove {selectedCount}
+                        </Button>
+                      )}
+                      {team.bins.length > 0 && selectedCount === 0 && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -463,12 +687,33 @@ export default function AssignPage() {
 
                   {isExpanded && team.bins.length > 0 && (
                     <div className="border-t px-3 py-2 bg-gray-50 space-y-1 max-h-60 overflow-y-auto">
+                      {/* Select all bins in team */}
+                      <div className="flex items-center justify-between pb-1 mb-1 border-b border-gray-200">
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={allBinsSelected}
+                            ref={(el) => {
+                              if (el) el.indeterminate = someBinsSelected && !allBinsSelected;
+                            }}
+                            onChange={() => toggleAllTeamBins(team.id, team.bins)}
+                            className="rounded"
+                          />
+                          Select all {team.bins.length} bins
+                        </label>
+                      </div>
                       {team.bins.map((bin) => (
                         <div
                           key={bin.bin_number}
                           className="flex items-center justify-between text-sm py-1"
                         >
                           <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={teamBinSet.has(bin.bin_number)}
+                              onChange={() => toggleTeamBin(team.id, bin.bin_number)}
+                              className="rounded"
+                            />
                             <Package className="h-3 w-3 text-muted-foreground" />
                             <span className="font-mono">{bin.bin_number}</span>
                             <span className="text-muted-foreground">
@@ -479,9 +724,7 @@ export default function AssignPage() {
                             variant="ghost"
                             size="sm"
                             className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                            onClick={() =>
-                              handleUnassignBins(team.id, [bin.bin_number])
-                            }
+                            onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
                           >
                             Remove
                           </Button>
@@ -498,6 +741,42 @@ export default function AssignPage() {
                 </div>
               );
             })
+          )}
+
+          {/* Balance toolbar */}
+          {balanceTeams.size > 0 && unassignedBins.length > 0 && (
+            <div className="border-t pt-3 mt-3 space-y-2">
+              <div className="flex items-center gap-2 text-sm">
+                <Scale className="h-4 w-4 text-muted-foreground" />
+                <span className="font-medium">
+                  Auto-balance {unassignedBins.length} bins across {balanceTeams.size} team{balanceTeams.size !== 1 ? "s" : ""}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <Select value={balanceMode} onValueChange={(v) => setBalanceMode(v as BalanceMode)}>
+                  <SelectTrigger className="flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="equal-items">Equal Items (balance by item count)</SelectItem>
+                    <SelectItem value="equal-bins">Equal Bins (balance by bin count)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  onClick={handleAutoBalance}
+                  disabled={balancing}
+                  className="gap-1"
+                >
+                  {balancing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />}
+                  {balancing ? "Balancing..." : "Balance"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {balanceMode === "equal-items"
+                  ? "Distributes bins so each selected team ends up with roughly the same total item count (considers existing assignments)."
+                  : "Distributes bins so each selected team ends up with roughly the same number of bins (considers existing assignments)."}
+              </p>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -543,7 +822,7 @@ export default function AssignPage() {
             </Select>
           </div>
 
-          {/* Search + Select All */}
+          {/* Search + Sort + Select All */}
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -554,6 +833,18 @@ export default function AssignPage() {
                 className="pl-9"
               />
             </div>
+            <Select value={binSort} onValueChange={(v) => setBinSort(v as BinSortMode)}>
+              <SelectTrigger className="w-40">
+                <ArrowUpDown className="h-3.5 w-3.5 mr-1 shrink-0" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="natural">Natural</SelectItem>
+                <SelectItem value="alpha">Alphabetical</SelectItem>
+                <SelectItem value="items-desc">Most Items</SelectItem>
+                <SelectItem value="value-desc">Highest Value</SelectItem>
+              </SelectContent>
+            </Select>
             <Button variant="outline" size="sm" onClick={selectAll}>
               Select All
             </Button>

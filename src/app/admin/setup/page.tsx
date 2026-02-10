@@ -81,6 +81,35 @@ export default function AdminSetup() {
     }
   };
 
+  const handleStatusChange = async (eventId: number, newStatus: string) => {
+    try {
+      const res = await fetch("/api/admin/events", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: eventId, status: newStatus }),
+      });
+      if (res.ok) {
+        toast.success(`Event status changed to ${newStatus}`);
+        loadEvents();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Failed to update status");
+      }
+    } catch {
+      toast.error("Network error");
+    }
+  };
+
+  const getStatusAction = (status: string): { label: string; next: string; variant: "default" | "outline" | "destructive" } | null => {
+    switch (status) {
+      case "setup": return { label: "Activate", next: "active", variant: "default" };
+      case "active": return { label: "Complete", next: "completed", variant: "outline" };
+      case "completed": return { label: "Lock", next: "locked", variant: "destructive" };
+      case "locked": return { label: "Reopen", next: "active", variant: "outline" };
+      default: return null;
+    }
+  };
+
   const statusColors: Record<string, string> = {
     setup: "bg-blue-100 text-blue-800",
     active: "bg-green-100 text-green-800",
@@ -117,9 +146,23 @@ export default function AdminSetup() {
                       <span>{event.supervisorCount} supervisors</span>
                     </div>
                   </div>
-                  <Badge className={statusColors[event.status] || ""}>
-                    {event.status}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const action = getStatusAction(event.status);
+                      return action ? (
+                        <Button
+                          size="sm"
+                          variant={action.variant}
+                          onClick={() => handleStatusChange(event.id, action.next)}
+                        >
+                          {action.label}
+                        </Button>
+                      ) : null;
+                    })()}
+                    <Badge className={statusColors[event.status] || ""}>
+                      {event.status}
+                    </Badge>
+                  </div>
                 </div>
               </CardContent>
             </Card>

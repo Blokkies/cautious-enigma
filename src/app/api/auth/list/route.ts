@@ -1,25 +1,72 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams, supervisors, stocktakeEvents } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   const type = request.nextUrl.searchParams.get("type");
+  const eventIdParam = request.nextUrl.searchParams.get("eventId");
 
-  // Find active event (or latest setup event for login list)
-  const activeEvent = db
-    .select()
-    .from(stocktakeEvents)
-    .where(eq(stocktakeEvents.status, "active"))
-    .get();
+  // List accessible events (active or setup)
+  if (type === "events") {
+    const eventList = db
+      .select()
+      .from(stocktakeEvents)
+      .where(
+        or(
+          eq(stocktakeEvents.status, "active"),
+          eq(stocktakeEvents.status, "setup")
+        )
+      )
+      .all();
 
-  const setupEvent = activeEvent || db
-    .select()
-    .from(stocktakeEvents)
-    .where(eq(stocktakeEvents.status, "setup"))
-    .get();
+    const enriched = eventList.map((event) => {
+      const teamCount = db
+        .select({ count: sql<number>`count(*)` })
+        .from(teams)
+        .where(eq(teams.eventId, event.id))
+        .get();
 
-  if (!setupEvent) {
+      const supervisorCount = db
+        .select({ count: sql<number>`count(*)` })
+        .from(supervisors)
+        .where(eq(supervisors.eventId, event.id))
+        .get();
+
+      return {
+        id: event.id,
+        name: event.name,
+        location: event.location,
+        status: event.status,
+        teamCount: teamCount?.count || 0,
+        supervisorCount: supervisorCount?.count || 0,
+      };
+    });
+
+    return NextResponse.json({ events: enriched });
+  }
+
+  // Resolve event ID: use param, or fall back to finding active/setup event
+  let resolvedEventId: number | null = null;
+  if (eventIdParam) {
+    resolvedEventId = Number(eventIdParam);
+  } else {
+    const activeEvent = db
+      .select()
+      .from(stocktakeEvents)
+      .where(eq(stocktakeEvents.status, "active"))
+      .get();
+
+    const fallbackEvent = activeEvent || db
+      .select()
+      .from(stocktakeEvents)
+      .where(eq(stocktakeEvents.status, "setup"))
+      .get();
+
+    resolvedEventId = fallbackEvent?.id ?? null;
+  }
+
+  if (!resolvedEventId) {
     return NextResponse.json({ items: [] });
   }
 
@@ -27,7 +74,7 @@ export async function GET(request: NextRequest) {
     const teamList = db
       .select({ id: teams.id, name: teams.name })
       .from(teams)
-      .where(eq(teams.eventId, setupEvent.id))
+      .where(eq(teams.eventId, resolvedEventId))
       .all();
     return NextResponse.json({ items: teamList });
   }
@@ -36,7 +83,7 @@ export async function GET(request: NextRequest) {
     const supervisorList = db
       .select({ id: supervisors.id, name: supervisors.name })
       .from(supervisors)
-      .where(eq(supervisors.eventId, setupEvent.id))
+      .where(eq(supervisors.eventId, resolvedEventId))
       .all();
     return NextResponse.json({ items: supervisorList });
   }

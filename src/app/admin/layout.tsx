@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
+  LayoutDashboard,
   Settings,
   LogOut,
   ClipboardCheck,
@@ -13,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const navItems = [
+  { href: "/admin/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/admin/setup", icon: Settings, label: "Events" },
   { href: "/completed", icon: ClipboardCheck, label: "Summary" },
   { href: "/admin/settings", icon: UserCog, label: "Settings" },
@@ -56,7 +58,8 @@ export default function AdminLayout({
             const isActive =
               href === "/admin/setup"
                 ? pathname.startsWith("/admin") &&
-                  !pathname.startsWith("/admin/settings")
+                  !pathname.startsWith("/admin/settings") &&
+                  !pathname.startsWith("/admin/dashboard")
                 : pathname === href || pathname.startsWith(href);
             return (
               <Link

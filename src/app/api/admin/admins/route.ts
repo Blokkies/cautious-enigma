@@ -83,17 +83,24 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Cannot delete yourself" }, { status: 400 });
     }
 
-    // Can't delete if it's the last admin
-    const count = db
-      .select({ count: sql<number>`count(*)` })
-      .from(admins)
-      .get();
+    // Atomic check-and-delete inside a transaction to prevent race conditions
+    const result = db.transaction((tx) => {
+      const count = tx
+        .select({ count: sql<number>`count(*)` })
+        .from(admins)
+        .get();
 
-    if ((count?.count || 0) <= 1) {
-      return NextResponse.json({ error: "Cannot delete the last admin" }, { status: 400 });
+      if ((count?.count || 0) <= 1) {
+        return { error: "Cannot delete the last admin" } as const;
+      }
+
+      tx.delete(admins).where(eq(admins.id, id)).run();
+      return { success: true } as const;
+    });
+
+    if ("error" in result) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
     }
-
-    db.delete(admins).where(eq(admins.id, id)).run();
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -5,6 +5,15 @@ import { eq, and, sql } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 import { exportToExcel } from "@/lib/excel";
 
+// Correlated subquery: pick the latest count (highest id) per item for this event.
+// This prevents duplicate rows when an item has both initial + verification counts.
+function latestCountJoin(eventId: number) {
+  return eq(
+    counts.id,
+    sql`(SELECT c.id FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} ORDER BY c.id DESC LIMIT 1)`
+  );
+}
+
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || (user.type !== "supervisor" && user.type !== "admin")) {
@@ -53,16 +62,14 @@ export async function GET(request: NextRequest) {
         "Comment": counts.comment,
         "Counted At": counts.countedAt,
       })
-      .from(counts)
-      .innerJoin(items, eq(counts.itemId, items.id))
-      .innerJoin(teams, eq(counts.teamId, teams.id))
-      .where(
-        and(eq(counts.eventId, eventId), eq(counts.isMatch, false))
-      )
-      .orderBy(sql`abs(variance_value) DESC`)
+      .from(items)
+      .innerJoin(counts, and(latestCountJoin(eventId), eq(counts.isMatch, false)))
+      .leftJoin(teams, eq(items.teamId, teams.id))
+      .where(eq(items.eventId, eventId))
+      .orderBy(sql`abs(${counts.varianceValue}) DESC`)
       .all();
   } else {
-    // Full export - all items with count results
+    // Full export - all items with their latest count
     const itemRows = db
       .select({
         "Item Code": items.itemCode,
@@ -86,10 +93,7 @@ export async function GET(request: NextRequest) {
         "Counted At": counts.countedAt,
       })
       .from(items)
-      .leftJoin(
-        counts,
-        and(eq(counts.itemId, items.id), eq(counts.eventId, eventId))
-      )
+      .leftJoin(counts, latestCountJoin(eventId))
       .leftJoin(teams, eq(items.teamId, teams.id))
       .where(eq(items.eventId, eventId))
       .orderBy(items.binNumber, items.itemCode)
@@ -199,7 +203,7 @@ export async function GET(request: NextRequest) {
 }
 
 function buildSerialExport(eventId: number): Record<string, unknown>[] {
-  // 1. Get all expected serialized items with their counts and teams
+  // Get all expected serialized items with their latest count and team
   const expectedRows = db
     .select({
       itemCode: items.itemCode,
@@ -211,13 +215,13 @@ function buildSerialExport(eventId: number): Record<string, unknown>[] {
       teamName: teams.name,
     })
     .from(items)
-    .leftJoin(counts, eq(counts.itemId, items.id))
+    .leftJoin(counts, latestCountJoin(eventId))
     .leftJoin(teams, eq(items.teamId, teams.id))
     .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true)))
     .orderBy(items.itemCode, items.binNumber, items.serialNumber)
     .all();
 
-  // 2. Get all serial discrepancies for unknown serials
+  // Get all serial discrepancies for unknown serials
   const discrepancyRows = db
     .select({
       itemCode: serialDiscrepancies.itemCode,
@@ -235,7 +239,7 @@ function buildSerialExport(eventId: number): Record<string, unknown>[] {
 
   const rows: Record<string, unknown>[] = [];
 
-  // Add expected serial rows
+  // Add expected serial rows — one per serialized item (one per serial number)
   for (const row of expectedRows) {
     let status: string;
     if (row.countedQty === null || row.countedQty === undefined) {

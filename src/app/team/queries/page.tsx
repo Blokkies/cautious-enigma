@@ -19,7 +19,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Plus, MessageSquare, CheckCircle2, Clock, Send } from "lucide-react";
+import { Plus, MessageSquare, CheckCircle2, Clock, Send, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
 interface QueryMessage {
@@ -53,6 +53,16 @@ export default function QueriesPage() {
   const [replyingTo, setReplyingTo] = useState<number | null>(null);
   const [replyText, setReplyText] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+
+  const toggleCard = (id: number) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const loadQueries = useCallback(async () => {
     try {
@@ -223,7 +233,9 @@ export default function QueriesPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {sortedQueries.map((q) => (
+          {sortedQueries.map((q) => {
+            const isCollapsed = collapsed.has(q.id);
+            return (
             <Card
               key={q.id}
               className={`overflow-hidden border-l-4 ${
@@ -232,13 +244,21 @@ export default function QueriesPage() {
                   : "border-l-amber-500"
               }`}
             >
-              {/* Query heading */}
-              <div className={`px-3 py-2.5 border-b ${
-                q.status === "resolved"
-                  ? "bg-green-50/50 border-green-100"
-                  : "bg-amber-50/50 border-amber-100"
-              }`}>
+              {/* Query heading — clickable to collapse */}
+              <button
+                className={`w-full text-left px-3 py-2.5 border-b ${
+                  q.status === "resolved"
+                    ? "bg-green-50/50 border-green-100"
+                    : "bg-amber-50/50 border-amber-100"
+                }`}
+                onClick={() => toggleCard(q.id)}
+              >
                 <div className="flex items-center gap-2 flex-wrap">
+                  {isCollapsed ? (
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  )}
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
                     q.status === "resolved"
                       ? "bg-green-100 text-green-700"
@@ -254,16 +274,24 @@ export default function QueriesPage() {
                       Part: <span className="font-mono font-semibold">{q.itemCode}</span>
                     </span>
                   )}
+                  {isCollapsed && q.messages.length > 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      {q.messages.length} message{q.messages.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
                 </div>
-                {q.itemDescription && (
+                {!isCollapsed && q.itemDescription && (
                   <p className="text-xs text-muted-foreground mt-1">{q.itemDescription}</p>
                 )}
-                <p className="text-sm mt-1.5 font-medium">{q.message}</p>
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  {new Date(q.createdAt).toLocaleString()}
-                </p>
-              </div>
+                <p className={`text-sm mt-1.5 font-medium ${isCollapsed ? "truncate" : ""}`}>{q.message}</p>
+                {!isCollapsed && (
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {new Date(q.createdAt).toLocaleString()}
+                  </p>
+                )}
+              </button>
 
+              {!isCollapsed && (
               <CardContent className="p-3">
 
                 {/* Chat thread */}
@@ -345,8 +373,10 @@ export default function QueriesPage() {
                   </>
                 )}
               </CardContent>
+              )}
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

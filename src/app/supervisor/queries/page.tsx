@@ -36,6 +36,16 @@ export default function SupervisorQueriesPage() {
   const [responseText, setResponseText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
+  const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set());
+
+  const toggleCard = (id: number) => {
+    setCollapsedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const loadQueries = useCallback(async () => {
     try {
@@ -173,7 +183,9 @@ export default function SupervisorQueriesPage() {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   }
 
-  const renderQueryCard = (q: QueryItem) => (
+  const renderQueryCard = (q: QueryItem) => {
+    const isCollapsed = collapsedCards.has(q.id);
+    return (
     <Card
       key={q.id}
       className={`overflow-hidden border-l-4 ${
@@ -182,15 +194,23 @@ export default function SupervisorQueriesPage() {
           : "border-l-amber-500"
       }`}
     >
-      {/* Query heading */}
-      <div className={`px-4 py-2.5 border-b ${
+      {/* Query heading — clickable to collapse */}
+      <div className={`border-b ${
         q.status === "resolved"
           ? "bg-green-50/50 border-green-100"
           : "bg-amber-50/50 border-amber-100"
       }`}>
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0">
+        <div className="flex items-start gap-2">
+          <button
+            className="flex-1 min-w-0 text-left px-4 py-2.5"
+            onClick={() => toggleCard(q.id)}
+          >
             <div className="flex items-center gap-2 flex-wrap">
+              {isCollapsed ? (
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              )}
               <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
                 q.status === "resolved"
                   ? "bg-green-100 text-green-700"
@@ -206,19 +226,26 @@ export default function SupervisorQueriesPage() {
                   Part: <span className="font-mono font-semibold">{q.itemCode}</span>
                 </span>
               )}
+              {isCollapsed && q.messages.length > 0 && (
+                <span className="text-[11px] text-muted-foreground">
+                  {q.messages.length} message{q.messages.length !== 1 ? "s" : ""}
+                </span>
+              )}
             </div>
-            {q.itemDescription && (
+            {!isCollapsed && q.itemDescription && (
               <p className="text-xs text-muted-foreground mt-1">{q.itemDescription}</p>
             )}
-            <p className="text-sm mt-1.5 font-medium">{q.message}</p>
-            <p className="text-[10px] text-muted-foreground mt-1">
-              {new Date(q.createdAt).toLocaleString()}
-            </p>
-          </div>
+            <p className={`text-sm mt-1.5 font-medium ${isCollapsed ? "truncate" : ""}`}>{q.message}</p>
+            {!isCollapsed && (
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {new Date(q.createdAt).toLocaleString()}
+              </p>
+            )}
+          </button>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0"
+            className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0 mt-2.5 mr-2"
             onClick={() => handleDelete(q.id)}
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -226,6 +253,7 @@ export default function SupervisorQueriesPage() {
         </div>
       </div>
 
+      {!isCollapsed && (
       <CardContent className="p-4">
         {/* Chat thread */}
         {q.messages.length > 0 && (
@@ -328,8 +356,10 @@ export default function SupervisorQueriesPage() {
           </Button>
         )}
       </CardContent>
+      )}
     </Card>
-  );
+    );
+  };
 
   const renderTeamGroup = (teamName: string, teamQueries: QueryItem[]) => {
     const isCollapsed = collapsedTeams.has(teamName);

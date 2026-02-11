@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Plus, Package, CheckCircle2, Clock, XCircle, Send } from "lucide-react";
+import { Plus, Package, Send, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
 interface BreakdownMessage {
@@ -50,6 +51,16 @@ export default function BreakdownsPage() {
   const [replyingTo, setReplyingTo] = useState<number | null>(null);
   const [replyText, setReplyText] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+
+  const toggleCard = (id: number) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const loadBreakdowns = useCallback(async () => {
     try {
@@ -145,12 +156,160 @@ export default function BreakdownsPage() {
     rejected: { label: "Rejected", bg: "bg-red-50/50 border-red-100", border: "border-l-red-500", badge: "bg-red-100 text-red-700" },
   };
 
-  // Sort: pending first
-  const sortedBreakdowns = [...breakdowns].sort((a, b) => {
-    if (a.approvalStatus === "pending" && b.approvalStatus !== "pending") return -1;
-    if (a.approvalStatus !== "pending" && b.approvalStatus === "pending") return 1;
-    return 0;
-  });
+  const pending = breakdowns.filter((b) => b.approvalStatus === "pending");
+  const approved = breakdowns.filter((b) => b.approvalStatus === "approved");
+  const rejected = breakdowns.filter((b) => b.approvalStatus === "rejected");
+
+  const renderBreakdownCard = (b: BreakdownItem) => {
+    const cfg = statusConfig[b.approvalStatus as keyof typeof statusConfig] || statusConfig.pending;
+    const isCollapsed = collapsed.has(b.id);
+
+    return (
+      <Card key={b.id} className={`overflow-hidden border-l-4 ${cfg.border}`}>
+        {/* Heading — clickable to collapse */}
+        <button
+          className={`w-full text-left px-3 py-2.5 border-b ${cfg.bg}`}
+          onClick={() => toggleCard(b.id)}
+        >
+          <div className="flex items-center gap-2 flex-wrap">
+            {isCollapsed ? (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            )}
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded ${cfg.badge}`}>
+              {cfg.label}
+            </span>
+            {b.itemCode && (
+              <span className="text-xs bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 text-blue-700">
+                Part: <span className="font-mono font-semibold">{b.itemCode}</span>
+              </span>
+            )}
+            {b.poNumber && (
+              <span className="text-xs bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5 text-purple-700">
+                PO: <span className="font-semibold">{b.poNumber}</span>
+              </span>
+            )}
+            {isCollapsed && b.messages.length > 0 && (
+              <span className="text-[11px] text-muted-foreground">
+                {b.messages.length} message{b.messages.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          {!isCollapsed && b.itemDescription && (
+            <p className="text-xs text-muted-foreground mt-1">{b.itemDescription}</p>
+          )}
+          <div className={`flex items-center gap-3 mt-1.5 text-sm ${isCollapsed ? "truncate" : ""}`}>
+            <span>Client: <span className="font-semibold">{b.clientName || "—"}</span></span>
+            <span>Qty: <span className="font-semibold">{b.quantity}</span></span>
+          </div>
+          {!isCollapsed && b.reason && (
+            <p className="text-sm text-muted-foreground mt-1">{b.reason}</p>
+          )}
+          {!isCollapsed && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {new Date(b.createdAt).toLocaleString()}
+            </p>
+          )}
+        </button>
+
+        {!isCollapsed && (
+        <CardContent className="p-3">
+          {/* Chat thread */}
+          {b.messages.length > 0 && (
+          <div className="space-y-2 mb-2">
+            {b.messages.map((m, i) => (
+              <div
+                key={i}
+                className={`flex ${m.senderType === "team" ? "justify-end" : "justify-start"}`}
+              >
+                <div className="max-w-[85%]">
+                  <span className={`text-[11px] font-medium text-muted-foreground ${m.senderType === "team" ? "block text-right mr-1" : "ml-1"}`}>
+                    {m.senderName}
+                  </span>
+                  <div className={`rounded-2xl px-3 py-2 text-sm ${
+                    m.senderType === "team"
+                      ? "bg-blue-500 text-white rounded-tr-sm"
+                      : "bg-gray-100 border border-gray-200 rounded-tl-sm"
+                  }`}>
+                    <p>{m.message}</p>
+                  </div>
+                  <span className={`text-[10px] text-muted-foreground ${m.senderType === "team" ? "block text-right mr-1" : "ml-1"}`}>
+                    {new Date(m.createdAt).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          )}
+
+          {/* Reply */}
+          {replyingTo === b.id ? (
+            <div className="space-y-2">
+              <Textarea
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                placeholder="Type your message..."
+                rows={2}
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleReply(b.id)}
+                  disabled={sendingReply}
+                  size="sm"
+                  className="gap-1"
+                >
+                  <Send className="h-3 w-3" />
+                  {sendingReply ? "Sending..." : "Send"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setReplyingTo(null);
+                    setReplyText("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              onClick={() => {
+                setReplyingTo(b.id);
+                setReplyText("");
+              }}
+            >
+              <Send className="h-3 w-3" />
+              Message
+            </Button>
+          )}
+        </CardContent>
+        )}
+      </Card>
+    );
+  };
+
+  const renderList = (list: BreakdownItem[], emptyMsg: string) => {
+    if (list.length === 0) {
+      return (
+        <div className="text-center text-muted-foreground py-8">
+          <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          <p>{emptyMsg}</p>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-3">
+        {list.map((b) => renderBreakdownCard(b))}
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -230,132 +389,28 @@ export default function BreakdownsPage() {
         </Dialog>
       </div>
 
-      {sortedBreakdowns.length === 0 ? (
-        <div className="text-center text-muted-foreground py-12">
-          <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
-          <p>No breakdowns</p>
-          <p className="text-sm">Report stock that needs to move during the count</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {sortedBreakdowns.map((b) => {
-            const cfg = statusConfig[b.approvalStatus as keyof typeof statusConfig] || statusConfig.pending;
-
-            return (
-              <Card key={b.id} className={`overflow-hidden border-l-4 ${cfg.border}`}>
-                {/* Heading */}
-                <div className={`px-3 py-2.5 border-b ${cfg.bg}`}>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded ${cfg.badge}`}>
-                      {cfg.label}
-                    </span>
-                    {b.itemCode && (
-                      <span className="text-xs bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 text-blue-700">
-                        Part: <span className="font-mono font-semibold">{b.itemCode}</span>
-                      </span>
-                    )}
-                    {b.poNumber && (
-                      <span className="text-xs bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5 text-purple-700">
-                        PO: <span className="font-semibold">{b.poNumber}</span>
-                      </span>
-                    )}
-                  </div>
-                  {b.itemDescription && (
-                    <p className="text-xs text-muted-foreground mt-1">{b.itemDescription}</p>
-                  )}
-                  <div className="flex items-center gap-3 mt-1.5 text-sm">
-                    <span>Client: <span className="font-semibold">{b.clientName || "—"}</span></span>
-                    <span>Qty: <span className="font-semibold">{b.quantity}</span></span>
-                  </div>
-                  {b.reason && (
-                    <p className="text-sm text-muted-foreground mt-1">{b.reason}</p>
-                  )}
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    {new Date(b.createdAt).toLocaleString()}
-                  </p>
-                </div>
-
-                <CardContent className="p-3">
-                  {/* Chat thread */}
-                  {b.messages.length > 0 && (
-                  <div className="space-y-2 mb-2">
-                    {b.messages.map((m, i) => (
-                      <div
-                        key={i}
-                        className={`flex ${m.senderType === "team" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div className="max-w-[85%]">
-                          <span className={`text-[11px] font-medium text-muted-foreground ${m.senderType === "team" ? "block text-right mr-1" : "ml-1"}`}>
-                            {m.senderName}
-                          </span>
-                          <div className={`rounded-2xl px-3 py-2 text-sm ${
-                            m.senderType === "team"
-                              ? "bg-blue-500 text-white rounded-tr-sm"
-                              : "bg-gray-100 border border-gray-200 rounded-tl-sm"
-                          }`}>
-                            <p>{m.message}</p>
-                          </div>
-                          <span className={`text-[10px] text-muted-foreground ${m.senderType === "team" ? "block text-right mr-1" : "ml-1"}`}>
-                            {new Date(m.createdAt).toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  )}
-
-                  {/* Reply */}
-                  {replyingTo === b.id ? (
-                    <div className="space-y-2">
-                      <Textarea
-                        value={replyText}
-                        onChange={(e) => setReplyText(e.target.value)}
-                        placeholder="Type your message..."
-                        rows={2}
-                        autoFocus
-                      />
-                      <div className="flex gap-2">
-                        <Button
-                          onClick={() => handleReply(b.id)}
-                          disabled={sendingReply}
-                          size="sm"
-                          className="gap-1"
-                        >
-                          <Send className="h-3 w-3" />
-                          {sendingReply ? "Sending..." : "Send"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setReplyingTo(null);
-                            setReplyText("");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1"
-                      onClick={() => {
-                        setReplyingTo(b.id);
-                        setReplyText("");
-                      }}
-                    >
-                      <Send className="h-3 w-3" />
-                      Message
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+      <Tabs defaultValue="pending">
+        <TabsList>
+          <TabsTrigger value="pending">
+            Pending ({pending.length})
+          </TabsTrigger>
+          <TabsTrigger value="approved">
+            Approved ({approved.length})
+          </TabsTrigger>
+          <TabsTrigger value="rejected">
+            Rejected ({rejected.length})
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="pending" className="mt-3">
+          {renderList(pending, "No pending breakdowns")}
+        </TabsContent>
+        <TabsContent value="approved" className="mt-3">
+          {renderList(approved, "No approved breakdowns")}
+        </TabsContent>
+        <TabsContent value="rejected" className="mt-3">
+          {renderList(rejected, "No rejected breakdowns")}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

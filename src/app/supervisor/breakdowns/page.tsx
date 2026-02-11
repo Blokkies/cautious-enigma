@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CheckCircle2, XCircle, Clock, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users, Package } from "lucide-react";
+import { CheckCircle2, XCircle, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users, Package } from "lucide-react";
 import { toast } from "sonner";
 
 interface BreakdownMessage {
@@ -38,6 +38,7 @@ export default function SupervisorBreakdownsPage() {
   const [responseText, setResponseText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
+  const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set());
 
   const loadBreakdowns = useCallback(async () => {
     try {
@@ -136,17 +137,24 @@ export default function SupervisorBreakdownsPage() {
   const toggleTeam = (teamName: string) => {
     setCollapsedTeams((prev) => {
       const next = new Set(prev);
-      if (next.has(teamName)) {
-        next.delete(teamName);
-      } else {
-        next.add(teamName);
-      }
+      if (next.has(teamName)) next.delete(teamName);
+      else next.add(teamName);
+      return next;
+    });
+  };
+
+  const toggleCard = (id: number) => {
+    setCollapsedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
 
   const pending = allBreakdowns.filter((b) => b.approvalStatus === "pending");
-  const resolved = allBreakdowns.filter((b) => b.approvalStatus !== "pending");
+  const approved = allBreakdowns.filter((b) => b.approvalStatus === "approved");
+  const rejected = allBreakdowns.filter((b) => b.approvalStatus === "rejected");
 
   const groupByTeam = (list: BreakdownItem[]) => {
     const groups: Record<string, BreakdownItem[]> = {};
@@ -163,9 +171,9 @@ export default function SupervisorBreakdownsPage() {
   };
 
   const statusConfig = {
-    pending: { label: "Pending", bg: "bg-amber-50/50 border-amber-100", border: "border-l-amber-500", badge: "bg-amber-100 text-amber-700", icon: <Clock className="h-4 w-4 text-amber-600" /> },
-    approved: { label: "Approved", bg: "bg-green-50/50 border-green-100", border: "border-l-green-500", badge: "bg-green-100 text-green-700", icon: <CheckCircle2 className="h-4 w-4 text-green-600" /> },
-    rejected: { label: "Rejected", bg: "bg-red-50/50 border-red-100", border: "border-l-red-500", badge: "bg-red-100 text-red-700", icon: <XCircle className="h-4 w-4 text-red-600" /> },
+    pending: { label: "Pending", bg: "bg-amber-50/50 border-amber-100", border: "border-l-amber-500", badge: "bg-amber-100 text-amber-700" },
+    approved: { label: "Approved", bg: "bg-green-50/50 border-green-100", border: "border-l-green-500", badge: "bg-green-100 text-green-700" },
+    rejected: { label: "Rejected", bg: "bg-red-50/50 border-red-100", border: "border-l-red-500", badge: "bg-red-100 text-red-700" },
   };
 
   if (loading) {
@@ -174,14 +182,23 @@ export default function SupervisorBreakdownsPage() {
 
   const renderBreakdownCard = (b: BreakdownItem) => {
     const cfg = statusConfig[b.approvalStatus as keyof typeof statusConfig] || statusConfig.pending;
+    const isCollapsed = collapsedCards.has(b.id);
 
     return (
       <Card key={b.id} className={`overflow-hidden border-l-4 ${cfg.border}`}>
-        {/* Heading */}
-        <div className={`px-4 py-2.5 border-b ${cfg.bg}`}>
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
+        {/* Heading — clickable to collapse */}
+        <div className={`border-b ${cfg.bg}`}>
+          <div className="flex items-start gap-2">
+            <button
+              className="flex-1 min-w-0 text-left px-4 py-2.5"
+              onClick={() => toggleCard(b.id)}
+            >
               <div className="flex items-center gap-2 flex-wrap">
+                {isCollapsed ? (
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                )}
                 <span className={`text-xs font-semibold px-2 py-0.5 rounded ${cfg.badge}`}>
                   {cfg.label}
                 </span>
@@ -195,25 +212,32 @@ export default function SupervisorBreakdownsPage() {
                     PO: <span className="font-semibold">{b.poNumber}</span>
                   </span>
                 )}
+                {isCollapsed && b.messages.length > 0 && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {b.messages.length} message{b.messages.length !== 1 ? "s" : ""}
+                  </span>
+                )}
               </div>
-              {b.itemDescription && (
+              {!isCollapsed && b.itemDescription && (
                 <p className="text-xs text-muted-foreground mt-1">{b.itemDescription}</p>
               )}
-              <div className="flex items-center gap-3 mt-1.5 text-sm">
+              <div className={`flex items-center gap-3 mt-1.5 text-sm ${isCollapsed ? "truncate" : ""}`}>
                 <span>Client: <span className="font-semibold">{b.clientName || "—"}</span></span>
                 <span>Qty: <span className="font-semibold">{b.quantity}</span></span>
               </div>
-              {b.reason && (
+              {!isCollapsed && b.reason && (
                 <p className="text-sm text-muted-foreground mt-1">{b.reason}</p>
               )}
-              <p className="text-[10px] text-muted-foreground mt-1">
-                {new Date(b.createdAt).toLocaleString()}
-              </p>
-            </div>
+              {!isCollapsed && (
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  {new Date(b.createdAt).toLocaleString()}
+                </p>
+              )}
+            </button>
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0 mt-2.5 mr-2"
               onClick={() => handleDelete(b.id)}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -221,6 +245,7 @@ export default function SupervisorBreakdownsPage() {
           </div>
         </div>
 
+        {!isCollapsed && (
         <CardContent className="p-4">
           {/* Chat thread */}
           {b.messages.length > 0 && (
@@ -379,6 +404,7 @@ export default function SupervisorBreakdownsPage() {
             </div>
           )}
         </CardContent>
+        )}
       </Card>
     );
   };
@@ -421,6 +447,22 @@ export default function SupervisorBreakdownsPage() {
     );
   };
 
+  const renderTabContent = (list: BreakdownItem[], emptyMsg: string) => {
+    if (list.length === 0) {
+      return (
+        <div className="text-center py-8 text-muted-foreground">
+          <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          {emptyMsg}
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-1">
+        {groupByTeam(list).map(([team, bs]) => renderTeamGroup(team, bs))}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Breakdowns</h1>
@@ -430,32 +472,21 @@ export default function SupervisorBreakdownsPage() {
           <TabsTrigger value="pending">
             Pending ({pending.length})
           </TabsTrigger>
-          <TabsTrigger value="resolved">
-            Resolved ({resolved.length})
+          <TabsTrigger value="approved">
+            Approved ({approved.length})
+          </TabsTrigger>
+          <TabsTrigger value="rejected">
+            Rejected ({rejected.length})
           </TabsTrigger>
         </TabsList>
         <TabsContent value="pending" className="mt-3">
-          {pending.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
-              No pending breakdowns
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {groupByTeam(pending).map(([team, bs]) => renderTeamGroup(team, bs))}
-            </div>
-          )}
+          {renderTabContent(pending, "No pending breakdowns")}
         </TabsContent>
-        <TabsContent value="resolved" className="mt-3">
-          {resolved.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No resolved breakdowns
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {groupByTeam(resolved).map(([team, bs]) => renderTeamGroup(team, bs))}
-            </div>
-          )}
+        <TabsContent value="approved" className="mt-3">
+          {renderTabContent(approved, "No approved breakdowns")}
+        </TabsContent>
+        <TabsContent value="rejected" className="mt-3">
+          {renderTabContent(rejected, "No rejected breakdowns")}
         </TabsContent>
       </Tabs>
     </div>

@@ -41,6 +41,7 @@ interface ActiveItemCardProps {
   isSubmitting: boolean;
   showSuccessFlash?: boolean;
   onFlashComplete?: () => void;
+  isVerification?: boolean;
 }
 
 export function getStockStatusStyle(status: string | null): string {
@@ -71,6 +72,7 @@ export function ActiveItemCard({
   isSubmitting,
   showSuccessFlash,
   onFlashComplete,
+  isVerification,
 }: ActiveItemCardProps) {
   const isSerialized = item.isSerialized === true || item.isSerialized === 1;
   const [localShowComment, setLocalShowComment] = useState(false);
@@ -78,11 +80,18 @@ export function ActiveItemCard({
   const isMatchValue = qtyValue === String(item.onHand ?? 0);
 
   return (
-    <Card className="border-2 border-primary/30 relative">
+    <Card className={`border-2 relative ${isVerification ? "border-purple-400" : "border-primary/30"}`}>
       {showSuccessFlash && onFlashComplete && (
         <SuccessFlash onComplete={onFlashComplete} />
       )}
       <CardContent className="p-4 space-y-4">
+        {/* Verification badge */}
+        {isVerification && (
+          <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">
+            Verification Count
+          </Badge>
+        )}
+
         {/* Item Code — prominent */}
         <div className="space-y-1">
           <div className="font-mono font-bold text-xl tracking-tight">
@@ -145,22 +154,30 @@ export function ActiveItemCard({
           }}
         />
 
-        {/* MATCH / Submit Variance button */}
+        {/* MATCH / Submit button */}
         {isMatchValue ? (
           <Button
             onClick={onSubmit}
-            className="w-full h-14 text-lg font-bold bg-green-600 hover:bg-green-700 text-white"
+            className={`w-full h-14 text-lg font-bold text-white ${
+              isVerification
+                ? "bg-purple-600 hover:bg-purple-700"
+                : "bg-green-600 hover:bg-green-700"
+            }`}
             disabled={isSubmitting}
           >
-            MATCH
+            {isVerification ? "Submit Verification" : "MATCH"}
           </Button>
         ) : (
           <Button
             onClick={onSubmit}
-            className="w-full h-14 text-lg font-bold bg-amber-500 hover:bg-amber-600 text-white"
+            className={`w-full h-14 text-lg font-bold text-white ${
+              isVerification
+                ? "bg-purple-600 hover:bg-purple-700"
+                : "bg-amber-500 hover:bg-amber-600"
+            }`}
             disabled={!qtyValue || isSubmitting}
           >
-            Submit Variance
+            {isVerification ? "Submit Verification" : "Submit Variance"}
           </Button>
         )}
 

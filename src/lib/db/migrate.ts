@@ -127,6 +127,18 @@ CREATE TABLE IF NOT EXISTS admins (
   created_by INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS verification_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  count_id INTEGER NOT NULL REFERENCES counts(id),
+  item_id INTEGER NOT NULL REFERENCES items(id),
+  event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
+  assigned_team_id INTEGER NOT NULL REFERENCES teams(id),
+  assigned_by INTEGER NOT NULL REFERENCES supervisors(id),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','completed','accepted')),
+  assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id INTEGER REFERENCES stocktake_events(id),
@@ -161,6 +173,8 @@ const alterStatements = [
   `ALTER TABLE items ADD COLUMN stock_status TEXT`,
   `ALTER TABLE items ADD COLUMN serial_number TEXT`,
   `ALTER TABLE items ADD COLUMN is_serialized INTEGER DEFAULT 0`,
+  `ALTER TABLE counts ADD COLUMN count_type TEXT NOT NULL DEFAULT 'initial'`,
+  `ALTER TABLE counts ADD COLUMN verification_id INTEGER`,
 ];
 
 // Execute all statements
@@ -187,6 +201,11 @@ const postAlterIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_items_status ON items(stock_status)`,
   `CREATE INDEX IF NOT EXISTS idx_items_serialized ON items(is_serialized)`,
   `CREATE INDEX IF NOT EXISTS idx_items_warehouse ON items(warehouse)`,
+  `CREATE INDEX IF NOT EXISTS idx_verification_event ON verification_assignments(event_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_verification_team ON verification_assignments(assigned_team_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_verification_item ON verification_assignments(item_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_counts_type ON counts(count_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_counts_verification ON counts(verification_id)`,
 ];
 for (const idx of postAlterIndexes) {
   try {

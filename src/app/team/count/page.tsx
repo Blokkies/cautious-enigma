@@ -16,12 +16,31 @@ import {
 } from "@/components/counting/item-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 
-type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing";
+type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "verification-counting";
+
+interface VerificationItem {
+  verificationId: number;
+  countId: number;
+  itemId: number;
+  itemCode: string;
+  description: string | null;
+  brand: string | null;
+  category: string | null;
+  binNumber: string | null;
+  warehouse: string | null;
+  onHand: number | null;
+  avgCost: number | null;
+  totalValue: number | null;
+  stockStatus: string | null;
+  serialNumber: string | null;
+  isSerialized: boolean | number | null;
+  assignedAt: string;
+}
 
 function naturalCompare(a: string, b: string): number {
   const ax = a.match(/(\d+|\D+)/g) || [];
@@ -60,6 +79,7 @@ export default function CountingPage() {
 
   // Search + Review
   const [search, setSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<"contains" | "starts" | "exact" | "bin">("contains");
   const [recountItem, setRecountItem] = useState<CountItem | null>(null);
   const [recountQty, setRecountQty] = useState("");
   const [recountComment, setRecountComment] = useState("");
@@ -67,9 +87,16 @@ export default function CountingPage() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Bin tabs
-  type BinTab = "not-started" | "in-progress" | "completed";
+  type BinTab = "not-started" | "in-progress" | "completed" | "verification";
   const [binTab, setBinTab] = useState<BinTab>("not-started");
   const [completedFilter, setCompletedFilter] = useState<"all" | "variances" | "matched">("all");
+
+  // Verification
+  const [verificationItems, setVerificationItems] = useState<VerificationItem[]>([]);
+  const [selectedVerificationBin, setSelectedVerificationBin] = useState<string | null>(null);
+  const [verificationIndex, setVerificationIndex] = useState(0);
+  const [verificationQtyValue, setVerificationQtyValue] = useState("");
+  const [verificationComment, setVerificationComment] = useState("");
 
   // Aisle collapse state
   const [collapsedAisles, setCollapsedAisles] = useState<Set<string>>(new Set());
@@ -94,6 +121,7 @@ export default function CountingPage() {
         const data = await res.json();
         setItems(data.items || []);
         setStats(data.stats || { total: 0, counted: 0, progressPercent: 0 });
+        setVerificationItems(data.verificationItems || []);
       }
     } catch {
       toast.error("Failed to load items");
@@ -216,12 +244,34 @@ export default function CountingPage() {
   const searchResults = useMemo(() => {
     if (!search.trim()) return [];
     const q = search.toLowerCase();
+
+    const matchField = (val: string | null | undefined): boolean => {
+      if (!val) return false;
+      const v = val.toLowerCase();
+      switch (searchMode) {
+        case "starts":
+          return v.startsWith(q);
+        case "exact":
+          return v === q;
+        case "bin":
+          return false;
+        case "contains":
+        default:
+          return v.includes(q);
+      }
+    };
+
+    if (searchMode === "bin") {
+      return items.filter((i) => {
+        const bin = (i.binNumber || "").toLowerCase();
+        return bin.startsWith(q) || bin === q;
+      });
+    }
+
     return items.filter(
-      (i) =>
-        i.itemCode.toLowerCase().includes(q) ||
-        (i.description && i.description.toLowerCase().includes(q))
+      (i) => matchField(i.itemCode) || matchField(i.description)
     );
-  }, [items, search]);
+  }, [items, search, searchMode]);
 
   // ---------- Split bins into not-started / in-progress / completed ----------
   const notStartedBins = useMemo(
@@ -247,17 +297,43 @@ export default function CountingPage() {
   const groupedInProgress = useMemo(() => groupBinsByAisle(inProgressBins as BinEntry[]), [inProgressBins]);
   const groupedCompleted = useMemo(() => groupBinsByAisle(filteredCompletedBins as BinEntry[]), [filteredCompletedBins]);
 
-  // Auto-select first tab that has bins
+  // Verification items grouped by bin
+  const verificationBinStats = useMemo(() => {
+    const map = new Map<string, { total: number; items: VerificationItem[] }>();
+    for (const vi of verificationItems) {
+      const bin = vi.binNumber || "No Bin";
+      const entry = map.get(bin) || { total: 0, items: [] };
+      entry.total++;
+      entry.items.push(vi);
+      map.set(bin, entry);
+    }
+    const entries = Array.from(map.entries());
+    entries.sort(([a], [b]) => naturalCompare(a, b));
+    return entries;
+  }, [verificationItems]);
+
+  // Scoped verification items (filtered to selected bin)
+  const scopedVerificationItems = useMemo(() => {
+    if (!selectedVerificationBin) return verificationItems;
+    return verificationItems.filter((vi) => {
+      const bin = vi.binNumber || "No Bin";
+      return bin === selectedVerificationBin;
+    });
+  }, [verificationItems, selectedVerificationBin]);
+
+  // Auto-select first tab that has bins (verification highest priority)
   useEffect(() => {
     if (pageState !== "bin-selection") return;
-    if (inProgressBins.length > 0) {
+    if (verificationItems.length > 0) {
+      setBinTab("verification");
+    } else if (inProgressBins.length > 0) {
       setBinTab("in-progress");
     } else if (notStartedBins.length > 0) {
       setBinTab("not-started");
     } else if (completedBins.length > 0) {
       setBinTab("completed");
     }
-  }, [pageState, notStartedBins.length, inProgressBins.length, completedBins.length]);
+  }, [pageState, notStartedBins.length, inProgressBins.length, completedBins.length, verificationItems.length]);
 
   // ---------- Review items (all items in selected bin) ----------
   const reviewItems = useMemo(() => {
@@ -502,6 +578,129 @@ export default function CountingPage() {
     setRecountComment("");
   }
 
+  // ---------- Verification counting ----------
+  const currentVerificationItem = scopedVerificationItems[verificationIndex] ?? null;
+
+  const startVerificationCounting = useCallback((bin: string) => {
+    setSelectedVerificationBin(bin);
+    setVerificationIndex(0);
+    const scoped = verificationItems.filter((vi) => (vi.binNumber || "No Bin") === bin);
+    if (scoped.length > 0) {
+      setVerificationQtyValue(String(scoped[0].onHand ?? 0));
+    }
+    setVerificationComment("");
+    setShowFlash(false);
+    setPageState("verification-counting");
+  }, [verificationItems]);
+
+  const submitVerificationCount = useCallback(async () => {
+    if (!currentVerificationItem || isSubmitting) return;
+    const qty = parseFloat(verificationQtyValue);
+    if (isNaN(qty) || qty < 0) {
+      toast.error("Please enter a valid quantity");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await fetch("/api/team/count", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          itemId: currentVerificationItem.itemId,
+          countedQty: qty,
+          isMatch: qty === (currentVerificationItem.onHand ?? 0),
+          comment: verificationComment || undefined,
+          verificationId: currentVerificationItem.verificationId,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to submit verification");
+        return;
+      }
+
+      const onHand = currentVerificationItem.onHand ?? 0;
+      const variance = qty - onHand;
+      if (variance !== 0) {
+        toast.warning(`Variance: ${variance > 0 ? "+" : ""}${variance}`);
+      }
+
+      // Check if this was the last item in the bin before removing
+      const remainingInBin = scopedVerificationItems.filter(
+        (v) => v.verificationId !== currentVerificationItem.verificationId
+      );
+
+      // Remove completed item from list
+      setVerificationItems((prev) =>
+        prev.filter((v) => v.verificationId !== currentVerificationItem.verificationId)
+      );
+
+      if (remainingInBin.length === 0) {
+        // Last item in this bin — go straight back to bin list
+        toast.success("All verifications in this bin complete!");
+        setSelectedVerificationBin(null);
+        setVerificationIndex(0);
+        setShowFlash(false);
+        setPageState("bin-selection");
+        // Check if there are still items in other bins
+        const totalRemaining = verificationItems.filter(
+          (v) => v.verificationId !== currentVerificationItem.verificationId
+        );
+        if (totalRemaining.length > 0) {
+          setBinTab("verification");
+        }
+        return;
+      }
+
+      // Show flash for next item
+      setShowFlash(true);
+    } catch {
+      toast.error("Failed to submit — check your connection");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting]);
+
+  // Auto-advance verification after flash
+  useEffect(() => {
+    if (pageState !== "verification-counting") return;
+    if (showFlash) return;
+    if (scopedVerificationItems.length === 0) {
+      toast.success("All verifications in this bin complete!");
+      setSelectedVerificationBin(null);
+      setPageState("bin-selection");
+      setShowFlash(false);
+      setVerificationIndex(0);
+      // Stay on verification tab if there are more bins, otherwise auto-select will pick the right one
+      if (verificationItems.length > 0) {
+        setBinTab("verification");
+      }
+      return;
+    }
+    if (verificationIndex >= scopedVerificationItems.length) {
+      setVerificationIndex(0);
+    }
+    const vi = scopedVerificationItems[verificationIndex];
+    if (vi) {
+      setVerificationQtyValue(String(vi.onHand ?? 0));
+      setVerificationComment("");
+    }
+  }, [scopedVerificationItems.length, verificationIndex, pageState, showFlash]);
+
+  // Auto-focus for verification
+  useEffect(() => {
+    if (pageState !== "verification-counting" || !currentVerificationItem) return;
+    const timer = setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [currentVerificationItem?.verificationId, pageState]);
+
   const handleBinCompleteFinish = useCallback(() => {
     setShowFlash(false);
     setShowBinComplete(false);
@@ -688,9 +887,136 @@ export default function CountingPage() {
     );
   }
 
+  // ---------- Verification Counting ----------
+  if (pageState === "verification-counting") {
+    if (!currentVerificationItem) {
+      return (
+        <div className="flex items-center justify-center h-64">
+          <div className="text-muted-foreground">No verification items</div>
+        </div>
+      );
+    }
+
+    // Convert to CountItem shape for ActiveItemCard
+    const verAsCountItem: CountItem = {
+      id: currentVerificationItem.itemId,
+      itemCode: currentVerificationItem.itemCode,
+      description: currentVerificationItem.description,
+      brand: currentVerificationItem.brand,
+      binNumber: currentVerificationItem.binNumber,
+      onHand: currentVerificationItem.onHand,
+      avgCost: currentVerificationItem.avgCost,
+      stockStatus: currentVerificationItem.stockStatus,
+      serialNumber: currentVerificationItem.serialNumber,
+      isSerialized: currentVerificationItem.isSerialized,
+      countId: null,
+      countedQty: null,
+      variance: null,
+      isMatch: null,
+      comment: null,
+      checkStatus: null,
+      countedAt: null,
+    };
+
+    const upcomingVerification = scopedVerificationItems.filter((_, i) => i !== verificationIndex);
+
+    return (
+      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
+        {/* Sticky header */}
+        <div className="sticky top-14 z-40 bg-purple-50 border-b border-purple-200 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSelectedVerificationBin(null);
+                goBackToBinSelection();
+              }}
+              className="px-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <Badge className="bg-purple-100 text-purple-800 border-purple-300">
+              Verification
+            </Badge>
+            <span className="font-mono font-semibold text-sm">
+              {selectedVerificationBin || "All"}
+            </span>
+            <span className="text-sm text-muted-foreground">
+              {scopedVerificationItems.length} remaining
+            </span>
+          </div>
+        </div>
+
+        {/* Main content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="max-w-lg mx-auto">
+            <ActiveItemCard
+              item={verAsCountItem}
+              qtyValue={verificationQtyValue}
+              onQtyChange={setVerificationQtyValue}
+              onSubmit={submitVerificationCount}
+              onSkip={() => {
+                if (scopedVerificationItems.length <= 1) return;
+                setVerificationIndex((i) => (i + 1) % scopedVerificationItems.length);
+              }}
+              comment={verificationComment}
+              onCommentChange={setVerificationComment}
+              inputRef={inputRef}
+              isSubmitting={isSubmitting}
+              showSuccessFlash={showFlash}
+              onFlashComplete={handleFlashComplete}
+              isVerification
+            />
+          </div>
+
+          {/* Remaining verification items in this bin */}
+          {upcomingVerification.length > 0 && (
+            <div className="max-w-lg mx-auto">
+              <div className="text-sm font-medium text-muted-foreground mb-2">
+                Up Next ({upcomingVerification.length} more)
+              </div>
+              <Card>
+                <ScrollArea className="max-h-[300px]">
+                  <CardContent className="p-0">
+                    {upcomingVerification.slice(0, 20).map((vi, i) => (
+                      <QueueItemRow
+                        key={vi.verificationId}
+                        item={{
+                          id: vi.itemId,
+                          itemCode: vi.itemCode,
+                          description: vi.description,
+                          brand: vi.brand,
+                          binNumber: vi.binNumber,
+                          onHand: vi.onHand,
+                          avgCost: vi.avgCost,
+                          stockStatus: vi.stockStatus,
+                          serialNumber: vi.serialNumber,
+                          isSerialized: vi.isSerialized,
+                          countId: null,
+                          countedQty: null,
+                          variance: null,
+                          isMatch: null,
+                          comment: null,
+                          checkStatus: null,
+                          countedAt: null,
+                        }}
+                        position={i + 1}
+                      />
+                    ))}
+                  </CardContent>
+                </ScrollArea>
+              </Card>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ---------- Bin Selection ----------
   if (pageState === "bin-selection") {
-    if (items.length === 0) {
+    if (items.length === 0 && verificationItems.length === 0) {
       return (
         <div className="flex items-center justify-center h-64">
           <div className="text-muted-foreground">
@@ -721,9 +1047,38 @@ export default function CountingPage() {
               ref={searchInputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by part code or description..."
+              placeholder={
+                searchMode === "bin"
+                  ? "Search by bin..."
+                  : searchMode === "exact"
+                    ? "Exact match..."
+                    : searchMode === "starts"
+                      ? "Starts with..."
+                      : "Search by part code or description..."
+              }
               className="pl-9"
             />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground mr-1">Mode:</span>
+            {([
+              { key: "contains" as const, label: "Contains" },
+              { key: "starts" as const, label: "Starts with" },
+              { key: "exact" as const, label: "Exact" },
+              { key: "bin" as const, label: "Bin" },
+            ]).map((m) => (
+              <button
+                key={m.key}
+                onClick={() => setSearchMode(m.key)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  searchMode === m.key
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -756,26 +1111,38 @@ export default function CountingPage() {
             <div className="px-4 pt-3 pb-1">
               <h1 className="text-lg font-semibold">Select a Bin</h1>
             </div>
-            <div className="flex gap-2 px-4 pb-3">
+            <div className="flex gap-2 px-4 pb-3 overflow-x-auto">
               {([
+                ...(verificationItems.length > 0
+                  ? [{ key: "verification" as BinTab, label: "Verification", count: verificationItems.length }]
+                  : []),
                 { key: "not-started" as BinTab, label: "Not Started", count: notStartedBins.length },
                 { key: "in-progress" as BinTab, label: "In Progress", count: inProgressBins.length },
                 { key: "completed" as BinTab, label: "Completed", count: completedBins.length },
-              ] as const).map((tab) => (
+              ]).map((tab) => (
                 <button
                   key={tab.key}
                   onClick={() => setBinTab(tab.key)}
-                  className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                  className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap ${
                     binTab === tab.key
-                      ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                      : "bg-white text-muted-foreground border-border hover:bg-muted/50 hover:text-foreground"
+                      ? tab.key === "verification"
+                        ? "bg-purple-600 text-white border-purple-600 shadow-sm"
+                        : "bg-primary text-primary-foreground border-primary shadow-sm"
+                      : tab.key === "verification"
+                        ? "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
+                        : "bg-white text-muted-foreground border-border hover:bg-muted/50 hover:text-foreground"
                   }`}
                 >
+                  {tab.key === "verification" && <ClipboardCheck className="h-3.5 w-3.5 inline mr-1 -mt-0.5" />}
                   {tab.label}
                   <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
                     binTab === tab.key
-                      ? "bg-primary-foreground/20 text-primary-foreground"
-                      : "bg-muted text-muted-foreground"
+                      ? tab.key === "verification"
+                        ? "bg-white/20 text-white"
+                        : "bg-primary-foreground/20 text-primary-foreground"
+                      : tab.key === "verification"
+                        ? "bg-purple-200 text-purple-800"
+                        : "bg-muted text-muted-foreground"
                   }`}>
                     {tab.count}
                   </span>
@@ -830,6 +1197,35 @@ export default function CountingPage() {
             </div>
           ) : (
             <>
+              {/* Verification tab */}
+              {binTab === "verification" && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                    <div className="text-sm font-medium text-purple-900 mb-0.5">
+                      Verification Counts
+                    </div>
+                    <div className="text-xs text-purple-700">
+                      Select a bin to verify. You will only see item details and on-hand — not the original count.
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                    {verificationBinStats.map(([bin, bStats]) => (
+                      <button
+                        key={bin}
+                        className="text-left px-3 py-2.5 rounded-lg border border-purple-200 hover:border-purple-400 hover:shadow-sm transition-all bg-white"
+                        onClick={() => startVerificationCounting(bin)}
+                      >
+                        <div className="font-mono font-bold text-sm truncate">{bin}</div>
+                        <div className="text-[10px] text-purple-700 mt-1">
+                          {bStats.total} item{bStats.total !== 1 ? "s" : ""} to verify
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Not Started tab */}
               {binTab === "not-started" && (
                 <div className="space-y-1">

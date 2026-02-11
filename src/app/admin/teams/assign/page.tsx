@@ -110,6 +110,7 @@ export default function AssignPage() {
   // Bin selection (unassigned)
   const [selectedBins, setSelectedBins] = useState<Set<string>>(new Set());
   const [binSearch, setBinSearch] = useState("");
+  const [binSearchMode, setBinSearchMode] = useState<"contains" | "starts" | "exact">("contains");
   const [assignToTeam, setAssignToTeam] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
 
@@ -199,9 +200,18 @@ export default function AssignPage() {
     let filtered = unassignedBins;
     if (binSearch.trim()) {
       const q = binSearch.toLowerCase();
-      filtered = unassignedBins.filter((b) =>
-        b.bin_number.toLowerCase().includes(q)
-      );
+      filtered = unassignedBins.filter((b) => {
+        const v = b.bin_number.toLowerCase();
+        switch (binSearchMode) {
+          case "starts":
+            return v.startsWith(q);
+          case "exact":
+            return v === q;
+          case "contains":
+          default:
+            return v.includes(q);
+        }
+      });
     }
 
     const sorted = [...filtered].sort(binComparator);
@@ -225,7 +235,7 @@ export default function AssignPage() {
     }
 
     return groupOrder.map((prefix) => [prefix, groups[prefix]] as [string, BinInfo[]]);
-  }, [unassignedBins, binSearch, binComparator, binSort]);
+  }, [unassignedBins, binSearch, binSearchMode, binComparator, binSort]);
 
   const toggleBin = (binNumber: string) => {
     setSelectedBins((prev) => {
@@ -250,11 +260,22 @@ export default function AssignPage() {
   };
 
   const selectAll = () => {
-    const filtered = binSearch.trim()
-      ? unassignedBins.filter((b) =>
-          b.bin_number.toLowerCase().includes(binSearch.toLowerCase())
-        )
-      : unassignedBins;
+    let filtered = unassignedBins;
+    if (binSearch.trim()) {
+      const q = binSearch.toLowerCase();
+      filtered = unassignedBins.filter((b) => {
+        const v = b.bin_number.toLowerCase();
+        switch (binSearchMode) {
+          case "starts":
+            return v.startsWith(q);
+          case "exact":
+            return v === q;
+          case "contains":
+          default:
+            return v.includes(q);
+        }
+      });
+    }
     setSelectedBins(new Set(filtered.map((b) => b.bin_number)));
   };
 
@@ -861,7 +882,13 @@ export default function AssignPage() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search bins..."
+                placeholder={
+                  binSearchMode === "exact"
+                    ? "Exact bin match..."
+                    : binSearchMode === "starts"
+                      ? "Bin starts with..."
+                      : "Search bins..."
+                }
                 value={binSearch}
                 onChange={(e) => setBinSearch(e.target.value)}
                 className="pl-9"
@@ -887,6 +914,28 @@ export default function AssignPage() {
                 Clear Selection
               </Button>
             )}
+          </div>
+
+          {/* Search mode pills */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground mr-1">Mode:</span>
+            {([
+              { key: "contains" as const, label: "Contains" },
+              { key: "starts" as const, label: "Starts with" },
+              { key: "exact" as const, label: "Exact" },
+            ]).map((m) => (
+              <button
+                key={m.key}
+                onClick={() => setBinSearchMode(m.key)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  binSearchMode === m.key
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
           </div>
 
           {/* Grouped bins */}

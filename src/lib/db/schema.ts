@@ -89,6 +89,33 @@ export const teamAssignments = sqliteTable("team_assignments", {
     .default(sql`(datetime('now'))`),
 });
 
+// ─── Verification Assignments ────────────────────────────────────────────────
+export const verificationAssignments = sqliteTable("verification_assignments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  countId: integer("count_id")
+    .notNull()
+    .references(() => counts.id),
+  itemId: integer("item_id")
+    .notNull()
+    .references(() => items.id),
+  eventId: integer("event_id")
+    .notNull()
+    .references(() => stocktakeEvents.id),
+  assignedTeamId: integer("assigned_team_id")
+    .notNull()
+    .references(() => teams.id),
+  assignedBy: integer("assigned_by")
+    .notNull()
+    .references(() => supervisors.id),
+  status: text("status", { enum: ["pending", "completed", "accepted"] })
+    .notNull()
+    .default("pending"),
+  assignedAt: text("assigned_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+  completedAt: text("completed_at"),
+});
+
 // ─── Counts ─────────────────────────────────────────────────────────────────
 export const counts = sqliteTable("counts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -114,6 +141,10 @@ export const counts = sqliteTable("counts", {
     .default(sql`(datetime('now'))`),
   syncedAt: text("synced_at"),
   clientId: text("client_id"), // for offline sync dedup
+  countType: text("count_type", { enum: ["initial", "verification"] })
+    .notNull()
+    .default("initial"),
+  verificationId: integer("verification_id"),
 });
 
 // ─── Queries (team-to-supervisor communication) ─────────────────────────────
@@ -213,3 +244,5 @@ export type NewBreakdown = typeof breakdowns.$inferInsert;
 export type Admin = typeof admins.$inferSelect;
 export type NewAdmin = typeof admins.$inferInsert;
 export type AuditLogEntry = typeof auditLog.$inferSelect;
+export type VerificationAssignment = typeof verificationAssignments.$inferSelect;
+export type NewVerificationAssignment = typeof verificationAssignments.$inferInsert;

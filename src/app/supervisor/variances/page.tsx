@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search } from "lucide-react";
+import { Search, ClipboardCheck, Filter } from "lucide-react";
 import { toast } from "sonner";
 
 interface VarianceItem {
@@ -41,6 +41,21 @@ interface VarianceItem {
   comment: string | null;
   checkStatus: string;
   countedAt: string;
+  // Verification fields
+  verificationId?: number;
+  verificationStatus?: string;
+  verificationTeamName?: string;
+  verificationTeamId?: number;
+  verificationQty?: number | null;
+  verificationVariance?: number | null;
+  verificationCountedAt?: string | null;
+}
+
+interface Team {
+  id: number;
+  name: string;
+  member1: string | null;
+  member2: string | null;
 }
 
 export default function VariancesPage() {
@@ -49,6 +64,7 @@ export default function VariancesPage() {
   const [activeTotalValue, setActiveTotalValue] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [searchMode, setSearchMode] = useState<"contains" | "starts" | "exact" | "bin">("contains");
   const [activeTab, setActiveTab] = useState("active");
 
   // Edit dialog state
@@ -57,6 +73,14 @@ export default function VariancesPage() {
   const [editReason, setEditReason] = useState("");
   const [saving, setSaving] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
+
+  // Verification selection state
+  const [selectedCountIds, setSelectedCountIds] = useState<Set<number>>(new Set());
+  const [showAssignDialog, setShowAssignDialog] = useState(false);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<Set<number>>(new Set());
+  const [assigning, setAssigning] = useState(false);
+  const [thresholdValue, setThresholdValue] = useState("");
 
   const loadVariances = useCallback(async () => {
     try {
@@ -193,16 +217,209 @@ export default function VariancesPage() {
     }
   };
 
-  const filterItems = (items: VarianceItem[]) =>
-    search
-      ? items.filter(
-          (v) =>
-            v.itemCode.toLowerCase().includes(search.toLowerCase()) ||
-            v.description?.toLowerCase().includes(search.toLowerCase()) ||
-            v.binNumber?.toLowerCase().includes(search.toLowerCase()) ||
-            v.teamName.toLowerCase().includes(search.toLowerCase())
-        )
-      : items;
+  // Selection helpers
+  const toggleSelection = (countId: number) => {
+    setSelectedCountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(countId)) {
+        next.delete(countId);
+      } else {
+        next.add(countId);
+      }
+      return next;
+    });
+  };
+
+  const selectableItems = activeVariances.filter(
+    (v) => !v.verificationId || v.verificationStatus === "accepted"
+  );
+
+  const toggleSelectAll = () => {
+    const filtered = filterItems(selectableItems);
+    if (selectedCountIds.size === filtered.length && filtered.length > 0) {
+      setSelectedCountIds(new Set());
+    } else {
+      setSelectedCountIds(new Set(filtered.map((v) => v.countId)));
+    }
+  };
+
+  const canSelect = (v: VarianceItem) =>
+    !v.verificationId || v.verificationStatus === "accepted";
+
+  const selectAboveThreshold = () => {
+    const threshold = parseFloat(thresholdValue);
+    if (isNaN(threshold) || threshold < 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    const matching = filterItems(selectableItems).filter(
+      (v) => Math.abs(v.varianceValue) >= threshold
+    );
+    if (matching.length === 0) {
+      toast.info("No variances above that amount");
+      return;
+    }
+    setSelectedCountIds(new Set(matching.map((v) => v.countId)));
+    toast.success(`${matching.length} item${matching.length !== 1 ? "s" : ""} selected`);
+  };
+
+  // Assign verification
+  const openAssignDialog = async () => {
+    if (selectedCountIds.size === 0) {
+      toast.error("Select at least one variance item");
+      return;
+    }
+    try {
+      const res = await fetch("/api/supervisor/teams");
+      if (res.ok) {
+        const data = await res.json();
+        setTeams(data.teams || []);
+      }
+    } catch {
+      toast.error("Failed to load teams");
+    }
+    setSelectedTeamIds(new Set());
+    setShowAssignDialog(true);
+  };
+
+  const toggleTeamSelection = (teamId: number) => {
+    setSelectedTeamIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(teamId)) {
+        next.delete(teamId);
+      } else {
+        next.add(teamId);
+      }
+      return next;
+    });
+  };
+
+  const submitAssignment = async () => {
+    if (selectedTeamIds.size === 0) {
+      toast.error("Select at least one team");
+      return;
+    }
+
+    setAssigning(true);
+    try {
+      const allCountIds = Array.from(selectedCountIds);
+      const teamIds = Array.from(selectedTeamIds);
+
+      // Round-robin distribute items across selected teams
+      const teamChunks: Map<number, number[]> = new Map();
+      for (const tid of teamIds) teamChunks.set(tid, []);
+      allCountIds.forEach((countId, i) => {
+        const tid = teamIds[i % teamIds.length];
+        teamChunks.get(tid)!.push(countId);
+      });
+
+      let totalCreated = 0;
+      for (const [teamId, countIds] of Array.from(teamChunks.entries())) {
+        if (countIds.length === 0) continue;
+        const res = await fetch("/api/supervisor/verifications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ countIds, assignedTeamId: teamId }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          toast.error(data.error || `Failed to assign to team`);
+          continue;
+        }
+
+        const data = await res.json();
+        totalCreated += data.created;
+      }
+
+      const teamNames = teamIds
+        .map((tid) => teams.find((t) => t.id === tid)?.name)
+        .filter(Boolean);
+
+      toast.success(
+        `${totalCreated} verification${totalCreated !== 1 ? "s" : ""} distributed across ${teamNames.join(", ")}`
+      );
+      setSelectedCountIds(new Set());
+      setShowAssignDialog(false);
+      loadVariances();
+    } catch {
+      toast.error("Failed to assign — check your connection");
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  // Accept original/verification
+  const handleAccept = async (
+    action: "accept_original" | "accept_verification",
+    v: VarianceItem
+  ) => {
+    if (!v.verificationId) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          verificationId: v.verificationId,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to accept");
+        return;
+      }
+
+      toast.success(
+        action === "accept_original"
+          ? "Original count accepted"
+          : "Verification count accepted"
+      );
+      loadVariances();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filterItems = (items: VarianceItem[]) => {
+    if (!search) return items;
+    const q = search.toLowerCase();
+
+    const matchField = (val: string | null | undefined): boolean => {
+      if (!val) return false;
+      const v = val.toLowerCase();
+      switch (searchMode) {
+        case "starts":
+          return v.startsWith(q);
+        case "exact":
+          return v === q;
+        case "bin":
+          return false; // handled separately
+        case "contains":
+        default:
+          return v.includes(q);
+      }
+    };
+
+    if (searchMode === "bin") {
+      return items.filter((v) => {
+        const bin = (v.binNumber || "").toLowerCase();
+        return bin.startsWith(q) || bin === q;
+      });
+    }
+
+    return items.filter(
+      (v) =>
+        matchField(v.itemCode) ||
+        matchField(v.description) ||
+        matchField(v.binNumber) ||
+        matchField(v.teamName)
+    );
+  };
 
   const filteredActive = filterItems(activeVariances);
   const filteredResolved = filterItems(resolvedVariances);
@@ -226,14 +443,45 @@ export default function VariancesPage() {
         </Badge>
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search variances..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-9"
-        />
+      <div className="space-y-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={
+              searchMode === "bin"
+                ? "Search by bin..."
+                : searchMode === "exact"
+                  ? "Exact match..."
+                  : searchMode === "starts"
+                    ? "Starts with..."
+                    : "Search variances..."
+            }
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground mr-1">Mode:</span>
+          {([
+            { key: "contains" as const, label: "Contains" },
+            { key: "starts" as const, label: "Starts with" },
+            { key: "exact" as const, label: "Exact" },
+            { key: "bin" as const, label: "Bin" },
+          ]).map((m) => (
+            <button
+              key={m.key}
+              onClick={() => setSearchMode(m.key)}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                searchMode === m.key
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -247,13 +495,80 @@ export default function VariancesPage() {
         </TabsList>
 
         <TabsContent value="active">
+          {/* Selection toolbar */}
+          {activeVariances.length > 0 && (
+            <div className="space-y-2 mb-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleSelectAll}
+                  className="text-xs"
+                >
+                  {selectedCountIds.size === filterItems(selectableItems).length &&
+                  filterItems(selectableItems).length > 0
+                    ? "Deselect All"
+                    : "Select All"}
+                </Button>
+
+                {/* Threshold selector */}
+                <div className="flex items-center gap-1">
+                  <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">R</span>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    value={thresholdValue}
+                    onChange={(e) => setThresholdValue(e.target.value)}
+                    placeholder="0"
+                    className="h-7 w-20 text-xs"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") selectAboveThreshold();
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7"
+                    onClick={selectAboveThreshold}
+                    disabled={!thresholdValue}
+                  >
+                    Select above
+                  </Button>
+                </div>
+
+                {selectedCountIds.size > 0 && (
+                  <>
+                    <span className="text-sm text-muted-foreground">
+                      {selectedCountIds.size} selected
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={openAssignDialog}
+                      className="ml-auto"
+                    >
+                      <ClipboardCheck className="h-4 w-4 mr-1" />
+                      Assign Verification
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           <VarianceTable
             items={filteredActive}
             emptyMessage={
               search ? "No matching variances" : "No variances recorded"
             }
             showEditButton
+            showCheckbox
             onEdit={openEditDialog}
+            selectedCountIds={selectedCountIds}
+            onToggleSelect={toggleSelection}
+            canSelect={canSelect}
+            onAccept={handleAccept}
+            isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
             {filteredActive.length} variance
@@ -270,6 +585,7 @@ export default function VariancesPage() {
                 : "No resolved variances yet"
             }
             showEditButton={false}
+            showCheckbox={false}
           />
           <div className="text-sm text-muted-foreground mt-2">
             {filteredResolved.length} resolved
@@ -389,6 +705,99 @@ export default function VariancesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Assign Verification Dialog */}
+      <Dialog
+        open={showAssignDialog}
+        onOpenChange={(open) => {
+          if (!open) setShowAssignDialog(false);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Distribute Verification Counts</DialogTitle>
+            <DialogDescription>
+              Select one or more teams. {selectedCountIds.size} item
+              {selectedCountIds.size !== 1 ? "s" : ""} will be distributed
+              evenly (round-robin) across the selected teams.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Select Teams</Label>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {teams.map((t) => {
+                  const isChecked = selectedTeamIds.has(t.id);
+                  const itemCount = selectedTeamIds.size > 0
+                    ? Math.floor(selectedCountIds.size / selectedTeamIds.size) +
+                      (Array.from(selectedTeamIds).indexOf(t.id) <
+                      selectedCountIds.size % selectedTeamIds.size
+                        ? 1
+                        : 0)
+                    : 0;
+                  return (
+                    <label
+                      key={t.id}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                        isChecked
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:bg-muted/50"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleTeamSelection(t.id)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium">{t.name}</div>
+                        {(t.member1 || t.member2) && (
+                          <div className="text-xs text-muted-foreground">
+                            {[t.member1, t.member2].filter(Boolean).join(", ")}
+                          </div>
+                        )}
+                      </div>
+                      {isChecked && (
+                        <Badge variant="secondary" className="text-xs flex-shrink-0">
+                          {itemCount} item{itemCount !== 1 ? "s" : ""}
+                        </Badge>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedTeamIds.size > 0 && (
+              <div className="text-sm text-muted-foreground bg-muted/30 rounded-lg p-2">
+                {selectedCountIds.size} item{selectedCountIds.size !== 1 ? "s" : ""}{" "}
+                distributed across {selectedTeamIds.size} team
+                {selectedTeamIds.size !== 1 ? "s" : ""}.
+                Teams will NOT see the original counted quantities.
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAssignDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={submitAssignment}
+              disabled={assigning || selectedTeamIds.size === 0}
+            >
+              {assigning
+                ? "Assigning..."
+                : `Assign to ${selectedTeamIds.size} team${selectedTeamIds.size !== 1 ? "s" : ""}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -398,12 +807,27 @@ function VarianceTable({
   items,
   emptyMessage,
   showEditButton,
+  showCheckbox,
   onEdit,
+  selectedCountIds,
+  onToggleSelect,
+  canSelect,
+  onAccept,
+  isSaving,
 }: {
   items: VarianceItem[];
   emptyMessage: string;
   showEditButton: boolean;
+  showCheckbox: boolean;
   onEdit?: (item: VarianceItem) => void;
+  selectedCountIds?: Set<number>;
+  onToggleSelect?: (countId: number) => void;
+  canSelect?: (item: VarianceItem) => boolean;
+  onAccept?: (
+    action: "accept_original" | "accept_verification",
+    item: VarianceItem
+  ) => void;
+  isSaving?: boolean;
 }) {
   return (
     <Card>
@@ -412,6 +836,7 @@ function VarianceTable({
           <Table>
             <TableHeader>
               <TableRow>
+                {showCheckbox && <TableHead className="w-10"></TableHead>}
                 <TableHead>Item Code</TableHead>
                 <TableHead className="hidden md:table-cell">
                   Description
@@ -424,6 +849,7 @@ function VarianceTable({
                   Value
                 </TableHead>
                 <TableHead>Team</TableHead>
+                <TableHead>Verification</TableHead>
                 {showEditButton && <TableHead></TableHead>}
               </TableRow>
             </TableHeader>
@@ -431,70 +857,147 @@ function VarianceTable({
               {items.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={showEditButton ? 9 : 8}
+                    colSpan={showEditButton ? 11 : 10}
                     className="text-center py-8 text-muted-foreground"
                   >
                     {emptyMessage}
                   </TableCell>
                 </TableRow>
               ) : (
-                items.map((v) => (
-                  <TableRow key={v.countId}>
-                    <TableCell className="font-mono text-sm">
-                      {v.itemCode}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
-                      {v.description}
-                    </TableCell>
-                    <TableCell className="text-sm">{v.binNumber}</TableCell>
-                    <TableCell className="text-right">{v.onHand}</TableCell>
-                    <TableCell className="text-right font-semibold">
-                      {v.countedQty}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {showEditButton ? (
-                        <Badge
-                          variant={
-                            Math.abs(v.variance) > 10
-                              ? "destructive"
-                              : "outline"
-                          }
-                          className={
-                            Math.abs(v.variance) <= 10
-                              ? "border-amber-400 text-amber-700"
-                              : ""
-                          }
-                        >
-                          {v.variance > 0 ? "+" : ""}
-                          {v.variance}
-                        </Badge>
-                      ) : (
-                        <Badge className="bg-green-100 text-green-800 border-green-300">
-                          Resolved
-                        </Badge>
+                items.map((v) => {
+                  const isSelectable = canSelect ? canSelect(v) : false;
+                  const isSelected = selectedCountIds?.has(v.countId) ?? false;
+                  const hasVerification = !!v.verificationId;
+                  const isVerificationCompleted =
+                    v.verificationStatus === "completed";
+                  const isVerificationAccepted =
+                    v.verificationStatus === "accepted";
+                  const isVerificationPending =
+                    v.verificationStatus === "pending";
+
+                  return (
+                    <TableRow
+                      key={v.countId}
+                      className={isSelected ? "bg-blue-50" : ""}
+                    >
+                      {showCheckbox && (
+                        <TableCell>
+                          {isSelectable && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => onToggleSelect?.(v.countId)}
+                              className="h-4 w-4 rounded border-gray-300"
+                            />
+                          )}
+                        </TableCell>
                       )}
-                    </TableCell>
-                    <TableCell className="text-right hidden md:table-cell text-sm">
-                      R
-                      {Math.abs(v.varianceValue).toLocaleString(undefined, {
-                        maximumFractionDigits: 0,
-                      })}
-                    </TableCell>
-                    <TableCell className="text-sm">{v.teamName}</TableCell>
-                    {showEditButton && (
-                      <TableCell>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => onEdit?.(v)}
-                        >
-                          Edit
-                        </Button>
+                      <TableCell className="font-mono text-sm">
+                        {v.itemCode}
                       </TableCell>
-                    )}
-                  </TableRow>
-                ))
+                      <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
+                        {v.description}
+                      </TableCell>
+                      <TableCell className="text-sm">{v.binNumber}</TableCell>
+                      <TableCell className="text-right">{v.onHand}</TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {v.countedQty}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {showEditButton ? (
+                          <Badge
+                            variant={
+                              Math.abs(v.variance) > 10
+                                ? "destructive"
+                                : "outline"
+                            }
+                            className={
+                              Math.abs(v.variance) <= 10
+                                ? "border-amber-400 text-amber-700"
+                                : ""
+                            }
+                          >
+                            {v.variance > 0 ? "+" : ""}
+                            {v.variance}
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-green-100 text-green-800 border-green-300">
+                            Resolved
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right hidden md:table-cell text-sm">
+                        R
+                        {Math.abs(v.varianceValue).toLocaleString(undefined, {
+                          maximumFractionDigits: 0,
+                        })}
+                      </TableCell>
+                      <TableCell className="text-sm">{v.teamName}</TableCell>
+                      <TableCell className="text-sm">
+                        {!hasVerification && (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                        {isVerificationPending && (
+                          <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
+                            Pending — {v.verificationTeamName}
+                          </Badge>
+                        )}
+                        {isVerificationCompleted && (
+                          <div className="space-y-1">
+                            <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
+                              Verified: {v.verificationQty} (
+                              {(v.verificationVariance ?? 0) > 0 ? "+" : ""}
+                              {v.verificationVariance})
+                            </Badge>
+                            <div className="text-xs text-muted-foreground">
+                              by {v.verificationTeamName}
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 text-[10px] px-2"
+                                onClick={() =>
+                                  onAccept?.("accept_original", v)
+                                }
+                                disabled={isSaving}
+                              >
+                                Keep Original
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="h-6 text-[10px] px-2"
+                                onClick={() =>
+                                  onAccept?.("accept_verification", v)
+                                }
+                                disabled={isSaving}
+                              >
+                                Accept Verification
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {isVerificationAccepted && (
+                          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+                            Verification Resolved
+                          </Badge>
+                        )}
+                      </TableCell>
+                      {showEditButton && (
+                        <TableCell>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => onEdit?.(v)}
+                          >
+                            Edit
+                          </Button>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>

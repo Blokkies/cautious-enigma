@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, counts, auditLog } from "@/lib/db/schema";
+import { items, counts, auditLog, verificationAssignments } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getApiUser, checkEventActive } from "@/lib/api-auth";
 
@@ -17,13 +17,107 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { itemId, countedQty, isMatch, comment, clientId } = body;
+    const { itemId, countedQty, isMatch, comment, clientId, verificationId } = body;
 
     if (itemId === undefined || countedQty === undefined) {
       return NextResponse.json(
         { error: "itemId and countedQty are required" },
         { status: 400 }
       );
+    }
+
+    // Handle verification count submission
+    if (verificationId) {
+      const va = db
+        .select()
+        .from(verificationAssignments)
+        .where(
+          and(
+            eq(verificationAssignments.id, verificationId),
+            eq(verificationAssignments.assignedTeamId, user.id),
+            eq(verificationAssignments.eventId, user.eventId),
+            eq(verificationAssignments.status, "pending")
+          )
+        )
+        .get();
+
+      if (!va) {
+        return NextResponse.json(
+          { error: "Verification assignment not found or not assigned to your team" },
+          { status: 404 }
+        );
+      }
+
+      const item = db
+        .select()
+        .from(items)
+        .where(eq(items.id, itemId))
+        .get();
+
+      if (!item) {
+        return NextResponse.json(
+          { error: "Item not found" },
+          { status: 404 }
+        );
+      }
+
+      const variance = countedQty - (item.onHand || 0);
+      const varianceValue = variance * (item.avgCost || 0);
+      const computedIsMatch = variance === 0;
+
+      // Insert a new verification count (never upsert)
+      const insertResult = db
+        .insert(counts)
+        .values({
+          itemId,
+          teamId: user.id,
+          eventId: user.eventId,
+          countedQty,
+          variance,
+          varianceValue,
+          isMatch: computedIsMatch,
+          comment: comment || null,
+          countedAt: new Date().toISOString(),
+          syncedAt: new Date().toISOString(),
+          clientId: clientId || null,
+          countType: "verification",
+          verificationId,
+        })
+        .run();
+
+      // Update verification assignment status
+      db.update(verificationAssignments)
+        .set({
+          status: "completed",
+          completedAt: new Date().toISOString(),
+        })
+        .where(eq(verificationAssignments.id, verificationId))
+        .run();
+
+      const result = db
+        .select()
+        .from(counts)
+        .where(eq(counts.id, Number(insertResult.lastInsertRowid)))
+        .get();
+
+      // Audit log
+      db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "team",
+          action: "verification_count",
+          tableName: "counts",
+          recordId: Number(insertResult.lastInsertRowid),
+          newValue: JSON.stringify({
+            countedQty,
+            variance,
+            verificationId,
+          }),
+        })
+        .run();
+
+      return NextResponse.json({ success: true, count: result });
     }
 
     // Verify item belongs to this team
@@ -66,12 +160,16 @@ export async function POST(request: NextRequest) {
     const variance = countedQty - (item.onHand || 0);
     const varianceValue = variance * (item.avgCost || 0);
 
-    // Check if already counted - update if so
+    // Check if already counted (initial counts only) - update if so
     const existingCount = db
       .select()
       .from(counts)
       .where(
-        and(eq(counts.itemId, itemId), eq(counts.teamId, user.id))
+        and(
+          eq(counts.itemId, itemId),
+          eq(counts.teamId, user.id),
+          eq(counts.countType, "initial")
+        )
       )
       .get();
 
@@ -229,7 +327,11 @@ export async function PUT(request: NextRequest) {
         .select()
         .from(counts)
         .where(
-          and(eq(counts.itemId, itemId), eq(counts.teamId, user.id))
+          and(
+            eq(counts.itemId, itemId),
+            eq(counts.teamId, user.id),
+            eq(counts.countType, "initial")
+          )
         )
         .get();
 

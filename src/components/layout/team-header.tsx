@@ -3,7 +3,7 @@
 import { useAuth } from "@/contexts/auth-context";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { Button } from "@/components/ui/button";
-import { LogOut, Wifi, WifiOff, Cloud, CloudOff } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface TeamHeaderProps {
@@ -23,36 +23,35 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
   return (
     <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
       <div className="flex items-center justify-between px-4 h-14">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            {user?.eventName && (
-              <>
-                <span className="text-sm text-muted-foreground">{user.eventName}</span>
-                <span className="text-muted-foreground">·</span>
-              </>
-            )}
-            <span className="font-semibold text-primary">{user?.name}</span>
-          </div>
-          <div className="flex items-center gap-1">
-            {isOnline ? (
-              <Wifi className="h-4 w-4 text-green-500" />
-            ) : (
-              <WifiOff className="h-4 w-4 text-red-500" />
-            )}
-            {pendingSyncs > 0 && (
-              <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                <CloudOff className="h-3 w-3" />
-                {pendingSyncs} pending
-              </span>
-            )}
-            {pendingSyncs === 0 && isOnline && (
-              <Cloud className="h-3 w-3 text-green-500" />
-            )}
-          </div>
+        <div className="flex items-center gap-1.5">
+          {user?.eventName && (
+            <>
+              <span className="text-sm text-muted-foreground">{user.eventName}</span>
+              <span className="text-muted-foreground">·</span>
+            </>
+          )}
+          <span className="font-semibold text-primary">{user?.name}</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleLogout} className="touch-target">
-          <LogOut className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          {isOnline ? (
+            pendingSyncs > 0 ? (
+              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                Connecting
+              </span>
+            ) : (
+              <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                Online
+              </span>
+            )
+          ) : (
+            <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+              Offline
+            </span>
+          )}
+          <Button variant="ghost" size="sm" onClick={handleLogout} className="touch-target">
+            <LogOut className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </header>
   );

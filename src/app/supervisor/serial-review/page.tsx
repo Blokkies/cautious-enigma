@@ -181,6 +181,17 @@ export default function SupervisorSerialReviewPage() {
     (d) => d.status === "resolved"
   );
 
+  // Summary counts for header badges
+  const totalUnknownSerials = openDiscrepancies.reduce(
+    (sum, d) => sum + d.unknownSerials.length,
+    0
+  );
+  const totalNotFound = openDiscrepancies.reduce(
+    (sum, d) =>
+      sum + d.expectedSerials.filter((s) => s.status === "not_found").length,
+    0
+  );
+
   if (loading) {
     return (
       <div className="text-center py-12 text-muted-foreground">Loading...</div>
@@ -189,7 +200,19 @@ export default function SupervisorSerialReviewPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Serial Review</h1>
+      <div className="flex items-center gap-2 flex-wrap">
+        <h1 className="text-2xl font-bold">Serial Review</h1>
+        {totalUnknownSerials > 0 && (
+          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+            {totalUnknownSerials} unknown serial{totalUnknownSerials !== 1 ? "s" : ""}
+          </Badge>
+        )}
+        {totalNotFound > 0 && (
+          <Badge className="bg-red-100 text-red-800 border-red-300 text-xs">
+            {totalNotFound} not found
+          </Badge>
+        )}
+      </div>
 
       <Tabs defaultValue="open">
         <TabsList>
@@ -295,7 +318,7 @@ function UnknownSerialRow({
           />
         ) : (
           <span
-            className="cursor-pointer hover:underline inline-flex items-center gap-1"
+            className="group cursor-pointer hover:underline inline-flex items-center gap-1"
             onClick={() => setEditing(true)}
           >
             {serial}

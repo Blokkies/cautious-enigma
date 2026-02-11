@@ -158,12 +158,14 @@ export const queries = sqliteTable("queries", {
     .notNull()
     .references(() => teams.id),
   itemId: integer("item_id").references(() => items.id),
+  itemCode: text("item_code"),
   queryType: text("query_type", {
     enum: ["missing_item", "damaged", "wrong_location", "quantity_question", "other"],
   }).notNull(),
   message: text("message").notNull(),
   response: text("response"),
   respondedBy: integer("responded_by").references(() => supervisors.id),
+  teamReply: text("team_reply"),
   status: text("status", { enum: ["open", "resolved", "escalated"] })
     .notNull()
     .default("open"),
@@ -171,6 +173,20 @@ export const queries = sqliteTable("queries", {
     .notNull()
     .default(sql`(datetime('now'))`),
   resolvedAt: text("resolved_at"),
+});
+
+// ─── Query Messages (threaded conversation) ─────────────────────────────────
+export const queryMessages = sqliteTable("query_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  queryId: integer("query_id")
+    .notNull()
+    .references(() => queries.id),
+  senderType: text("sender_type", { enum: ["team", "supervisor"] }).notNull(),
+  senderId: integer("sender_id").notNull(),
+  message: text("message").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
 });
 
 // ─── Breakdowns (stock movements during count) ─────────────────────────────

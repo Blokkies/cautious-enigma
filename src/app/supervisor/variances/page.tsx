@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck, Filter } from "lucide-react";
+import { Search, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 
 interface VarianceItem {
@@ -49,6 +49,9 @@ interface VarianceItem {
   verificationQty?: number | null;
   verificationVariance?: number | null;
   verificationCountedAt?: string | null;
+  // Serial discrepancy fields
+  isUnknownSerial?: boolean;
+  serialNumber?: string;
 }
 
 interface Team {
@@ -231,7 +234,7 @@ export default function VariancesPage() {
   };
 
   const selectableItems = activeVariances.filter(
-    (v) => !v.verificationId || v.verificationStatus === "accepted"
+    (v) => !v.isUnknownSerial && (!v.verificationId || v.verificationStatus === "accepted")
   );
 
   const toggleSelectAll = () => {
@@ -244,7 +247,7 @@ export default function VariancesPage() {
   };
 
   const canSelect = (v: VarianceItem) =>
-    !v.verificationId || v.verificationStatus === "accepted";
+    !v.isUnknownSerial && (!v.verificationId || v.verificationStatus === "accepted");
 
   const selectAboveThreshold = () => {
     const threshold = parseFloat(thresholdValue);
@@ -424,6 +427,17 @@ export default function VariancesPage() {
   const filteredActive = filterItems(activeVariances);
   const filteredResolved = filterItems(resolvedVariances);
 
+  // Summary counts for header badges
+  const needReviewCount = activeVariances.filter(
+    (v) => v.verificationStatus === "completed"
+  ).length;
+  const pendingVerificationCount = activeVariances.filter(
+    (v) => v.verificationStatus === "pending"
+  ).length;
+  const unassignedCount = activeVariances.filter(
+    (v) => !v.verificationId || v.verificationStatus === "accepted"
+  ).length;
+
   if (loading) {
     return (
       <div className="text-center py-12 text-muted-foreground">Loading...</div>
@@ -432,8 +446,25 @@ export default function VariancesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Variances</h1>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-2xl font-bold">Variances</h1>
+          {needReviewCount > 0 && (
+            <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">
+              {needReviewCount} need review
+            </Badge>
+          )}
+          {pendingVerificationCount > 0 && (
+            <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs">
+              {pendingVerificationCount} pending verification
+            </Badge>
+          )}
+          {unassignedCount > 0 && (
+            <Badge variant="secondary" className="text-xs">
+              {unassignedCount} unassigned
+            </Badge>
+          )}
+        </div>
         <Badge variant="destructive" className="text-sm">
           R
           {activeTotalValue.toLocaleString(undefined, {
@@ -497,60 +528,62 @@ export default function VariancesPage() {
         <TabsContent value="active">
           {/* Selection toolbar */}
           {activeVariances.length > 0 && (
-            <div className="space-y-2 mb-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleSelectAll}
-                  className="text-xs"
-                >
-                  {selectedCountIds.size === filterItems(selectableItems).length &&
-                  filterItems(selectableItems).length > 0
-                    ? "Deselect All"
-                    : "Select All"}
-                </Button>
-
-                {/* Threshold selector */}
-                <div className="flex items-center gap-1">
-                  <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">R</span>
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    value={thresholdValue}
-                    onChange={(e) => setThresholdValue(e.target.value)}
-                    placeholder="0"
-                    className="h-7 w-20 text-xs"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") selectAboveThreshold();
-                    }}
-                  />
+            <div className="bg-muted/30 rounded-lg p-2 mb-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
                   <Button
                     variant="outline"
                     size="sm"
-                    className="text-xs h-7"
-                    onClick={selectAboveThreshold}
-                    disabled={!thresholdValue}
+                    onClick={toggleSelectAll}
+                    className="text-xs"
                   >
-                    Select above
+                    {selectedCountIds.size === filterItems(selectableItems).length &&
+                    filterItems(selectableItems).length > 0
+                      ? "☑ Deselect All"
+                      : "☐ Select All"}
                   </Button>
+
+                  <div className="h-4 w-px bg-border" />
+
+                  {/* Threshold selector */}
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-muted-foreground">R</span>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      value={thresholdValue}
+                      onChange={(e) => setThresholdValue(e.target.value)}
+                      placeholder="0"
+                      className="h-7 w-20 text-xs"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") selectAboveThreshold();
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={selectAboveThreshold}
+                      disabled={!thresholdValue}
+                    >
+                      Select ≥
+                    </Button>
+                  </div>
                 </div>
 
                 {selectedCountIds.size > 0 && (
-                  <>
-                    <span className="text-sm text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-muted-foreground">
                       {selectedCountIds.size} selected
                     </span>
                     <Button
                       size="sm"
                       onClick={openAssignDialog}
-                      className="ml-auto"
                     >
                       <ClipboardCheck className="h-4 w-4 mr-1" />
                       Assign Verification
                     </Button>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -875,10 +908,20 @@ function VarianceTable({
                   const isVerificationPending =
                     v.verificationStatus === "pending";
 
+                  const rowBg = isSelected
+                    ? "bg-blue-50"
+                    : v.isUnknownSerial
+                      ? "bg-amber-50/50"
+                      : isVerificationCompleted
+                        ? "bg-purple-50/50"
+                        : isVerificationPending
+                          ? "bg-blue-50/50"
+                          : "";
+
                   return (
                     <TableRow
                       key={v.countId}
-                      className={isSelected ? "bg-blue-50" : ""}
+                      className={rowBg}
                     >
                       {showCheckbox && (
                         <TableCell>
@@ -893,7 +936,12 @@ function VarianceTable({
                         </TableCell>
                       )}
                       <TableCell className="font-mono text-sm">
-                        {v.itemCode}
+                        <div>{v.itemCode}</div>
+                        {v.isUnknownSerial && v.serialNumber && (
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px] mt-0.5 font-mono">
+                            S/N: {v.serialNumber}
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
                         {v.description}
@@ -922,7 +970,8 @@ function VarianceTable({
                           </Badge>
                         ) : (
                           <Badge className="bg-green-100 text-green-800 border-green-300">
-                            Resolved
+                            {v.variance > 0 ? "+" : ""}
+                            {v.variance} Resolved
                           </Badge>
                         )}
                       </TableCell>
@@ -934,29 +983,37 @@ function VarianceTable({
                       </TableCell>
                       <TableCell className="text-sm">{v.teamName}</TableCell>
                       <TableCell className="text-sm">
-                        {!hasVerification && (
+                        {v.isUnknownSerial && (
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+                            Unknown Serial
+                          </Badge>
+                        )}
+                        {!v.isUnknownSerial && !hasVerification && (
                           <span className="text-muted-foreground">—</span>
                         )}
-                        {isVerificationPending && (
+                        {!v.isUnknownSerial && isVerificationPending && (
                           <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
                             Pending — {v.verificationTeamName}
                           </Badge>
                         )}
-                        {isVerificationCompleted && (
-                          <div className="space-y-1">
-                            <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
-                              Verified: {v.verificationQty} (
-                              {(v.verificationVariance ?? 0) > 0 ? "+" : ""}
-                              {v.verificationVariance})
-                            </Badge>
-                            <div className="text-xs text-muted-foreground">
-                              by {v.verificationTeamName}
+                        {!v.isUnknownSerial && isVerificationCompleted && (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
+                                Verified: {v.verificationQty}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                by {v.verificationTeamName}
+                              </span>
                             </div>
-                            <div className="flex gap-1 mt-1">
+                            <div className="text-[11px] text-muted-foreground">
+                              Original: {v.countedQty} → Verified: {v.verificationQty}
+                            </div>
+                            <div className="flex gap-1.5">
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-6 text-[10px] px-2"
+                                className="h-7 text-xs px-2.5"
                                 onClick={() =>
                                   onAccept?.("accept_original", v)
                                 }
@@ -966,18 +1023,18 @@ function VarianceTable({
                               </Button>
                               <Button
                                 size="sm"
-                                className="h-6 text-[10px] px-2"
+                                className="h-7 text-xs px-2.5 bg-green-600 hover:bg-green-700 text-white"
                                 onClick={() =>
                                   onAccept?.("accept_verification", v)
                                 }
                                 disabled={isSaving}
                               >
-                                Accept Verification
+                                Accept Verified
                               </Button>
                             </div>
                           </div>
                         )}
-                        {isVerificationAccepted && (
+                        {!v.isUnknownSerial && isVerificationAccepted && (
                           <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
                             Verification Resolved
                           </Badge>
@@ -985,14 +1042,16 @@ function VarianceTable({
                       </TableCell>
                       {showEditButton && (
                         <TableCell>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={() => onEdit?.(v)}
-                          >
-                            Edit
-                          </Button>
+                          {!v.isUnknownSerial && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={() => onEdit?.(v)}
+                            >
+                              Edit
+                            </Button>
+                          )}
                         </TableCell>
                       )}
                     </TableRow>

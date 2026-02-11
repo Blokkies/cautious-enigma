@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, counts, teams, auditLog, verificationAssignments } from "@/lib/db/schema";
+import { items, counts, teams, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 
@@ -127,13 +127,76 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const enrichedVariances = variances.map((v) => ({
+  const enrichedVariances: Record<string, unknown>[] = variances.map((v) => ({
     ...v,
     ...verificationMap[v.countId],
   }));
 
-  const totalVarianceValue = variances.reduce(
-    (sum, v) => sum + Math.abs(v.varianceValue || 0),
+  // For the active tab, include unknown serials from open serial discrepancies as synthetic variance rows.
+  // Each unknown serial represents a found item not in the expected list (variance = +1).
+  if (!isResolved) {
+    const openDiscrepancies = db
+      .select({
+        id: serialDiscrepancies.id,
+        itemCode: serialDiscrepancies.itemCode,
+        description: serialDiscrepancies.description,
+        binNumber: serialDiscrepancies.binNumber,
+        unknownSerials: serialDiscrepancies.unknownSerials,
+        teamName: teams.name,
+      })
+      .from(serialDiscrepancies)
+      .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
+      .where(
+        and(
+          eq(serialDiscrepancies.eventId, user.eventId),
+          eq(serialDiscrepancies.status, "open")
+        )
+      )
+      .all();
+
+    for (const disc of openDiscrepancies) {
+      const unknowns: string[] = JSON.parse(disc.unknownSerials);
+      if (unknowns.length === 0) continue;
+
+      // Look up avgCost from any item with this itemCode in the event
+      const refItem = db
+        .select({ avgCost: items.avgCost })
+        .from(items)
+        .where(
+          and(
+            eq(items.eventId, user.eventId),
+            eq(items.itemCode, disc.itemCode)
+          )
+        )
+        .get();
+      const avgCost = refItem?.avgCost ?? 0;
+
+      for (let i = 0; i < unknowns.length; i++) {
+        const varianceValue = 1 * avgCost;
+        enrichedVariances.push({
+          countId: -(disc.id * 1000 + i), // synthetic negative ID
+          itemCode: disc.itemCode,
+          description: disc.description,
+          brand: null,
+          binNumber: disc.binNumber,
+          onHand: 0,
+          avgCost,
+          countedQty: 1,
+          variance: 1,
+          varianceValue,
+          teamName: disc.teamName,
+          comment: null,
+          checkStatus: "pending",
+          countedAt: null,
+          isUnknownSerial: true,
+          serialNumber: unknowns[i],
+        });
+      }
+    }
+  }
+
+  const totalVarianceValue = enrichedVariances.reduce(
+    (sum, v) => sum + Math.abs((v as { varianceValue?: number }).varianceValue || 0),
     0
   );
 

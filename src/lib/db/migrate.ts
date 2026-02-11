@@ -178,8 +178,18 @@ CREATE INDEX IF NOT EXISTS idx_counts_item ON counts(item_id);
 CREATE INDEX IF NOT EXISTS idx_counts_team ON counts(team_id);
 CREATE INDEX IF NOT EXISTS idx_counts_event ON counts(event_id);
 CREATE INDEX IF NOT EXISTS idx_counts_client_id ON counts(client_id);
+CREATE TABLE IF NOT EXISTS query_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  query_id INTEGER NOT NULL REFERENCES queries(id),
+  sender_type TEXT NOT NULL CHECK(sender_type IN ('team','supervisor')),
+  sender_id INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_queries_event ON queries(event_id);
 CREATE INDEX IF NOT EXISTS idx_queries_team ON queries(team_id);
+CREATE INDEX IF NOT EXISTS idx_query_messages_query ON query_messages(query_id);
 CREATE INDEX IF NOT EXISTS idx_breakdowns_event ON breakdowns(event_id);
 CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_log(event_id);
 `;
@@ -192,6 +202,8 @@ const alterStatements = [
   `ALTER TABLE items ADD COLUMN internal_id TEXT`,
   `ALTER TABLE counts ADD COLUMN count_type TEXT NOT NULL DEFAULT 'initial'`,
   `ALTER TABLE counts ADD COLUMN verification_id INTEGER`,
+  `ALTER TABLE queries ADD COLUMN team_reply TEXT`,
+  `ALTER TABLE queries ADD COLUMN item_code TEXT`,
 ];
 
 // Execute all statements
@@ -233,6 +245,35 @@ for (const idx of postAlterIndexes) {
   } catch {
     // ignore
   }
+}
+
+// Migrate existing query response/teamReply into query_messages (one-time)
+try {
+  // Migrate supervisor responses that don't have a corresponding message yet
+  sqlite.exec(`
+    INSERT INTO query_messages (query_id, sender_type, sender_id, message, created_at)
+    SELECT q.id, 'supervisor', q.responded_by, q.response, q.created_at
+    FROM queries q
+    WHERE q.response IS NOT NULL
+      AND q.responded_by IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM query_messages qm
+        WHERE qm.query_id = q.id AND qm.sender_type = 'supervisor'
+      );
+  `);
+  // Migrate team replies
+  sqlite.exec(`
+    INSERT INTO query_messages (query_id, sender_type, sender_id, message, created_at)
+    SELECT q.id, 'team', q.team_id, q.team_reply, q.created_at
+    FROM queries q
+    WHERE q.team_reply IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM query_messages qm
+        WHERE qm.query_id = q.id AND qm.sender_type = 'team'
+      );
+  `);
+} catch {
+  // query_messages table may not exist yet on first run before CREATE TABLE
 }
 
 // Seed default admin if admins table is empty

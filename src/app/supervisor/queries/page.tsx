@@ -3,21 +3,30 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CheckCircle2, Clock, Send, RotateCcw } from "lucide-react";
+import { CheckCircle2, Clock, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users } from "lucide-react";
 import { toast } from "sonner";
+
+interface QueryMessage {
+  senderType: "team" | "supervisor";
+  senderName: string;
+  message: string;
+  createdAt: string;
+}
 
 interface QueryItem {
   id: number;
   queryType: string;
   message: string;
-  response: string | null;
+  messages: QueryMessage[];
   status: string;
   createdAt: string;
   teamName: string;
+  teamMember1: string | null;
+  teamMember2: string | null;
   itemCode: string | null;
+  itemDescription: string | null;
 }
 
 export default function SupervisorQueriesPage() {
@@ -26,6 +35,7 @@ export default function SupervisorQueriesPage() {
   const [respondingTo, setRespondingTo] = useState<number | null>(null);
   const [responseText, setResponseText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
 
   const loadQueries = useCallback(async () => {
     try {
@@ -104,6 +114,35 @@ export default function SupervisorQueriesPage() {
     }
   };
 
+  const handleDelete = async (queryId: number) => {
+    if (!confirm("Delete this query? This cannot be undone.")) return;
+    try {
+      const res = await fetch("/api/supervisor/queries", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queryId }),
+      });
+      if (res.ok) {
+        toast.success("Query deleted");
+        loadQueries();
+      }
+    } catch {
+      toast.error("Failed to delete query");
+    }
+  };
+
+  const toggleTeam = (teamName: string) => {
+    setCollapsedTeams((prev) => {
+      const next = new Set(prev);
+      if (next.has(teamName)) {
+        next.delete(teamName);
+      } else {
+        next.add(teamName);
+      }
+      return next;
+    });
+  };
+
   const queryTypeLabels: Record<string, string> = {
     missing_item: "Missing Item",
     damaged: "Damaged Stock",
@@ -115,54 +154,106 @@ export default function SupervisorQueriesPage() {
   const openQueries = allQueries.filter((q) => q.status === "open");
   const resolvedQueries = allQueries.filter((q) => q.status === "resolved");
 
+  // Group queries by team name
+  const groupByTeam = (list: QueryItem[]) => {
+    const groups: Record<string, QueryItem[]> = {};
+    for (const q of list) {
+      if (!groups[q.teamName]) groups[q.teamName] = [];
+      groups[q.teamName].push(q);
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  };
+
+  const teamMembers = (q: QueryItem) => {
+    const parts = [q.teamMember1, q.teamMember2].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : null;
+  };
+
   if (loading) {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   }
 
-  const QueryCard = ({ q }: { q: QueryItem }) => (
-    <Card key={q.id}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="font-medium">
-              {q.teamName}
-            </Badge>
-            <Badge variant="secondary">
-              {queryTypeLabels[q.queryType] || q.queryType}
-            </Badge>
-            {q.itemCode && (
-              <span className="text-xs font-mono text-muted-foreground">
-                {q.itemCode}
+  const renderQueryCard = (q: QueryItem) => (
+    <Card
+      key={q.id}
+      className={`overflow-hidden border-l-4 ${
+        q.status === "resolved"
+          ? "border-l-green-500"
+          : "border-l-amber-500"
+      }`}
+    >
+      {/* Query heading */}
+      <div className={`px-4 py-2.5 border-b ${
+        q.status === "resolved"
+          ? "bg-green-50/50 border-green-100"
+          : "bg-amber-50/50 border-amber-100"
+      }`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                q.status === "resolved"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-amber-100 text-amber-700"
+              }`}>
+                {q.status === "resolved" ? "Resolved" : "Open"}
               </span>
+              <span className="text-xs font-medium bg-gray-100 border rounded px-1.5 py-0.5 text-gray-600">
+                {queryTypeLabels[q.queryType] || q.queryType}
+              </span>
+              {q.itemCode && (
+                <span className="text-xs bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 text-blue-700">
+                  Part: <span className="font-mono font-semibold">{q.itemCode}</span>
+                </span>
+              )}
+            </div>
+            {q.itemDescription && (
+              <p className="text-xs text-muted-foreground mt-1">{q.itemDescription}</p>
             )}
+            <p className="text-sm mt-1.5 font-medium">{q.message}</p>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {new Date(q.createdAt).toLocaleString()}
+            </p>
           </div>
-          <Badge
-            className={
-              q.status === "resolved"
-                ? "bg-green-100 text-green-800"
-                : "bg-amber-100 text-amber-800"
-            }
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0"
+            onClick={() => handleDelete(q.id)}
           >
-            {q.status === "resolved" ? (
-              <CheckCircle2 className="h-3 w-3 mr-1" />
-            ) : (
-              <Clock className="h-3 w-3 mr-1" />
-            )}
-            {q.status}
-          </Badge>
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
         </div>
+      </div>
 
-        <p className="text-sm mb-2">{q.message}</p>
-
-        {q.response && (
-          <div className="bg-blue-50 p-3 rounded text-sm text-blue-900 border border-blue-200 mb-2">
-            <span className="font-semibold">Your response:</span> {q.response}
-          </div>
+      <CardContent className="p-4">
+        {/* Chat thread */}
+        {q.messages.length > 0 && (
+        <div className="space-y-2 mb-3">
+          {q.messages.map((m, i) => (
+            <div
+              key={i}
+              className={`flex ${m.senderType === "supervisor" ? "justify-end" : "justify-start"}`}
+            >
+              <div className="max-w-[85%]">
+                <span className={`text-[11px] font-medium text-muted-foreground ${m.senderType === "supervisor" ? "block text-right mr-1" : "ml-1"}`}>
+                  {m.senderType === "supervisor" ? m.senderName : q.teamName}
+                </span>
+                <div className={`rounded-2xl px-3 py-2 text-sm ${
+                  m.senderType === "supervisor"
+                    ? "bg-blue-500 text-white rounded-tr-sm"
+                    : "bg-gray-100 border border-gray-200 rounded-tl-sm"
+                }`}>
+                  <p>{m.message}</p>
+                </div>
+                <span className={`text-[10px] text-muted-foreground ${m.senderType === "supervisor" ? "block text-right mr-1" : "ml-1"}`}>
+                  {new Date(m.createdAt).toLocaleString()}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
         )}
-
-        <div className="text-xs text-muted-foreground mb-2">
-          {new Date(q.createdAt).toLocaleString()}
-        </div>
 
         {q.status === "open" && (
           <>
@@ -172,9 +263,7 @@ export default function SupervisorQueriesPage() {
                   value={responseText}
                   onChange={(e) => setResponseText(e.target.value)}
                   placeholder="Type your response..."
-                  rows={3}
-                  dir="ltr"
-                  className="text-left"
+                  rows={2}
                   autoFocus
                 />
                 <div className="flex gap-2">
@@ -185,7 +274,7 @@ export default function SupervisorQueriesPage() {
                     className="gap-1"
                   >
                     <Send className="h-3 w-3" />
-                    {submitting ? "Sending..." : "Send Response"}
+                    {submitting ? "Sending..." : "Send"}
                   </Button>
                   <Button
                     variant="ghost"
@@ -204,8 +293,13 @@ export default function SupervisorQueriesPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setRespondingTo(q.id)}
+                  className="gap-1"
+                  onClick={() => {
+                    setRespondingTo(q.id);
+                    setResponseText("");
+                  }}
                 >
+                  <Send className="h-3 w-3" />
                   Respond
                 </Button>
                 <Button
@@ -237,6 +331,55 @@ export default function SupervisorQueriesPage() {
     </Card>
   );
 
+  const renderTeamGroup = (teamName: string, teamQueries: QueryItem[]) => {
+    const isCollapsed = collapsedTeams.has(teamName);
+    const members = teamMembers(teamQueries[0]);
+    const openCount = teamQueries.filter((q) => q.status === "open").length;
+    const resolvedCount = teamQueries.filter((q) => q.status === "resolved").length;
+
+    return (
+      <div key={teamName}>
+        <button
+          className="flex items-center gap-2 w-full text-left px-1 py-2 hover:bg-muted/50 rounded-lg transition-colors"
+          onClick={() => toggleTeam(teamName)}
+        >
+          {isCollapsed ? (
+            <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+          )}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <span className="font-semibold text-sm">{teamName}</span>
+            {members && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Users className="h-3 w-3" />
+                {members}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {openCount > 0 && (
+              <span className="text-[11px] font-medium bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">
+                {openCount} open
+              </span>
+            )}
+            {resolvedCount > 0 && (
+              <span className="text-[11px] font-medium bg-green-100 text-green-700 rounded-full px-2 py-0.5">
+                {resolvedCount} resolved
+              </span>
+            )}
+          </div>
+        </button>
+
+        {!isCollapsed && (
+          <div className="space-y-3 ml-6 mt-1 mb-4">
+            {teamQueries.map((q) => renderQueryCard(q))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Queries</h1>
@@ -250,22 +393,26 @@ export default function SupervisorQueriesPage() {
             Resolved ({resolvedQueries.length})
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="open" className="space-y-3 mt-3">
+        <TabsContent value="open" className="mt-3">
           {openQueries.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               No open queries
             </div>
           ) : (
-            openQueries.map((q) => <QueryCard key={q.id} q={q} />)
+            <div className="space-y-1">
+              {groupByTeam(openQueries).map(([team, qs]) => renderTeamGroup(team, qs))}
+            </div>
           )}
         </TabsContent>
-        <TabsContent value="resolved" className="space-y-3 mt-3">
+        <TabsContent value="resolved" className="mt-3">
           {resolvedQueries.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               No resolved queries
             </div>
           ) : (
-            resolvedQueries.map((q) => <QueryCard key={q.id} q={q} />)
+            <div className="space-y-1">
+              {groupByTeam(resolvedQueries).map(([team, qs]) => renderTeamGroup(team, qs))}
+            </div>
           )}
         </TabsContent>
       </Tabs>

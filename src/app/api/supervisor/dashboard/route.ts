@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, counts, teams, queries, breakdowns } from "@/lib/db/schema";
+import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 
@@ -67,6 +67,17 @@ export async function GET(request: NextRequest) {
       and(
         eq(breakdowns.eventId, eventId),
         eq(breakdowns.approvalStatus, "pending")
+      )
+    )
+    .get();
+
+  const openSerialDiscrepancies = db
+    .select({ count: sql<number>`count(*)` })
+    .from(serialDiscrepancies)
+    .where(
+      and(
+        eq(serialDiscrepancies.eventId, eventId),
+        eq(serialDiscrepancies.status, "open")
       )
     )
     .get();
@@ -156,6 +167,7 @@ export async function GET(request: NextRequest) {
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
       openQueries: openQueries?.count || 0,
       pendingBreakdowns: pendingBreakdowns?.count || 0,
+      openSerialDiscrepancies: openSerialDiscrepancies?.count || 0,
     },
     teamProgress,
     recentActivity,

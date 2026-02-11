@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 
 export interface ImportedItem {
+  internalId: string;
   itemCode: string;
   description: string;
   brand: string;
@@ -17,6 +18,13 @@ export interface ImportedItem {
 
 // Column name mapping - maps various NetSuite export column names to our fields
 const COLUMN_MAP: Record<string, keyof ImportedItem> = {
+  // Internal ID (NetSuite)
+  "internal id": "internalId",
+  "internal_id": "internalId",
+  "internalid": "internalId",
+  "netsuite id": "internalId",
+  "netsuite_id": "internalId",
+
   // Item Code
   "item": "itemCode",
   "item code": "itemCode",
@@ -111,6 +119,7 @@ const COLUMN_MAP: Record<string, keyof ImportedItem> = {
   "lot #": "serialNumber",
   "lot": "serialNumber",
   "serial/lot": "serialNumber",
+  "number": "serialNumber",
 };
 
 function normalizeColumnName(col: string): string {
@@ -160,6 +169,7 @@ export function parseExcel(buffer: ArrayBuffer): {
 
   const items: ImportedItem[] = rawData.map((row) => {
     const item: ImportedItem = {
+      internalId: "",
       itemCode: "",
       description: "",
       brand: "",
@@ -183,6 +193,11 @@ export function parseExcel(buffer: ArrayBuffer): {
       } else {
         item[field] = String(val).trim();
       }
+    }
+
+    // Treat NetSuite "- None -" as empty for serial numbers
+    if (item.serialNumber === "- None -") {
+      item.serialNumber = "";
     }
 
     // Calculate total value if not provided

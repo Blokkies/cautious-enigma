@@ -54,6 +54,7 @@ export const items = sqliteTable("items", {
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
+  internalId: text("internal_id"),
   itemCode: text("item_code").notNull(),
   description: text("description"),
   brand: text("brand"),
@@ -225,6 +226,30 @@ export const auditLog = sqliteTable("audit_log", {
     .default(sql`(datetime('now'))`),
 });
 
+// ─── Serial Discrepancies ───────────────────────────────────────────────
+export const serialDiscrepancies = sqliteTable("serial_discrepancies", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventId: integer("event_id")
+    .notNull()
+    .references(() => stocktakeEvents.id),
+  teamId: integer("team_id")
+    .notNull()
+    .references(() => teams.id),
+  itemCode: text("item_code").notNull(),
+  description: text("description"),
+  binNumber: text("bin_number"),
+  unknownSerials: text("unknown_serials").notNull(),
+  status: text("status", { enum: ["open", "resolved"] })
+    .notNull()
+    .default("open"),
+  resolution: text("resolution"),
+  resolvedBy: integer("resolved_by").references(() => supervisors.id),
+  resolvedAt: text("resolved_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+});
+
 // ─── Type exports ───────────────────────────────────────────────────────────
 export type StocktakeEvent = typeof stocktakeEvents.$inferSelect;
 export type NewStocktakeEvent = typeof stocktakeEvents.$inferInsert;
@@ -246,3 +271,5 @@ export type NewAdmin = typeof admins.$inferInsert;
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type VerificationAssignment = typeof verificationAssignments.$inferSelect;
 export type NewVerificationAssignment = typeof verificationAssignments.$inferInsert;
+export type SerialDiscrepancy = typeof serialDiscrepancies.$inferSelect;
+export type NewSerialDiscrepancy = typeof serialDiscrepancies.$inferInsert;

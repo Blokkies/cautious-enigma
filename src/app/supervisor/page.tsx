@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Package,
   Activity,
+  ScanBarcode,
 } from "lucide-react";
 
 interface OverallStats {
@@ -23,6 +24,7 @@ interface OverallStats {
   progressPercent: number;
   openQueries: number;
   pendingBreakdowns: number;
+  openSerialDiscrepancies: number;
 }
 
 interface TeamProgress {
@@ -138,7 +140,7 @@ export default function SupervisorDashboard() {
       </Card>
 
       {/* Alerts Row */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <Card
           className={
             overall.openQueries > 0
@@ -166,6 +168,23 @@ export default function SupervisorDashboard() {
             </div>
             <div className="text-xs text-muted-foreground">
               Pending Breakdowns
+            </div>
+          </CardContent>
+        </Card>
+        <Card
+          className={
+            overall.openSerialDiscrepancies > 0
+              ? "border-purple-300 bg-purple-50"
+              : ""
+          }
+        >
+          <CardContent className="pt-4 text-center">
+            <ScanBarcode className="h-6 w-6 mx-auto mb-1 text-purple-600" />
+            <div className="text-2xl font-bold">
+              {overall.openSerialDiscrepancies}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Serial Discrepancies
             </div>
           </CardContent>
         </Card>

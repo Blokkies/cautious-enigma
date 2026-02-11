@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
         .values(
           batch.map((item) => ({
             eventId: Number(eventId),
+            internalId: item.internalId || null,
             itemCode: item.itemCode,
             description: item.description || null,
             brand: item.brand || null,

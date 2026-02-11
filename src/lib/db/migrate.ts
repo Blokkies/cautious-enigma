@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS supervisors (
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
+  internal_id TEXT,
   item_code TEXT NOT NULL,
   description TEXT,
   brand TEXT,
@@ -152,6 +153,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS serial_discrepancies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
+  team_id INTEGER NOT NULL REFERENCES teams(id),
+  item_code TEXT NOT NULL,
+  description TEXT,
+  bin_number TEXT,
+  unknown_serials TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),
+  resolution TEXT,
+  resolved_by INTEGER REFERENCES supervisors(id),
+  resolved_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_items_event ON items(event_id);
 CREATE INDEX IF NOT EXISTS idx_items_team ON items(team_id);
@@ -173,6 +189,7 @@ const alterStatements = [
   `ALTER TABLE items ADD COLUMN stock_status TEXT`,
   `ALTER TABLE items ADD COLUMN serial_number TEXT`,
   `ALTER TABLE items ADD COLUMN is_serialized INTEGER DEFAULT 0`,
+  `ALTER TABLE items ADD COLUMN internal_id TEXT`,
   `ALTER TABLE counts ADD COLUMN count_type TEXT NOT NULL DEFAULT 'initial'`,
   `ALTER TABLE counts ADD COLUMN verification_id INTEGER`,
 ];
@@ -206,6 +223,9 @@ const postAlterIndexes = [
   `CREATE INDEX IF NOT EXISTS idx_verification_item ON verification_assignments(item_id)`,
   `CREATE INDEX IF NOT EXISTS idx_counts_type ON counts(count_type)`,
   `CREATE INDEX IF NOT EXISTS idx_counts_verification ON counts(verification_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_serial_disc_event ON serial_discrepancies(event_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_serial_disc_status ON serial_discrepancies(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_serial_disc_item_code ON serial_discrepancies(item_code)`,
 ];
 for (const idx of postAlterIndexes) {
   try {

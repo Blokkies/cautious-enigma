@@ -6,17 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import {
   ActiveItemCard,
   QueueItemRow,
+  QueueGroupRow,
   CountedItemRow,
   CountItem,
+  QueueEntry,
+  buildCountingQueue,
 } from "@/components/counting/item-card";
+import { SerializedGroupCard, type SerialGroupResult } from "@/components/counting/serialized-group-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
@@ -90,6 +93,7 @@ export default function CountingPage() {
   type BinTab = "not-started" | "in-progress" | "completed" | "verification";
   const [binTab, setBinTab] = useState<BinTab>("not-started");
   const [completedFilter, setCompletedFilter] = useState<"all" | "variances" | "matched">("all");
+  const [serializedOnly, setSerializedOnly] = useState(false);
 
   // Verification
   const [verificationItems, setVerificationItems] = useState<VerificationItem[]>([]);
@@ -108,6 +112,7 @@ export default function CountingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFlash, setShowFlash] = useState(false);
   const [showBinComplete, setShowBinComplete] = useState(false);
+  const [queueSearch, setQueueSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Resume banner
@@ -173,12 +178,15 @@ export default function CountingPage() {
   const binStats = useMemo(() => {
     const map = new Map<
       string,
-      { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number }
+      { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }
     >();
     for (const item of items) {
       const bin = item.binNumber || "No Bin";
-      const entry = map.get(bin) || { total: 0, pending: 0, counted: 0, matches: 0, variances: 0, supervisorEdited: 0 };
+      const entry = map.get(bin) || { total: 0, pending: 0, counted: 0, matches: 0, variances: 0, supervisorEdited: 0, serialized: 0 };
       entry.total++;
+      if (item.isSerialized === 1 || item.isSerialized === true) {
+        entry.serialized++;
+      }
       if (item.countId === null) {
         entry.pending++;
       } else {
@@ -217,11 +225,17 @@ export default function CountingPage() {
     return filtered;
   }, [items, selectedBin]);
 
-  const currentItem = pendingItems[currentIndex] ?? null;
+  const countingQueue = useMemo(
+    () => buildCountingQueue(pendingItems),
+    [pendingItems]
+  );
 
-  const upcomingItems = useMemo(
-    () => pendingItems.slice(currentIndex + 1),
-    [pendingItems, currentIndex]
+  const currentEntry = countingQueue[currentIndex] ?? null;
+  const currentItem = currentEntry?.type === "single" ? currentEntry.item : null;
+
+  const upcomingEntries = useMemo(
+    () => countingQueue.slice(currentIndex + 1),
+    [countingQueue, currentIndex]
   );
 
   const scopedStats = useMemo(() => {
@@ -275,16 +289,16 @@ export default function CountingPage() {
 
   // ---------- Split bins into not-started / in-progress / completed ----------
   const notStartedBins = useMemo(
-    () => binStats.filter(([, s]) => s.counted === 0),
-    [binStats]
+    () => binStats.filter(([, s]) => s.counted === 0 && (!serializedOnly || s.serialized > 0)),
+    [binStats, serializedOnly]
   );
   const inProgressBins = useMemo(
-    () => binStats.filter(([, s]) => s.counted > 0 && s.pending > 0),
-    [binStats]
+    () => binStats.filter(([, s]) => s.counted > 0 && s.pending > 0 && (!serializedOnly || s.serialized > 0)),
+    [binStats, serializedOnly]
   );
   const completedBins = useMemo(
-    () => binStats.filter(([, s]) => s.pending === 0),
-    [binStats]
+    () => binStats.filter(([, s]) => s.pending === 0 && (!serializedOnly || s.serialized > 0)),
+    [binStats, serializedOnly]
   );
   const filteredCompletedBins = useMemo(() => {
     if (completedFilter === "variances") return completedBins.filter(([, s]) => s.variances > 0);
@@ -344,7 +358,7 @@ export default function CountingPage() {
     );
   }, [items, selectedBin]);
 
-  // ---------- Auto-fill qty when currentItem changes ----------
+  // ---------- Auto-fill qty when currentItem changes (single items only) ----------
   const currentItemId = currentItem?.id;
   useEffect(() => {
     if (pageState !== "counting" || currentItem == null) return;
@@ -355,17 +369,17 @@ export default function CountingPage() {
   useEffect(() => {
     if (pageState !== "counting") return;
     if (showFlash) return; // Wait for flash to finish before detecting completion
-    if (pendingItems.length === 0) {
+    if (countingQueue.length === 0) {
       // Show bin complete banner
       setShowBinComplete(true);
       return;
     }
-    if (currentIndex >= pendingItems.length) {
+    if (currentIndex >= countingQueue.length) {
       setCurrentIndex(0);
     }
-  }, [pendingItems.length, currentIndex, pageState, showFlash]);
+  }, [countingQueue.length, currentIndex, pageState, showFlash]);
 
-  // ---------- Auto-focus + select ----------
+  // ---------- Auto-focus + select (single items only) ----------
   useEffect(() => {
     if (pageState !== "counting" || currentItemId == null) return;
     const timer = setTimeout(() => {
@@ -392,14 +406,19 @@ export default function CountingPage() {
         }
         if (pageState === "counting") {
           e.preventDefault();
-          const onHandStr = String(currentItem?.onHand ?? 0);
-          if (qtyValue !== onHandStr && qtyValue !== "") {
-            // First Esc: reset to on-hand
-            setQtyValue(onHandStr);
-            inputRef.current?.select();
-          } else {
-            // Second Esc (or empty): go back
+          if (currentEntry?.type === "serialized-group") {
+            // Serialized groups: Esc always goes back to bin selection
             goBackToBinSelection();
+          } else {
+            const onHandStr = String(currentItem?.onHand ?? 0);
+            if (qtyValue !== onHandStr && qtyValue !== "") {
+              // First Esc: reset to on-hand
+              setQtyValue(onHandStr);
+              inputRef.current?.select();
+            } else {
+              // Second Esc (or empty): go back
+              goBackToBinSelection();
+            }
           }
           return;
         }
@@ -419,7 +438,7 @@ export default function CountingPage() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [pageState, qtyValue, search, recountItem, currentItem]);
+  }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry]);
 
   // ---------- Core functions ----------
   const handleCount = useCallback(
@@ -523,12 +542,59 @@ export default function CountingPage() {
     setComment("");
   }, []);
 
+  const submitSerializedGroup = useCallback(
+    async (results: SerialGroupResult[], unknownSerials?: string[]) => {
+      if (isSubmitting) return;
+      setIsSubmitting(true);
+      try {
+        await Promise.all(
+          results.map(({ itemId, qty }) =>
+            handleCount(itemId, qty, comment || undefined)
+          )
+        );
+
+        // Send unknown serials as a single discrepancy record to supervisor
+        if (unknownSerials && unknownSerials.length > 0 && currentEntry?.type === "serialized-group") {
+          try {
+            await fetch("/api/team/serial-discrepancies", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                itemCode: currentEntry.itemCode,
+                description: currentEntry.description || null,
+                binNumber: selectedBin === "No Bin" ? null : selectedBin,
+                unknownSerials,
+              }),
+            });
+            toast.info(`${unknownSerials.length} unknown serial(s) sent to supervisor for review`);
+          } catch {
+            toast.error("Failed to send unknown serials to supervisor");
+          }
+        }
+
+        setShowFlash(true);
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [isSubmitting, handleCount, comment, currentEntry, selectedBin]
+  );
+
   const skipItem = useCallback(() => {
-    if (pendingItems.length === 0) return;
-    setCurrentIndex((i) => (i + 1) % pendingItems.length);
+    if (countingQueue.length === 0) return;
+    setCurrentIndex((i) => (i + 1) % countingQueue.length);
     setQtyValue("");
     setComment("");
-  }, [pendingItems.length]);
+    setQueueSearch("");
+  }, [countingQueue.length]);
+
+  const jumpToEntry = useCallback((queueIndex: number) => {
+    if (queueIndex < 0 || queueIndex >= countingQueue.length) return;
+    setCurrentIndex(queueIndex);
+    setQtyValue("");
+    setComment("");
+    setQueueSearch("");
+  }, [countingQueue.length]);
 
   const selectBin = useCallback(
     (bin: string) => {
@@ -539,6 +605,7 @@ export default function CountingPage() {
       setShowFlash(false);
       setShowBinComplete(false);
       setSearch("");
+      setQueueSearch("");
       setRecountItem(null);
       setRecountQty("");
       setRecountComment("");
@@ -751,8 +818,9 @@ export default function CountingPage() {
   }, []);
 
   // ---------- Render helpers ----------
-  function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number }, variant: "not-started" | "in-progress" | "completed") {
+  function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }, variant: "not-started" | "in-progress" | "completed") {
     const isSingleItem = bStats.total === 1;
+    const hasSerialized = bStats.serialized > 0;
 
     if (variant === "in-progress") {
       const percent = bStats.total > 0 ? Math.round((bStats.counted / bStats.total) * 100) : 0;
@@ -762,7 +830,12 @@ export default function CountingPage() {
           className="text-left px-3 py-2.5 rounded-lg border border-blue-200 hover:border-blue-300 hover:shadow-sm transition-all bg-white"
           onClick={() => selectBin(bin)}
         >
-          <div className="font-mono font-bold text-sm truncate">{bin}</div>
+          <div className="flex items-center gap-1">
+            <span className="font-mono font-bold text-sm truncate">{bin}</span>
+            {hasSerialized && (
+              <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
+            )}
+          </div>
           <div className="flex items-center justify-between mt-1">
             {!isSingleItem && (
               <span className="text-[10px] text-muted-foreground">{bStats.pending} left</span>
@@ -790,7 +863,12 @@ export default function CountingPage() {
           onClick={() => selectBin(bin)}
         >
           <div className="flex items-center justify-between">
-            <span className="font-mono font-bold text-sm truncate">{bin}</span>
+            <div className="flex items-center gap-1 min-w-0">
+              <span className="font-mono font-bold text-sm truncate">{bin}</span>
+              {hasSerialized && (
+                <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
+              )}
+            </div>
             {hasVariances ? (
               <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
             ) : (
@@ -821,7 +899,12 @@ export default function CountingPage() {
         className="text-left px-3 py-2.5 rounded-lg border border-border hover:border-primary/30 hover:shadow-sm transition-all bg-white"
         onClick={() => selectBin(bin)}
       >
-        <div className="font-mono font-bold text-sm truncate">{bin}</div>
+        <div className="flex items-center gap-1">
+          <span className="font-mono font-bold text-sm truncate">{bin}</span>
+          {hasSerialized && (
+            <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
+          )}
+        </div>
         {!isSingleItem && (
           <div className="text-[10px] text-muted-foreground mt-1">
             {bStats.total} items
@@ -977,7 +1060,7 @@ export default function CountingPage() {
                 Up Next ({upcomingVerification.length} more)
               </div>
               <Card>
-                <ScrollArea className="max-h-[300px]">
+                <div className="max-h-[300px] overflow-y-auto">
                   <CardContent className="p-0">
                     {upcomingVerification.slice(0, 20).map((vi, i) => (
                       <QueueItemRow
@@ -1005,7 +1088,7 @@ export default function CountingPage() {
                       />
                     ))}
                   </CardContent>
-                </ScrollArea>
+                </div>
               </Card>
             </div>
           )}
@@ -1111,7 +1194,7 @@ export default function CountingPage() {
             <div className="px-4 pt-3 pb-1">
               <h1 className="text-lg font-semibold">Select a Bin</h1>
             </div>
-            <div className="flex gap-2 px-4 pb-3 overflow-x-auto">
+            <div className="flex gap-2 px-4 pb-2 overflow-x-auto">
               {([
                 ...(verificationItems.length > 0
                   ? [{ key: "verification" as BinTab, label: "Verification", count: verificationItems.length }]
@@ -1149,6 +1232,21 @@ export default function CountingPage() {
                 </button>
               ))}
             </div>
+            {binStats.some(([, s]) => s.serialized > 0) && (
+              <div className="px-4 pb-3">
+                <button
+                  onClick={() => setSerializedOnly((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                    serializedOnly
+                      ? "bg-purple-600 text-white"
+                      : "bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                  }`}
+                >
+                  <ScanBarcode className="h-3 w-3" />
+                  Serialized only
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1481,7 +1579,7 @@ export default function CountingPage() {
   }
 
   // ---------- Counting ----------
-  if (!currentItem) {
+  if (!currentEntry) {
     // Shouldn't happen, but fallback
     return (
       <div className="flex items-center justify-center h-64">
@@ -1521,46 +1619,105 @@ export default function CountingPage() {
 
       {/* Main content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Active item */}
+        {/* Active item or serialized group */}
         <div className="max-w-lg mx-auto">
-          <ActiveItemCard
-            item={currentItem}
-            qtyValue={qtyValue}
-            onQtyChange={setQtyValue}
-            onSubmit={submitCount}
-            onSkip={skipItem}
-            comment={comment}
-            onCommentChange={setComment}
-            inputRef={inputRef}
-            isSubmitting={isSubmitting}
-            showSuccessFlash={showFlash}
-            onFlashComplete={handleFlashComplete}
-          />
+          {currentEntry.type === "serialized-group" ? (
+            <SerializedGroupCard
+              entry={currentEntry}
+              onSubmitAll={submitSerializedGroup}
+              onSkip={skipItem}
+              isSubmitting={isSubmitting}
+              showSuccessFlash={showFlash}
+              onFlashComplete={handleFlashComplete}
+              comment={comment}
+              onCommentChange={setComment}
+            />
+          ) : (
+            <ActiveItemCard
+              item={currentEntry.item}
+              qtyValue={qtyValue}
+              onQtyChange={setQtyValue}
+              onSubmit={submitCount}
+              onSkip={skipItem}
+              comment={comment}
+              onCommentChange={setComment}
+              inputRef={inputRef}
+              isSubmitting={isSubmitting}
+              showSuccessFlash={showFlash}
+              onFlashComplete={handleFlashComplete}
+            />
+          )}
         </div>
 
         {/* Queue */}
-        {upcomingItems.length > 0 && (
+        {upcomingEntries.length > 0 && (
           <div className="max-w-lg mx-auto">
-            <div className="text-sm font-medium text-muted-foreground mb-2">
-              Up Next ({upcomingItems.length} more)
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium text-muted-foreground">
+                Up Next ({upcomingEntries.length} more)
+              </div>
             </div>
+            {upcomingEntries.length > 3 && (
+              <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={queueSearch}
+                  onChange={(e) => setQueueSearch(e.target.value)}
+                  placeholder="Search queue by code or description..."
+                  className="pl-9 h-9 text-sm"
+                />
+              </div>
+            )}
             <Card>
-              <ScrollArea className="max-h-[300px]">
+              <div className="max-h-[400px] overflow-y-auto">
                 <CardContent className="p-0">
-                  {upcomingItems.slice(0, 20).map((item, i) => (
-                    <QueueItemRow
-                      key={item.id}
-                      item={item}
-                      position={i + 1}
-                    />
-                  ))}
-                  {upcomingItems.length > 20 && (
-                    <div className="px-3 py-2 text-xs text-muted-foreground text-center">
-                      ...and {upcomingItems.length - 20} more
-                    </div>
-                  )}
+                  {(() => {
+                    const q = queueSearch.toLowerCase().trim();
+                    const filtered = q
+                      ? upcomingEntries.filter((entry) => {
+                          if (entry.type === "serialized-group") {
+                            return (
+                              entry.itemCode.toLowerCase().includes(q) ||
+                              (entry.description?.toLowerCase().includes(q) ?? false)
+                            );
+                          }
+                          return (
+                            entry.item.itemCode.toLowerCase().includes(q) ||
+                            (entry.item.description?.toLowerCase().includes(q) ?? false)
+                          );
+                        })
+                      : upcomingEntries;
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                          No items match &ldquo;{queueSearch}&rdquo;
+                        </div>
+                      );
+                    }
+
+                    return filtered.map((entry) => {
+                      // Find the actual queue index for this entry to enable jumping
+                      const queueIdx = countingQueue.indexOf(entry);
+                      return entry.type === "serialized-group" ? (
+                        <QueueGroupRow
+                          key={`group-${entry.itemCode}`}
+                          entry={entry}
+                          position={queueIdx + 1}
+                          onClick={() => jumpToEntry(queueIdx)}
+                        />
+                      ) : (
+                        <QueueItemRow
+                          key={entry.item.id}
+                          item={entry.item}
+                          position={queueIdx + 1}
+                          onClick={() => jumpToEntry(queueIdx)}
+                        />
+                      );
+                    });
+                  })()}
                 </CardContent>
-              </ScrollArea>
+              </div>
             </Card>
           </div>
         )}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, teams, supervisors, counts, queries, breakdowns, teamAssignments, auditLog } from "@/lib/db/schema";
+import { stocktakeEvents, items, teams, supervisors, counts, queries, breakdowns, teamAssignments, auditLog, verificationAssignments } from "@/lib/db/schema";
 import { eq, and, sql, isNull } from "drizzle-orm";
 
 // GET: Check readiness
@@ -124,6 +124,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Cascade delete all related data in correct order (children first)
+    db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid)).run();
     db.delete(auditLog).where(eq(auditLog.eventId, eid)).run();
     db.delete(breakdowns).where(eq(breakdowns.eventId, eid)).run();
     db.delete(queries).where(eq(queries.eventId, eid)).run();

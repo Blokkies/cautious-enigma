@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Play, CheckCircle2, AlertTriangle, Lock, XCircle, Trash2, ArrowLeft } from "lucide-react";
+import { Play, CheckCircle2, AlertTriangle, Lock, XCircle, Trash2, ArrowLeft, Download } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -326,8 +326,18 @@ export default function ActivatePage() {
               </div>
             )}
 
-            {/* Delete button - available for any status */}
-            <div className="pt-4 border-t">
+            {/* Export + Delete */}
+            <div className="pt-4 border-t space-y-3">
+              <Button
+                variant="outline"
+                className="w-full h-12 gap-2"
+                onClick={() => {
+                  window.open(`/api/admin/export?eventId=${selectedEventId}`, "_blank");
+                }}
+              >
+                <Download className="h-4 w-4" />
+                Download Imported Data (Excel)
+              </Button>
               <Button
                 onClick={handleDelete}
                 variant="outline"

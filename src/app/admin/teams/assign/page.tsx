@@ -110,7 +110,9 @@ export default function AssignPage() {
   // Bin selection (unassigned)
   const [selectedBins, setSelectedBins] = useState<Set<string>>(new Set());
   const [binSearch, setBinSearch] = useState("");
-  const [binSearchMode, setBinSearchMode] = useState<"contains" | "starts" | "exact">("contains");
+  const [binSearchMode, setBinSearchMode] = useState<"contains" | "starts" | "exact" | "range">("contains");
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
   const [assignToTeam, setAssignToTeam] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
 
@@ -198,7 +200,22 @@ export default function AssignPage() {
   // Group unassigned bins by prefix
   const groupedBins = useMemo(() => {
     let filtered = unassignedBins;
-    if (binSearch.trim()) {
+    if (binSearchMode === "range") {
+      if (rangeFrom.trim() || rangeTo.trim()) {
+        const from = rangeFrom.trim().toLowerCase();
+        const to = rangeTo.trim().toLowerCase();
+        filtered = unassignedBins.filter((b) => {
+          const v = b.bin_number.toLowerCase();
+          if (from && to) {
+            return naturalCompare(v, from) >= 0 && naturalCompare(v, to) <= 0;
+          } else if (from) {
+            return naturalCompare(v, from) >= 0;
+          } else {
+            return naturalCompare(v, to) <= 0;
+          }
+        });
+      }
+    } else if (binSearch.trim()) {
       const q = binSearch.toLowerCase();
       filtered = unassignedBins.filter((b) => {
         const v = b.bin_number.toLowerCase();
@@ -235,7 +252,7 @@ export default function AssignPage() {
     }
 
     return groupOrder.map((prefix) => [prefix, groups[prefix]] as [string, BinInfo[]]);
-  }, [unassignedBins, binSearch, binSearchMode, binComparator, binSort]);
+  }, [unassignedBins, binSearch, binSearchMode, binComparator, binSort, rangeFrom, rangeTo]);
 
   const toggleBin = (binNumber: string) => {
     setSelectedBins((prev) => {
@@ -260,23 +277,9 @@ export default function AssignPage() {
   };
 
   const selectAll = () => {
-    let filtered = unassignedBins;
-    if (binSearch.trim()) {
-      const q = binSearch.toLowerCase();
-      filtered = unassignedBins.filter((b) => {
-        const v = b.bin_number.toLowerCase();
-        switch (binSearchMode) {
-          case "starts":
-            return v.startsWith(q);
-          case "exact":
-            return v === q;
-          case "contains":
-          default:
-            return v.includes(q);
-        }
-      });
-    }
-    setSelectedBins(new Set(filtered.map((b) => b.bin_number)));
+    // Use the already-filtered bins from groupedBins
+    const allFiltered = groupedBins.flatMap(([, bins]) => bins);
+    setSelectedBins(new Set(allFiltered.map((b) => b.bin_number)));
   };
 
   const clearSelection = () => {
@@ -879,21 +882,39 @@ export default function AssignPage() {
 
           {/* Search + Sort + Select All */}
           <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder={
-                  binSearchMode === "exact"
-                    ? "Exact bin match..."
-                    : binSearchMode === "starts"
-                      ? "Bin starts with..."
-                      : "Search bins..."
-                }
-                value={binSearch}
-                onChange={(e) => setBinSearch(e.target.value)}
-                className="pl-9"
-              />
-            </div>
+            {binSearchMode === "range" ? (
+              <div className="flex gap-2 flex-1">
+                <Input
+                  placeholder="From (e.g. 200)"
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  className="flex-1"
+                />
+                <span className="flex items-center text-muted-foreground text-sm">to</span>
+                <Input
+                  placeholder="To (e.g. 300)"
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  className="flex-1"
+                />
+              </div>
+            ) : (
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder={
+                    binSearchMode === "exact"
+                      ? "Exact bin match..."
+                      : binSearchMode === "starts"
+                        ? "Bin starts with..."
+                        : "Search bins..."
+                  }
+                  value={binSearch}
+                  onChange={(e) => setBinSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+            )}
             <Select value={binSort} onValueChange={(v) => setBinSort(v as BinSortMode)}>
               <SelectTrigger className="w-40">
                 <ArrowUpDown className="h-3.5 w-3.5 mr-1 shrink-0" />
@@ -923,6 +944,7 @@ export default function AssignPage() {
               { key: "contains" as const, label: "Contains" },
               { key: "starts" as const, label: "Starts with" },
               { key: "exact" as const, label: "Exact" },
+              { key: "range" as const, label: "Range" },
             ]).map((m) => (
               <button
                 key={m.key}

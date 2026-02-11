@@ -12,6 +12,7 @@ import {
   Download,
   LogOut,
   ClipboardCheck,
+  ScanBarcode,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ const navItems = [
   { href: "/supervisor", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/supervisor/variances", icon: AlertTriangle, label: "Variances" },
   { href: "/supervisor/queries", icon: MessageSquare, label: "Queries" },
+  { href: "/supervisor/serial-review", icon: ScanBarcode, label: "Serials" },
   { href: "/supervisor/breakdowns", icon: Package, label: "Breakdowns" },
   { href: "/supervisor/export", icon: Download, label: "Export" },
   { href: "/completed", icon: ClipboardCheck, label: "Summary" },

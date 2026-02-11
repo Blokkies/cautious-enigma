@@ -44,6 +44,104 @@ interface ActiveItemCardProps {
   isVerification?: boolean;
 }
 
+// --- Queue abstraction for serialized grouping ---
+
+export type QueueEntry =
+  | { type: "single"; item: CountItem }
+  | {
+      type: "serialized-group";
+      itemCode: string;
+      description: string | null;
+      brand: string | null;
+      stockStatus: string | null;
+      items: CountItem[];
+    };
+
+export function buildCountingQueue(pendingItems: CountItem[]): QueueEntry[] {
+  const queue: QueueEntry[] = [];
+  const serialGroupMap = new Map<string, CountItem[]>();
+  const serialGroupFirstIndex = new Map<string, number>();
+
+  for (let i = 0; i < pendingItems.length; i++) {
+    const item = pendingItems[i];
+    const isSerialized = item.isSerialized === true || item.isSerialized === 1;
+
+    if (isSerialized) {
+      const key = item.itemCode;
+      if (!serialGroupMap.has(key)) {
+        serialGroupMap.set(key, []);
+        serialGroupFirstIndex.set(key, i);
+      }
+      serialGroupMap.get(key)!.push(item);
+    }
+  }
+
+  const usedSerialCodes = new Set<string>();
+
+  for (let i = 0; i < pendingItems.length; i++) {
+    const item = pendingItems[i];
+    const isSerialized = item.isSerialized === true || item.isSerialized === 1;
+
+    if (isSerialized) {
+      const key = item.itemCode;
+      if (usedSerialCodes.has(key)) continue; // already added as group
+      usedSerialCodes.add(key);
+
+      const groupItems = serialGroupMap.get(key)!;
+      queue.push({
+        type: "serialized-group",
+        itemCode: key,
+        description: groupItems[0].description,
+        brand: groupItems[0].brand,
+        stockStatus: groupItems[0].stockStatus,
+        items: groupItems,
+      });
+    } else {
+      queue.push({ type: "single", item });
+    }
+  }
+
+  return queue;
+}
+
+// --- Queue group row for Up Next display ---
+
+interface QueueGroupRowProps {
+  entry: QueueEntry & { type: "serialized-group" };
+  position: number;
+  onClick?: () => void;
+}
+
+export function QueueGroupRow({ entry, position, onClick }: QueueGroupRowProps) {
+  return (
+    <div
+      className={`px-3 py-2 text-sm border-b last:border-b-0 bg-purple-50/30 ${onClick ? "cursor-pointer hover:bg-purple-100/50 active:bg-purple-100" : ""}`}
+      onClick={onClick}
+    >
+      <div className="flex items-start gap-3">
+        <span className="text-muted-foreground w-6 text-right flex-shrink-0">
+          {position}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono font-medium">
+              {entry.itemCode}
+            </span>
+            <Badge className="text-xs bg-purple-100 text-purple-800 border-purple-300">
+              {entry.items.length} serials
+            </Badge>
+          </div>
+          {entry.description && (
+            <p className="text-muted-foreground text-xs mt-0.5 leading-snug">
+              {entry.description}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function getStockStatusStyle(status: string | null): string {
   if (!status) return "";
   const s = status.toLowerCase();
@@ -144,7 +242,7 @@ export function ActiveItemCard({
           value={qtyValue}
           onChange={(e) => onQtyChange(e.target.value)}
           placeholder="Enter quantity"
-          className="h-16 text-2xl text-center"
+          className="h-20 text-4xl text-center font-semibold"
           disabled={isSubmitting}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -226,11 +324,15 @@ export function ActiveItemCard({
 interface QueueItemRowProps {
   item: CountItem;
   position: number;
+  onClick?: () => void;
 }
 
-export function QueueItemRow({ item, position }: QueueItemRowProps) {
+export function QueueItemRow({ item, position, onClick }: QueueItemRowProps) {
   return (
-    <div className="px-3 py-2 text-sm border-b last:border-b-0">
+    <div
+      className={`px-3 py-2 text-sm border-b last:border-b-0 ${onClick ? "cursor-pointer hover:bg-blue-50/50 active:bg-blue-100/50" : ""}`}
+      onClick={onClick}
+    >
       <div className="flex items-start gap-3">
         <span className="text-muted-foreground w-6 text-right flex-shrink-0">
           {position}

@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, Clock, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users } from "lucide-react";
 import { toast } from "sonner";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 
 interface QueryMessage {
   senderType: "team" | "supervisor";
@@ -46,6 +47,10 @@ export default function SupervisorQueriesPage() {
       return next;
     });
   };
+
+  useEffect(() => {
+    markNotificationSeen("supervisorQueries");
+  }, []);
 
   const loadQueries = useCallback(async () => {
     try {

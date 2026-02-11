@@ -19,6 +19,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 
 interface ExpectedSerial {
   itemId: number;
@@ -47,6 +48,10 @@ export default function SupervisorSerialReviewPage() {
   const [resolvingId, setResolvingId] = useState<number | null>(null);
   const [resolutionText, setResolutionText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    markNotificationSeen("supervisorSerials");
+  }, []);
 
   const loadDiscrepancies = useCallback(async () => {
     try {

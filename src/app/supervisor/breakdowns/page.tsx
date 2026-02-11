@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, XCircle, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users, Package } from "lucide-react";
 import { toast } from "sonner";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 
 interface BreakdownMessage {
   senderType: "team" | "supervisor";
@@ -39,6 +40,10 @@ export default function SupervisorBreakdownsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
   const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    markNotificationSeen("supervisorBreakdowns");
+  }, []);
 
   const loadBreakdowns = useCallback(async () => {
     try {

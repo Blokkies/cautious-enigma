@@ -15,16 +15,26 @@ import {
   ScanBarcode,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useSupervisorNotifications } from "@/hooks/use-notifications";
 
 const navItems = [
-  { href: "/supervisor", icon: LayoutDashboard, label: "Dashboard" },
-  { href: "/supervisor/variances", icon: AlertTriangle, label: "Variances" },
-  { href: "/supervisor/queries", icon: MessageSquare, label: "Queries" },
-  { href: "/supervisor/serial-review", icon: ScanBarcode, label: "Serials" },
-  { href: "/supervisor/breakdowns", icon: Package, label: "Breakdowns" },
-  { href: "/supervisor/export", icon: Download, label: "Export" },
-  { href: "/completed", icon: ClipboardCheck, label: "Summary" },
+  { href: "/supervisor", icon: LayoutDashboard, label: "Dashboard", badgeKey: null },
+  { href: "/supervisor/variances", icon: AlertTriangle, label: "Variances", badgeKey: null },
+  { href: "/supervisor/queries", icon: MessageSquare, label: "Queries", badgeKey: "queries" as const },
+  { href: "/supervisor/serial-review", icon: ScanBarcode, label: "Serials", badgeKey: "serials" as const },
+  { href: "/supervisor/breakdowns", icon: Package, label: "Breakdowns", badgeKey: "breakdowns" as const },
+  { href: "/supervisor/export", icon: Download, label: "Export", badgeKey: null },
+  { href: "/completed", icon: ClipboardCheck, label: "Summary", badgeKey: null },
 ];
+
+function BadgeCount({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="absolute -top-1.5 -right-2.5 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
 
 export default function SupervisorLayout({
   children,
@@ -34,10 +44,19 @@ export default function SupervisorLayout({
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const { counts } = useSupervisorNotifications();
 
   const handleLogout = async () => {
     await logout();
     router.push("/");
+  };
+
+  const getBadgeCount = (badgeKey: string | null): number => {
+    if (!badgeKey) return 0;
+    if (badgeKey in counts) {
+      return counts[badgeKey as keyof typeof counts] ?? 0;
+    }
+    return 0;
   };
 
   return (
@@ -66,8 +85,9 @@ export default function SupervisorLayout({
       {/* Bottom nav for mobile */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t md:hidden">
         <div className="flex items-center justify-around h-16">
-          {navItems.map(({ href, icon: Icon, label }) => {
+          {navItems.map(({ href, icon: Icon, label, badgeKey }) => {
             const isActive = pathname === href;
+            const count = getBadgeCount(badgeKey);
             return (
               <Link
                 key={href}
@@ -79,7 +99,10 @@ export default function SupervisorLayout({
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <Icon className="h-5 w-5" />
+                <span className="relative">
+                  <Icon className="h-5 w-5" />
+                  <BadgeCount count={count} />
+                </span>
                 <span className="text-[10px] font-medium">{label}</span>
               </Link>
             );
@@ -89,8 +112,9 @@ export default function SupervisorLayout({
       {/* Side nav for desktop */}
       <div className="hidden md:flex">
         <aside className="w-48 fixed left-0 top-14 bottom-0 bg-white border-r p-3 space-y-1">
-          {navItems.map(({ href, icon: Icon, label }) => {
+          {navItems.map(({ href, icon: Icon, label, badgeKey }) => {
             const isActive = pathname === href;
+            const count = getBadgeCount(badgeKey);
             return (
               <Link
                 key={href}
@@ -103,7 +127,12 @@ export default function SupervisorLayout({
                 )}
               >
                 <Icon className="h-4 w-4" />
-                {label}
+                <span className="flex-1">{label}</span>
+                {count > 0 && (
+                  <span className="min-w-[20px] h-[20px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1">
+                    {count > 99 ? "99+" : count}
+                  </span>
+                )}
               </Link>
             );
           })}

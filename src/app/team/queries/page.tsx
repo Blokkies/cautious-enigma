@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, MessageSquare, CheckCircle2, Clock, Send, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 
 interface QueryMessage {
   senderType: "team" | "supervisor";
@@ -63,6 +64,10 @@ export default function QueriesPage() {
       return next;
     });
   };
+
+  useEffect(() => {
+    markNotificationSeen("queries");
+  }, []);
 
   const loadQueries = useCallback(async () => {
     try {

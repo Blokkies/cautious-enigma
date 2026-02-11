@@ -22,6 +22,7 @@ import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRig
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "verification-counting";
 
@@ -65,6 +66,10 @@ function naturalCompare(a: string, b: string): number {
 export default function CountingPage() {
   const { user } = useAuth();
   const sessionKey = `stocktake-last-bin-${user?.id ?? "unknown"}`;
+
+  useEffect(() => {
+    markNotificationSeen("verifications");
+  }, []);
 
   // Data
   const [items, setItems] = useState<CountItem[]>([]);

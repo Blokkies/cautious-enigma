@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, Package, Send, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 
 interface BreakdownMessage {
   senderType: "team" | "supervisor";
@@ -61,6 +62,10 @@ export default function BreakdownsPage() {
       return next;
     });
   };
+
+  useEffect(() => {
+    markNotificationSeen("breakdowns");
+  }, []);
 
   const loadBreakdowns = useCallback(async () => {
     try {

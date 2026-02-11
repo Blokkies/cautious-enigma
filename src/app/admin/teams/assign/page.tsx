@@ -125,7 +125,7 @@ export default function AssignPage() {
 
   // Auto-balance
   const [balancing, setBalancing] = useState(false);
-  const [balanceMode, setBalanceMode] = useState<BalanceMode>("equal-items");
+  const [balanceMode, setBalanceMode] = useState<BalanceMode>("equal-bins");
   const [balanceTeams, setBalanceTeams] = useState<Set<number>>(new Set());
 
   // Team bin selection (for bulk removal)
@@ -334,36 +334,43 @@ export default function AssignPage() {
 
     setBalancing(true);
     try {
-      const sorted = [...binsToBalance].sort((a, b) => b.item_count - a.item_count);
+      // Sort bins naturally so physically adjacent bins stay together
+      const sorted = [...binsToBalance].sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
 
+      const teamCount = targetTeams.length;
       let teamTotals: { teamId: number; name: string; total: number; bins: string[] }[];
 
       if (balanceMode === "equal-bins") {
-        // Equal bins: each team gets the same number of bins, considering existing bin count
-        teamTotals = targetTeams.map((t) => ({
+        // Split contiguous bins into equal-sized chunks
+        const binsPerTeam = Math.ceil(sorted.length / teamCount);
+        teamTotals = targetTeams.map((t, i) => ({
           teamId: t.id,
           name: t.name,
-          total: t.bins.length, // existing bin count
-          bins: [],
+          total: t.bins.length,
+          bins: sorted.slice(i * binsPerTeam, (i + 1) * binsPerTeam).map((b) => b.bin_number),
         }));
-
-        for (const bin of sorted) {
-          teamTotals.sort((a, b) => (a.total + a.bins.length) - (b.total + b.bins.length));
-          teamTotals[0].bins.push(bin.bin_number);
-        }
       } else {
-        // Equal items: balance by item count, considering existing item counts
+        // Split contiguous bins into chunks balanced by item count
+        const totalItems = sorted.reduce((s, b) => s + b.item_count, 0);
+        const targetPerTeam = Math.ceil(totalItems / teamCount);
         teamTotals = targetTeams.map((t) => ({
           teamId: t.id,
           name: t.name,
-          total: t.itemCount, // existing item count
-          bins: [],
+          total: t.itemCount,
+          bins: [] as string[],
         }));
 
+        let teamIdx = 0;
+        let currentTotal = 0;
         for (const bin of sorted) {
-          teamTotals.sort((a, b) => a.total - b.total);
-          teamTotals[0].bins.push(bin.bin_number);
-          teamTotals[0].total += bin.item_count;
+          teamTotals[teamIdx].bins.push(bin.bin_number);
+          teamTotals[teamIdx].total += bin.item_count;
+          currentTotal += bin.item_count;
+          // Move to next team if we've hit the target and there are more teams
+          if (currentTotal >= targetPerTeam && teamIdx < teamCount - 1) {
+            teamIdx++;
+            currentTotal = 0;
+          }
         }
       }
 
@@ -758,8 +765,8 @@ export default function AssignPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="equal-items">Equal Items (balance by item count)</SelectItem>
                     <SelectItem value="equal-bins">Equal Bins (balance by bin count)</SelectItem>
+                    <SelectItem value="equal-items">Equal Items (balance by item count)</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button
@@ -773,8 +780,8 @@ export default function AssignPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {balanceMode === "equal-items"
-                  ? "Distributes bins so each selected team ends up with roughly the same total item count (considers existing assignments)."
-                  : "Distributes bins so each selected team ends up with roughly the same number of bins (considers existing assignments)."}
+                  ? "Assigns contiguous ranges of bins (natural sort order) so each team gets roughly the same item count. Adjacent bins stay together."
+                  : "Assigns contiguous ranges of bins (natural sort order) split equally across teams. Adjacent bins stay together."}
               </p>
             </div>
           )}

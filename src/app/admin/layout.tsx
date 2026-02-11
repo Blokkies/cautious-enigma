@@ -6,22 +6,16 @@ import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import {
   Settings,
-  Upload,
-  Users,
-  Map,
-  Play,
   LogOut,
   ClipboardCheck,
+  UserCog,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { href: "/admin/setup", icon: Settings, label: "Setup" },
-  { href: "/admin/import", icon: Upload, label: "Import" },
-  { href: "/admin/teams", icon: Users, label: "Teams" },
-  { href: "/admin/teams/assign", icon: Map, label: "Assign" },
-  { href: "/admin/activate", icon: Play, label: "Activate" },
+  { href: "/admin/setup", icon: Settings, label: "Events" },
   { href: "/completed", icon: ClipboardCheck, label: "Summary" },
+  { href: "/admin/settings", icon: UserCog, label: "Settings" },
 ];
 
 export default function AdminLayout({
@@ -29,7 +23,7 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -42,26 +36,34 @@ export default function AdminLayout({
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
         <div className="flex items-center justify-between px-4 h-14">
-          <div className="font-semibold text-primary">Admin Setup</div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleLogout}
-            className="gap-1"
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
+          <div className="font-semibold text-primary">Stocktake Admin</div>
+          <div className="flex items-center gap-2">
+            {user && (
+              <span className="text-sm text-muted-foreground">{user.name}</span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleLogout}
+              className="gap-1"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-        {/* Step navigation */}
-        <div className="flex border-t overflow-x-auto">
+        <div className="flex border-t">
           {navItems.map(({ href, icon: Icon, label }) => {
-            const isActive = pathname === href;
+            const isActive =
+              href === "/admin/setup"
+                ? pathname.startsWith("/admin") &&
+                  !pathname.startsWith("/admin/settings")
+                : pathname === href || pathname.startsWith(href);
             return (
               <Link
                 key={href}
                 href={href}
                 className={cn(
-                  "flex items-center gap-1.5 px-4 py-2 text-sm whitespace-nowrap border-b-2 transition-colors",
+                  "flex items-center gap-1.5 px-5 py-2.5 text-sm whitespace-nowrap border-b-2 transition-colors",
                   isActive
                     ? "border-primary text-primary font-medium"
                     : "border-transparent text-muted-foreground hover:text-foreground"

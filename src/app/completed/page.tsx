@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -76,10 +77,13 @@ interface EventOption {
 
 export default function CompletedDashboard() {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
+  const urlEventId = searchParams.get("eventId");
+
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [events, setEvents] = useState<EventOption[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const [selectedEventId, setSelectedEventId] = useState<string>(urlEventId || "");
   const isAdmin = user?.type === "admin";
 
   // Load event list for admin

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,8 +20,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Plus, Trash2, Users, Shield, Pencil } from "lucide-react";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 
 interface TeamInfo {
   id: number;
@@ -43,8 +45,11 @@ interface EventOption {
 }
 
 export default function TeamsPage() {
+  const searchParams = useSearchParams();
+  const urlEventId = searchParams.get("eventId");
+
   const [events, setEvents] = useState<EventOption[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const [selectedEventId, setSelectedEventId] = useState<string>(urlEventId || "");
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([]);
   const [supervisorsList, setSupervisorsList] = useState<SupervisorInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,13 +131,15 @@ export default function TeamsPage() {
     if (res.ok) {
       const data = await res.json();
       setEvents(data.events || []);
-      const setupEvent = data.events?.find(
-        (e: EventOption) => e.status === "setup" || e.status === "active"
-      );
-      if (setupEvent) setSelectedEventId(String(setupEvent.id));
+      if (!urlEventId) {
+        const setupEvent = data.events?.find(
+          (e: EventOption) => e.status === "setup" || e.status === "active"
+        );
+        if (setupEvent) setSelectedEventId(String(setupEvent.id));
+      }
     }
     setLoading(false);
-  }, []);
+  }, [urlEventId]);
 
   const loadTeams = useCallback(async () => {
     if (!selectedEventId) return;
@@ -268,8 +275,29 @@ export default function TeamsPage() {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   }
 
+  const selectedEvent = events.find((e) => String(e.id) === selectedEventId);
+
   return (
     <div className="space-y-6">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm">
+        <Link
+          href="/admin/setup"
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Events
+        </Link>
+        {selectedEvent && (
+          <>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-medium">{selectedEvent.name}</span>
+          </>
+        )}
+        <span className="text-muted-foreground">/</span>
+        <span className="text-muted-foreground">Teams</span>
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Teams & Supervisors</h1>
         <Select value={selectedEventId} onValueChange={setSelectedEventId}>

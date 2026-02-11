@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import bcrypt from "bcryptjs";
 import path from "path";
 import fs from "fs";
 
@@ -118,6 +119,14 @@ CREATE TABLE IF NOT EXISTS breakdowns (
   resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS admins (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_by INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id INTEGER REFERENCES stocktake_events(id),
@@ -185,6 +194,15 @@ for (const idx of postAlterIndexes) {
   } catch {
     // ignore
   }
+}
+
+// Seed default admin if admins table is empty
+const adminCount = sqlite.prepare("SELECT COUNT(*) as count FROM admins").get() as { count: number };
+if (adminCount.count === 0) {
+  const defaultPassword = process.env.ADMIN_PASSWORD || "admin2026";
+  const hash = bcrypt.hashSync(defaultPassword, 10);
+  sqlite.prepare("INSERT INTO admins (name, password_hash) VALUES (?, ?)").run("Admin", hash);
+  console.log("Default admin seeded (name: Admin)");
 }
 
 console.log("Database migration completed successfully!");

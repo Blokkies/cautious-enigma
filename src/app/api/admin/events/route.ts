@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, teams, supervisors } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, isNotNull, sql } from "drizzle-orm";
 
 const VALID_STATUSES = ["setup", "active", "completed", "locked"] as const;
 
@@ -12,10 +12,16 @@ export async function GET() {
     .all();
 
   const enriched = events.map((event) => {
-    const itemCount = db
+    const totalItemCount = db
       .select({ count: sql<number>`count(*)` })
       .from(items)
       .where(eq(items.eventId, event.id))
+      .get();
+
+    const assignedItemCount = db
+      .select({ count: sql<number>`count(*)` })
+      .from(items)
+      .where(and(eq(items.eventId, event.id), isNotNull(items.teamId)))
       .get();
 
     const teamCount = db
@@ -32,7 +38,8 @@ export async function GET() {
 
     return {
       ...event,
-      itemCount: itemCount?.count || 0,
+      itemCount: assignedItemCount?.count || 0,
+      totalItemCount: totalItemCount?.count || 0,
       teamCount: teamCount?.count || 0,
       supervisorCount: supervisorCount?.count || 0,
     };

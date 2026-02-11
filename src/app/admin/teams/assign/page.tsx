@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,9 +25,11 @@ import {
   Scale,
   Loader2,
   ArrowUpDown,
+  ArrowLeft,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 
 type BinSortMode = "natural" | "alpha" | "items-desc" | "value-desc";
 type BalanceMode = "equal-bins" | "equal-items";
@@ -94,8 +97,11 @@ interface BinItem {
 }
 
 export default function AssignPage() {
+  const searchParams = useSearchParams();
+  const urlEventId = searchParams.get("eventId");
+
   const [events, setEvents] = useState<EventOption[]>([]);
-  const [eventId, setEventId] = useState<string>("");
+  const [eventId, setEventId] = useState<string>(urlEventId || "");
   const [unassignedBins, setUnassignedBins] = useState<BinInfo[]>([]);
   const [teamDetails, setTeamDetails] = useState<TeamDetail[]>([]);
   const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
@@ -139,11 +145,11 @@ export default function AssignPage() {
         (e: EventOption) => e.status === "setup" || e.status === "active"
       );
       setEvents(allEvents);
-      if (allEvents.length > 0 && !eventId) {
+      if (allEvents.length > 0 && !urlEventId && !eventId) {
         setEventId(String(allEvents[0].id));
       }
     }
-  }, [eventId]);
+  }, [urlEventId, eventId]);
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -537,6 +543,8 @@ export default function AssignPage() {
   const assignedPercent =
     stats.total > 0 ? Math.round((stats.assigned / stats.total) * 100) : 0;
 
+  const selectedEvent = events.find((e) => String(e.id) === eventId);
+
   if (loading) {
     return (
       <div className="text-center py-12 text-muted-foreground">Loading...</div>
@@ -545,6 +553,25 @@ export default function AssignPage() {
 
   return (
     <div className="space-y-6">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm">
+        <Link
+          href="/admin/setup"
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Events
+        </Link>
+        {selectedEvent && (
+          <>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-medium">{selectedEvent.name}</span>
+          </>
+        )}
+        <span className="text-muted-foreground">/</span>
+        <span className="text-muted-foreground">Assign</span>
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Assign Items to Teams</h1>
         {events.length > 1 && (

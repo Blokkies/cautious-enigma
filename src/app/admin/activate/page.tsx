@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +12,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Play, CheckCircle2, AlertTriangle, Lock, XCircle, Trash2 } from "lucide-react";
+import { Play, CheckCircle2, AlertTriangle, Lock, XCircle, Trash2, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 
 interface EventInfo {
   id: number;
@@ -32,8 +34,11 @@ interface ReadinessCheck {
 }
 
 export default function ActivatePage() {
+  const searchParams = useSearchParams();
+  const urlEventId = searchParams.get("eventId");
+
   const [events, setEvents] = useState<EventInfo[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const [selectedEventId, setSelectedEventId] = useState<string>(urlEventId || "");
   const [readiness, setReadiness] = useState<ReadinessCheck | null>(null);
   const [loading, setLoading] = useState(true);
   const [activating, setActivating] = useState(false);
@@ -43,13 +48,15 @@ export default function ActivatePage() {
     if (res.ok) {
       const data = await res.json();
       setEvents(data.events || []);
-      const setupEvent = data.events?.find(
-        (e: EventInfo) => e.status === "setup"
-      );
-      if (setupEvent) setSelectedEventId(String(setupEvent.id));
+      if (!urlEventId) {
+        const setupEvent = data.events?.find(
+          (e: EventInfo) => e.status === "setup"
+        );
+        if (setupEvent) setSelectedEventId(String(setupEvent.id));
+      }
     }
     setLoading(false);
-  }, []);
+  }, [urlEventId]);
 
   const checkReadiness = useCallback(async () => {
     if (!selectedEventId) return;
@@ -183,6 +190,25 @@ export default function ActivatePage() {
 
   return (
     <div className="space-y-6">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm">
+        <Link
+          href="/admin/setup"
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Events
+        </Link>
+        {selectedEvent && (
+          <>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-medium">{selectedEvent.name}</span>
+          </>
+        )}
+        <span className="text-muted-foreground">/</span>
+        <span className="text-muted-foreground">Readiness</span>
+      </div>
+
       <h1 className="text-2xl font-bold">Activate Stocktake</h1>
 
       <Select value={selectedEventId} onValueChange={setSelectedEventId}>

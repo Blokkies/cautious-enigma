@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { queries, items } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, checkEventActive } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -37,6 +37,11 @@ export async function POST(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "team") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const lockError = checkEventActive(user.eventId);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 403 });
   }
 
   try {

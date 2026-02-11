@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +12,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, FileSpreadsheet, CheckCircle2 } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle2, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 
 interface ImportSummary {
   totalItems: number;
@@ -30,8 +32,11 @@ interface EventOption {
 }
 
 export default function ImportPage() {
+  const searchParams = useSearchParams();
+  const urlEventId = searchParams.get("eventId");
+
   const [events, setEvents] = useState<EventOption[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const [selectedEventId, setSelectedEventId] = useState<string>(urlEventId || "");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
@@ -41,17 +46,21 @@ export default function ImportPage() {
     if (res.ok) {
       const data = await res.json();
       setEvents(data.events || []);
-      // Auto-select first setup event
-      const setupEvent = data.events?.find(
-        (e: EventOption) => e.status === "setup"
-      );
-      if (setupEvent) setSelectedEventId(String(setupEvent.id));
+      // Only auto-select if no URL param provided
+      if (!urlEventId) {
+        const setupEvent = data.events?.find(
+          (e: EventOption) => e.status === "setup"
+        );
+        if (setupEvent) setSelectedEventId(String(setupEvent.id));
+      }
     }
-  }, []);
+  }, [urlEventId]);
 
   useEffect(() => {
     loadEvents();
   }, [loadEvents]);
+
+  const selectedEvent = events.find((e) => String(e.id) === selectedEventId);
 
   const handleUpload = async () => {
     if (!file || !selectedEventId) {
@@ -94,7 +103,42 @@ export default function ImportPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Import Data</h1>
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm">
+        <Link
+          href="/admin/setup"
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Events
+        </Link>
+        {selectedEvent && (
+          <>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-medium">{selectedEvent.name}</span>
+          </>
+        )}
+        <span className="text-muted-foreground">/</span>
+        <span className="text-muted-foreground">Import</span>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Import Data</h1>
+        <Select value={selectedEventId} onValueChange={setSelectedEventId}>
+          <SelectTrigger className="w-60">
+            <SelectValue placeholder="Select event..." />
+          </SelectTrigger>
+          <SelectContent>
+            {events
+              .filter((e) => e.status === "setup")
+              .map((e) => (
+                <SelectItem key={e.id} value={String(e.id)}>
+                  {e.name}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <Card>
         <CardHeader>
@@ -104,28 +148,6 @@ export default function ImportPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Event selection */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Select Event</label>
-            <Select
-              value={selectedEventId}
-              onValueChange={setSelectedEventId}
-            >
-              <SelectTrigger className="h-12">
-                <SelectValue placeholder="Choose event..." />
-              </SelectTrigger>
-              <SelectContent>
-                {events
-                  .filter((e) => e.status === "setup")
-                  .map((e) => (
-                    <SelectItem key={e.id} value={String(e.id)}>
-                      {e.name}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          </div>
-
           {/* File input */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Excel File</label>

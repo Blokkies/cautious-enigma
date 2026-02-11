@@ -167,6 +167,17 @@ export const breakdowns = sqliteTable("breakdowns", {
   resolvedAt: text("resolved_at"),
 });
 
+// ─── Admins ─────────────────────────────────────────────────────────────────
+export const admins = sqliteTable("admins", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+  createdBy: integer("created_by"),
+});
+
 // ─── Audit Log ──────────────────────────────────────────────────────────────
 export const auditLog = sqliteTable("audit_log", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -199,4 +210,6 @@ export type Query = typeof queries.$inferSelect;
 export type NewQuery = typeof queries.$inferInsert;
 export type Breakdown = typeof breakdowns.$inferSelect;
 export type NewBreakdown = typeof breakdowns.$inferInsert;
+export type Admin = typeof admins.$inferSelect;
+export type NewAdmin = typeof admins.$inferInsert;
 export type AuditLogEntry = typeof auditLog.$inferSelect;

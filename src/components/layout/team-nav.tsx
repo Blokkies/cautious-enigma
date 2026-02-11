@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, ClipboardCheck, HelpCircle, Package } from "lucide-react";
+import { ClipboardCheck, HelpCircle, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
-  { href: "/team", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/team/count", icon: ClipboardCheck, label: "Count" },
   { href: "/team/queries", icon: HelpCircle, label: "Queries" },
   { href: "/team/breakdowns", icon: Package, label: "Breakdowns" },

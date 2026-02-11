@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,7 +63,6 @@ function naturalCompare(a: string, b: string): number {
 }
 
 export default function CountingPage() {
-  const router = useRouter();
   const { user } = useAuth();
   const sessionKey = `stocktake-last-bin-${user?.id ?? "unknown"}`;
 
@@ -1121,8 +1119,28 @@ export default function CountingPage() {
               {stats.progressPercent}%
             </span>
           </div>
-          <div className="text-sm text-muted-foreground">
-            {stats.counted} of {stats.total} items counted
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-muted-foreground">
+              {stats.counted} of {stats.total} counted
+            </span>
+            {(() => {
+              const matched = items.filter((i) => i.countId !== null && (i.isMatch === true || i.isMatch === 1)).length;
+              const withVariance = items.filter((i) => i.countId !== null && !(i.isMatch === true || i.isMatch === 1)).length;
+              const pending = items.filter((i) => i.countId === null).length;
+              return (
+                <>
+                  <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded-full">
+                    ✓ {matched}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                    ⚠ {withVariance}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full">
+                    ○ {pending}
+                  </span>
+                </>
+              );
+            })()}
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -1422,8 +1440,8 @@ export default function CountingPage() {
           >
             Review Items
           </Button>
-          <Button onClick={() => router.push("/team")}>
-            Back to Dashboard
+          <Button onClick={goBackToBinSelection}>
+            Back to Bins
           </Button>
         </div>
       </div>

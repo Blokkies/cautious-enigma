@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
       })
       .from(verificationAssignments)
       .innerJoin(teams, eq(verificationAssignments.assignedTeamId, teams.id))
-      .where(inArray(verificationAssignments.countId, countIds))
+      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, user.eventId)))
       .all();
 
     // For completed verifications, fetch the verification count records
@@ -96,6 +96,7 @@ export async function GET(request: NextRequest) {
         .from(counts)
         .where(
           and(
+            eq(counts.eventId, user.eventId),
             eq(counts.countType, "verification"),
             inArray(counts.verificationId, verificationIds)
           )
@@ -251,6 +252,7 @@ export async function PATCH(request: NextRequest) {
           .from(counts)
           .where(
             and(
+              eq(counts.eventId, user.eventId),
               eq(counts.verificationId, verificationId),
               eq(counts.countType, "verification")
             )

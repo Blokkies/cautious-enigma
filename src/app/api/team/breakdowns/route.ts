@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
       const sups = db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(inArray(supervisors.id, supervisorIds))
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
         .all();
       for (const s of sups) {
         supervisorNames[s.id] = s.name;

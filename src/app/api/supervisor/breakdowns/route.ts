@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
       const sups = db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(inArray(supervisors.id, supervisorIds))
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
         .all();
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
           approvedBy: user.id,
           resolvedAt: status === "pending" ? null : new Date().toISOString(),
         })
-        .where(eq(breakdowns.id, breakdownId))
+        .where(and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId)))
         .run();
 
       db.insert(auditLog)

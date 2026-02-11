@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
         isMatch: counts.isMatch,
       })
       .from(counts)
-      .where(inArray(counts.id, countIds))
+      .where(and(inArray(counts.id, countIds), eq(counts.eventId, user.eventId)))
       .all();
 
     if (targetCounts.length === 0) {

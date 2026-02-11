@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
       const sups = db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(inArray(supervisors.id, supervisorIds))
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
         .all();
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
 
     db.update(queries)
       .set(updateData)
-      .where(eq(queries.id, queryId))
+      .where(and(eq(queries.id, queryId), eq(queries.eventId, user.eventId)))
       .run();
 
     // Audit log

@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
       const count = db
         .select({ id: counts.id, countedQty: counts.countedQty })
         .from(counts)
-        .where(eq(counts.itemId, item.id))
+        .where(and(eq(counts.itemId, item.id), eq(counts.eventId, user.eventId)))
         .get();
 
       let status: "found" | "not_found" | "uncounted";
@@ -130,12 +130,12 @@ export async function PATCH(request: NextRequest) {
       const oldDisc = db
         .select({ unknownSerials: serialDiscrepancies.unknownSerials })
         .from(serialDiscrepancies)
-        .where(eq(serialDiscrepancies.id, discrepancyId))
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
         .get();
 
       db.update(serialDiscrepancies)
         .set({ unknownSerials: JSON.stringify(unknownSerials) })
-        .where(eq(serialDiscrepancies.id, discrepancyId))
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
         .run();
 
       db.insert(auditLog)
@@ -171,7 +171,7 @@ export async function PATCH(request: NextRequest) {
       const item = db
         .select()
         .from(items)
-        .where(eq(items.id, itemId))
+        .where(and(eq(items.id, itemId), eq(items.eventId, user.eventId)))
         .get();
 
       if (!item) {
@@ -191,7 +191,7 @@ export async function PATCH(request: NextRequest) {
       const existingCount = db
         .select()
         .from(counts)
-        .where(eq(counts.itemId, itemId))
+        .where(and(eq(counts.itemId, itemId), eq(counts.eventId, user.eventId)))
         .get();
 
       if (existingCount) {
@@ -268,7 +268,7 @@ export async function PATCH(request: NextRequest) {
           resolvedBy: null,
           resolvedAt: null,
         })
-        .where(eq(serialDiscrepancies.id, discrepancyId))
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
         .run();
 
       db.insert(auditLog)
@@ -295,7 +295,7 @@ export async function PATCH(request: NextRequest) {
         resolvedBy: user.id,
         resolvedAt: new Date().toISOString(),
       })
-      .where(eq(serialDiscrepancies.id, discrepancyId))
+      .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
       .run();
 
     db.insert(auditLog)

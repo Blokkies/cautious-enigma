@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -13,8 +12,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Plus, Package, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { Plus, Package, CheckCircle2, Clock, XCircle, Send } from "lucide-react";
 import { toast } from "sonner";
+
+interface BreakdownMessage {
+  senderType: "team" | "supervisor";
+  senderName: string;
+  message: string;
+  createdAt: string;
+}
 
 interface BreakdownItem {
   id: number;
@@ -23,8 +29,10 @@ interface BreakdownItem {
   poNumber: string | null;
   reason: string | null;
   approvalStatus: string;
+  messages: BreakdownMessage[];
   createdAt: string;
   itemCode?: string;
+  itemDescription?: string;
 }
 
 export default function BreakdownsPage() {
@@ -39,6 +47,9 @@ export default function BreakdownsPage() {
     reason: "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
 
   const loadBreakdowns = useCallback(async () => {
     try {
@@ -56,6 +67,8 @@ export default function BreakdownsPage() {
 
   useEffect(() => {
     loadBreakdowns();
+    const interval = setInterval(loadBreakdowns, 10000);
+    return () => clearInterval(interval);
   }, [loadBreakdowns]);
 
   const handleSubmit = async () => {
@@ -98,17 +111,46 @@ export default function BreakdownsPage() {
     }
   };
 
-  const statusIcon = {
-    pending: <Clock className="h-3 w-3" />,
-    approved: <CheckCircle2 className="h-3 w-3" />,
-    rejected: <XCircle className="h-3 w-3" />,
+  const handleReply = async (breakdownId: number) => {
+    if (!replyText.trim()) {
+      toast.error("Please enter a message");
+      return;
+    }
+    setSendingReply(true);
+    try {
+      const res = await fetch("/api/team/breakdowns", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ breakdownId, message: replyText }),
+      });
+      if (res.ok) {
+        toast.success("Message sent");
+        setReplyingTo(null);
+        setReplyText("");
+        loadBreakdowns();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Failed to send message");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSendingReply(false);
+    }
   };
 
-  const statusStyle = {
-    pending: "bg-amber-100 text-amber-800",
-    approved: "bg-green-100 text-green-800",
-    rejected: "bg-red-100 text-red-800",
+  const statusConfig = {
+    pending: { label: "Pending", bg: "bg-amber-50/50 border-amber-100", border: "border-l-amber-500", badge: "bg-amber-100 text-amber-700" },
+    approved: { label: "Approved", bg: "bg-green-50/50 border-green-100", border: "border-l-green-500", badge: "bg-green-100 text-green-700" },
+    rejected: { label: "Rejected", bg: "bg-red-50/50 border-red-100", border: "border-l-red-500", badge: "bg-red-100 text-red-700" },
   };
+
+  // Sort: pending first
+  const sortedBreakdowns = [...breakdowns].sort((a, b) => {
+    if (a.approvalStatus === "pending" && b.approvalStatus !== "pending") return -1;
+    if (a.approvalStatus !== "pending" && b.approvalStatus === "pending") return 1;
+    return 0;
+  });
 
   if (loading) {
     return (
@@ -188,7 +230,7 @@ export default function BreakdownsPage() {
         </Dialog>
       </div>
 
-      {breakdowns.length === 0 ? (
+      {sortedBreakdowns.length === 0 ? (
         <div className="text-center text-muted-foreground py-12">
           <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
           <p>No breakdowns</p>
@@ -196,38 +238,122 @@ export default function BreakdownsPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {breakdowns.map((b) => (
-            <Card key={b.id}>
-              <CardContent className="p-3">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="font-semibold">{b.clientName}</div>
-                  <Badge
-                    className={
-                      statusStyle[
-                        b.approvalStatus as keyof typeof statusStyle
-                      ] || ""
-                    }
-                  >
-                    {statusIcon[
-                      b.approvalStatus as keyof typeof statusIcon
-                    ]}{" "}
-                    <span className="ml-1">{b.approvalStatus}</span>
-                  </Badge>
-                </div>
-                <div className="text-sm space-y-1">
-                  <div>Qty: <span className="font-semibold">{b.quantity}</span></div>
-                  {b.itemCode && <div>Item: {b.itemCode}</div>}
-                  {b.poNumber && <div>PO: {b.poNumber}</div>}
-                  {b.reason && (
-                    <div className="text-muted-foreground">{b.reason}</div>
+          {sortedBreakdowns.map((b) => {
+            const cfg = statusConfig[b.approvalStatus as keyof typeof statusConfig] || statusConfig.pending;
+
+            return (
+              <Card key={b.id} className={`overflow-hidden border-l-4 ${cfg.border}`}>
+                {/* Heading */}
+                <div className={`px-3 py-2.5 border-b ${cfg.bg}`}>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded ${cfg.badge}`}>
+                      {cfg.label}
+                    </span>
+                    {b.itemCode && (
+                      <span className="text-xs bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 text-blue-700">
+                        Part: <span className="font-mono font-semibold">{b.itemCode}</span>
+                      </span>
+                    )}
+                    {b.poNumber && (
+                      <span className="text-xs bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5 text-purple-700">
+                        PO: <span className="font-semibold">{b.poNumber}</span>
+                      </span>
+                    )}
+                  </div>
+                  {b.itemDescription && (
+                    <p className="text-xs text-muted-foreground mt-1">{b.itemDescription}</p>
                   )}
+                  <div className="flex items-center gap-3 mt-1.5 text-sm">
+                    <span>Client: <span className="font-semibold">{b.clientName || "—"}</span></span>
+                    <span>Qty: <span className="font-semibold">{b.quantity}</span></span>
+                  </div>
+                  {b.reason && (
+                    <p className="text-sm text-muted-foreground mt-1">{b.reason}</p>
+                  )}
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {new Date(b.createdAt).toLocaleString()}
+                  </p>
                 </div>
-                <div className="text-xs text-muted-foreground mt-2">
-                  {new Date(b.createdAt).toLocaleString()}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+
+                <CardContent className="p-3">
+                  {/* Chat thread */}
+                  {b.messages.length > 0 && (
+                  <div className="space-y-2 mb-2">
+                    {b.messages.map((m, i) => (
+                      <div
+                        key={i}
+                        className={`flex ${m.senderType === "team" ? "justify-end" : "justify-start"}`}
+                      >
+                        <div className="max-w-[85%]">
+                          <span className={`text-[11px] font-medium text-muted-foreground ${m.senderType === "team" ? "block text-right mr-1" : "ml-1"}`}>
+                            {m.senderName}
+                          </span>
+                          <div className={`rounded-2xl px-3 py-2 text-sm ${
+                            m.senderType === "team"
+                              ? "bg-blue-500 text-white rounded-tr-sm"
+                              : "bg-gray-100 border border-gray-200 rounded-tl-sm"
+                          }`}>
+                            <p>{m.message}</p>
+                          </div>
+                          <span className={`text-[10px] text-muted-foreground ${m.senderType === "team" ? "block text-right mr-1" : "ml-1"}`}>
+                            {new Date(m.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  )}
+
+                  {/* Reply */}
+                  {replyingTo === b.id ? (
+                    <div className="space-y-2">
+                      <Textarea
+                        value={replyText}
+                        onChange={(e) => setReplyText(e.target.value)}
+                        placeholder="Type your message..."
+                        rows={2}
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => handleReply(b.id)}
+                          disabled={sendingReply}
+                          size="sm"
+                          className="gap-1"
+                        >
+                          <Send className="h-3 w-3" />
+                          {sendingReply ? "Sending..." : "Send"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setReplyingTo(null);
+                            setReplyText("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1"
+                      onClick={() => {
+                        setReplyingTo(b.id);
+                        setReplyText("");
+                      }}
+                    >
+                      <Send className="h-3 w-3" />
+                      Message
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

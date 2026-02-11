@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { breakdowns, items } from "@/lib/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { breakdowns, items, breakdownMessages, supervisors, auditLog } from "@/lib/db/schema";
+import { eq, and, desc, asc, inArray } from "drizzle-orm";
 import { getApiUser, checkEventActive } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
@@ -19,7 +19,9 @@ export async function GET(request: NextRequest) {
       reason: breakdowns.reason,
       approvalStatus: breakdowns.approvalStatus,
       createdAt: breakdowns.createdAt,
-      itemCode: items.itemCode,
+      itemCode: breakdowns.itemCode,
+      itemCodeResolved: items.itemCode,
+      itemDescription: items.description,
     })
     .from(breakdowns)
     .leftJoin(items, eq(breakdowns.itemId, items.id))
@@ -32,7 +34,59 @@ export async function GET(request: NextRequest) {
     .orderBy(desc(breakdowns.createdAt))
     .all();
 
-  return NextResponse.json({ breakdowns: teamBreakdowns });
+  // Fetch messages
+  const breakdownIds = teamBreakdowns.map((b) => b.id);
+  const messagesMap: Record<number, { senderType: string; senderName: string; message: string; createdAt: string }[]> = {};
+
+  if (breakdownIds.length > 0) {
+    const allMsgs = db
+      .select({
+        breakdownId: breakdownMessages.breakdownId,
+        senderType: breakdownMessages.senderType,
+        senderId: breakdownMessages.senderId,
+        message: breakdownMessages.message,
+        createdAt: breakdownMessages.createdAt,
+      })
+      .from(breakdownMessages)
+      .where(inArray(breakdownMessages.breakdownId, breakdownIds))
+      .orderBy(asc(breakdownMessages.createdAt))
+      .all();
+
+    const supervisorIds = Array.from(new Set(
+      allMsgs.filter((m) => m.senderType === "supervisor").map((m) => m.senderId)
+    ));
+    const supervisorNames: Record<number, string> = {};
+    if (supervisorIds.length > 0) {
+      const sups = db
+        .select({ id: supervisors.id, name: supervisors.name })
+        .from(supervisors)
+        .where(inArray(supervisors.id, supervisorIds))
+        .all();
+      for (const s of sups) {
+        supervisorNames[s.id] = s.name;
+      }
+    }
+
+    for (const m of allMsgs) {
+      if (!messagesMap[m.breakdownId]) messagesMap[m.breakdownId] = [];
+      messagesMap[m.breakdownId].push({
+        senderType: m.senderType,
+        senderName: m.senderType === "supervisor"
+          ? supervisorNames[m.senderId] || "Supervisor"
+          : "You",
+        message: m.message,
+        createdAt: m.createdAt,
+      });
+    }
+  }
+
+  const enriched = teamBreakdowns.map(({ itemCodeResolved, ...b }) => ({
+    ...b,
+    itemCode: b.itemCode || itemCodeResolved || null,
+    messages: messagesMap[b.id] || [],
+  }));
+
+  return NextResponse.json({ breakdowns: enriched });
 }
 
 export async function POST(request: NextRequest) {
@@ -78,6 +132,7 @@ export async function POST(request: NextRequest) {
         eventId: user.eventId,
         teamId: user.id,
         itemId: resolvedItemId,
+        itemCode: itemCode ? String(itemCode) : null,
         clientName,
         quantity,
         poNumber: poNumber || null,
@@ -91,6 +146,71 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("Breakdown creation error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
+// Team sends a message on a breakdown
+export async function PATCH(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "team") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const lockError = checkEventActive(user.eventId);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 403 });
+  }
+
+  try {
+    const { breakdownId, message } = await request.json();
+
+    if (!breakdownId || !message?.trim()) {
+      return NextResponse.json(
+        { error: "breakdownId and message are required" },
+        { status: 400 }
+      );
+    }
+
+    const breakdown = db
+      .select({ id: breakdowns.id, teamId: breakdowns.teamId })
+      .from(breakdowns)
+      .where(
+        and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId))
+      )
+      .get();
+
+    if (!breakdown || breakdown.teamId !== user.id) {
+      return NextResponse.json({ error: "Breakdown not found" }, { status: 404 });
+    }
+
+    db.insert(breakdownMessages)
+      .values({
+        breakdownId,
+        senderType: "team",
+        senderId: user.id,
+        message: message.trim(),
+      })
+      .run();
+
+    db.insert(auditLog)
+      .values({
+        eventId: user.eventId,
+        userId: user.id,
+        userType: "team",
+        action: "breakdown_team_message",
+        tableName: "breakdown_messages",
+        recordId: breakdownId,
+        newValue: JSON.stringify({ message: message.trim() }),
+      })
+      .run();
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Team breakdown message error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

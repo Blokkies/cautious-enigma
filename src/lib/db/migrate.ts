@@ -190,7 +190,18 @@ CREATE TABLE IF NOT EXISTS query_messages (
 CREATE INDEX IF NOT EXISTS idx_queries_event ON queries(event_id);
 CREATE INDEX IF NOT EXISTS idx_queries_team ON queries(team_id);
 CREATE INDEX IF NOT EXISTS idx_query_messages_query ON query_messages(query_id);
+CREATE TABLE IF NOT EXISTS breakdown_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  breakdown_id INTEGER NOT NULL REFERENCES breakdowns(id),
+  sender_type TEXT NOT NULL CHECK(sender_type IN ('team','supervisor')),
+  sender_id INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_breakdowns_event ON breakdowns(event_id);
+CREATE INDEX IF NOT EXISTS idx_breakdowns_team ON breakdowns(team_id);
+CREATE INDEX IF NOT EXISTS idx_breakdown_messages_breakdown ON breakdown_messages(breakdown_id);
 CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_log(event_id);
 `;
 
@@ -204,6 +215,7 @@ const alterStatements = [
   `ALTER TABLE counts ADD COLUMN verification_id INTEGER`,
   `ALTER TABLE queries ADD COLUMN team_reply TEXT`,
   `ALTER TABLE queries ADD COLUMN item_code TEXT`,
+  `ALTER TABLE breakdowns ADD COLUMN item_code TEXT`,
 ];
 
 // Execute all statements

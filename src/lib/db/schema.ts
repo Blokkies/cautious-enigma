@@ -199,6 +199,7 @@ export const breakdowns = sqliteTable("breakdowns", {
     .notNull()
     .references(() => teams.id),
   itemId: integer("item_id").references(() => items.id),
+  itemCode: text("item_code"),
   clientName: text("client_name"),
   quantity: real("quantity").notNull(),
   poNumber: text("po_number"),
@@ -213,6 +214,20 @@ export const breakdowns = sqliteTable("breakdowns", {
     .notNull()
     .default(sql`(datetime('now'))`),
   resolvedAt: text("resolved_at"),
+});
+
+// ─── Breakdown Messages ─────────────────────────────────────────────────────
+export const breakdownMessages = sqliteTable("breakdown_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  breakdownId: integer("breakdown_id")
+    .notNull()
+    .references(() => breakdowns.id),
+  senderType: text("sender_type", { enum: ["team", "supervisor"] }).notNull(),
+  senderId: integer("sender_id").notNull(),
+  message: text("message").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
 });
 
 // ─── Admins ─────────────────────────────────────────────────────────────────

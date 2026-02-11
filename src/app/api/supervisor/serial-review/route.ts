@@ -1,0 +1,321 @@
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { serialDiscrepancies, teams, items, counts, auditLog } from "@/lib/db/schema";
+import { eq, and, desc } from "drizzle-orm";
+import { getApiUser, checkEventActive } from "@/lib/api-auth";
+
+export async function GET(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "supervisor") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const allDiscrepancies = db
+    .select({
+      id: serialDiscrepancies.id,
+      itemCode: serialDiscrepancies.itemCode,
+      description: serialDiscrepancies.description,
+      binNumber: serialDiscrepancies.binNumber,
+      unknownSerials: serialDiscrepancies.unknownSerials,
+      status: serialDiscrepancies.status,
+      resolution: serialDiscrepancies.resolution,
+      resolvedAt: serialDiscrepancies.resolvedAt,
+      createdAt: serialDiscrepancies.createdAt,
+      teamName: teams.name,
+      teamId: serialDiscrepancies.teamId,
+    })
+    .from(serialDiscrepancies)
+    .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
+    .where(eq(serialDiscrepancies.eventId, user.eventId))
+    .orderBy(desc(serialDiscrepancies.createdAt))
+    .all();
+
+  // Enrich each discrepancy with expected serial info
+  const enriched = allDiscrepancies.map((disc) => {
+    // Find expected serialized items matching itemCode + binNumber in this event
+    const expectedItems = db
+      .select({
+        id: items.id,
+        serialNumber: items.serialNumber,
+      })
+      .from(items)
+      .where(
+        and(
+          eq(items.eventId, user.eventId),
+          eq(items.itemCode, disc.itemCode),
+          eq(items.isSerialized, true),
+          ...(disc.binNumber ? [eq(items.binNumber, disc.binNumber)] : [])
+        )
+      )
+      .all();
+
+    // Check count status for each expected serial
+    const expectedSerials = expectedItems.map((item) => {
+      const count = db
+        .select({ id: counts.id, countedQty: counts.countedQty })
+        .from(counts)
+        .where(eq(counts.itemId, item.id))
+        .get();
+
+      let status: "found" | "not_found" | "uncounted";
+      if (!count) {
+        status = "uncounted";
+      } else if (count.countedQty > 0) {
+        status = "found";
+      } else {
+        status = "not_found";
+      }
+
+      return {
+        itemId: item.id,
+        serialNumber: item.serialNumber,
+        status,
+      };
+    });
+
+    return {
+      id: disc.id,
+      itemCode: disc.itemCode,
+      description: disc.description,
+      binNumber: disc.binNumber,
+      unknownSerials: JSON.parse(disc.unknownSerials) as string[],
+      expectedSerials,
+      status: disc.status,
+      resolution: disc.resolution,
+      resolvedAt: disc.resolvedAt,
+      createdAt: disc.createdAt,
+      teamName: disc.teamName,
+      teamId: disc.teamId,
+    };
+  });
+
+  return NextResponse.json({ discrepancies: enriched });
+}
+
+export async function PATCH(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "supervisor") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const lockError = checkEventActive(user.eventId);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 403 });
+  }
+
+  try {
+    const body = await request.json();
+    const { discrepancyId, action } = body;
+
+    if (!discrepancyId) {
+      return NextResponse.json(
+        { error: "discrepancyId is required" },
+        { status: 400 }
+      );
+    }
+
+    // Default to "resolve" for backwards compatibility
+    const effectiveAction = action || "resolve";
+
+    if (effectiveAction === "update-unknowns") {
+      const { unknownSerials } = body as { unknownSerials: string[] };
+      if (!Array.isArray(unknownSerials)) {
+        return NextResponse.json(
+          { error: "unknownSerials must be an array" },
+          { status: 400 }
+        );
+      }
+
+      // Get old value for audit
+      const oldDisc = db
+        .select({ unknownSerials: serialDiscrepancies.unknownSerials })
+        .from(serialDiscrepancies)
+        .where(eq(serialDiscrepancies.id, discrepancyId))
+        .get();
+
+      db.update(serialDiscrepancies)
+        .set({ unknownSerials: JSON.stringify(unknownSerials) })
+        .where(eq(serialDiscrepancies.id, discrepancyId))
+        .run();
+
+      db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "serial_update_unknowns",
+          tableName: "serial_discrepancies",
+          recordId: discrepancyId,
+          oldValue: oldDisc?.unknownSerials ?? null,
+          newValue: JSON.stringify(unknownSerials),
+        })
+        .run();
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (effectiveAction === "override-expected") {
+      const { itemId, newStatus } = body as {
+        itemId: number;
+        newStatus: "found" | "not_found";
+      };
+
+      if (!itemId || !["found", "not_found"].includes(newStatus)) {
+        return NextResponse.json(
+          { error: "itemId and newStatus (found/not_found) are required" },
+          { status: 400 }
+        );
+      }
+
+      // Look up the item to get onHand and avgCost for variance calc
+      const item = db
+        .select()
+        .from(items)
+        .where(eq(items.id, itemId))
+        .get();
+
+      if (!item) {
+        return NextResponse.json(
+          { error: "Item not found" },
+          { status: 404 }
+        );
+      }
+
+      const countedQty = newStatus === "found" ? 1 : 0;
+      const onHand = item.onHand ?? 0;
+      const variance = countedQty - onHand;
+      const varianceValue = variance * (item.avgCost ?? 0);
+      const isMatch = variance === 0;
+
+      // Check if count already exists
+      const existingCount = db
+        .select()
+        .from(counts)
+        .where(eq(counts.itemId, itemId))
+        .get();
+
+      if (existingCount) {
+        const oldCountedQty = existingCount.countedQty;
+        db.update(counts)
+          .set({
+            countedQty,
+            variance,
+            varianceValue,
+            isMatch,
+            countedAt: new Date().toISOString(),
+            comment: `Supervisor override: ${newStatus}`,
+          })
+          .where(eq(counts.id, existingCount.id))
+          .run();
+
+        db.insert(auditLog)
+          .values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "supervisor",
+            action: "serial_override_expected",
+            tableName: "counts",
+            recordId: existingCount.id,
+            oldValue: JSON.stringify({ countedQty: oldCountedQty, serialNumber: item.serialNumber }),
+            newValue: JSON.stringify({ countedQty, newStatus, serialNumber: item.serialNumber }),
+          })
+          .run();
+      } else {
+        // Insert new count using the item's teamId
+        const teamId = item.teamId;
+        if (!teamId) {
+          return NextResponse.json(
+            { error: "Item has no team assignment" },
+            { status: 400 }
+          );
+        }
+
+        const result = db.insert(counts)
+          .values({
+            itemId,
+            teamId,
+            eventId: user.eventId,
+            countedQty,
+            variance,
+            varianceValue,
+            isMatch,
+            comment: `Supervisor override: ${newStatus}`,
+            countedAt: new Date().toISOString(),
+          })
+          .run();
+
+        db.insert(auditLog)
+          .values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "supervisor",
+            action: "serial_override_expected",
+            tableName: "counts",
+            recordId: Number(result.lastInsertRowid),
+            newValue: JSON.stringify({ countedQty, newStatus, serialNumber: item.serialNumber }),
+          })
+          .run();
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (effectiveAction === "reopen") {
+      db.update(serialDiscrepancies)
+        .set({
+          status: "open",
+          resolution: null,
+          resolvedBy: null,
+          resolvedAt: null,
+        })
+        .where(eq(serialDiscrepancies.id, discrepancyId))
+        .run();
+
+      db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "serial_discrepancy_reopened",
+          tableName: "serial_discrepancies",
+          recordId: discrepancyId,
+        })
+        .run();
+
+      return NextResponse.json({ success: true });
+    }
+
+    // Default: resolve
+    const { resolution } = body;
+
+    db.update(serialDiscrepancies)
+      .set({
+        status: "resolved",
+        resolution: resolution || null,
+        resolvedBy: user.id,
+        resolvedAt: new Date().toISOString(),
+      })
+      .where(eq(serialDiscrepancies.id, discrepancyId))
+      .run();
+
+    db.insert(auditLog)
+      .values({
+        eventId: user.eventId,
+        userId: user.id,
+        userType: "supervisor",
+        action: "serial_discrepancy_resolved",
+        tableName: "serial_discrepancies",
+        recordId: discrepancyId,
+        newValue: JSON.stringify({ resolution: resolution || null }),
+      })
+      .run();
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Serial discrepancy action error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}

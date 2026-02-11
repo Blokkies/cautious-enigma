@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { queries, teams, items } from "@/lib/db/schema";
+import { queries, teams, items, auditLog } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { getApiUser, checkEventActive } from "@/lib/api-auth";
 
@@ -67,12 +67,37 @@ export async function POST(request: NextRequest) {
     if (status === "resolved") {
       updateData.status = "resolved";
       updateData.resolvedAt = new Date().toISOString();
+    } else if (status === "open") {
+      updateData.status = "open";
+      updateData.resolvedAt = null;
     }
-    // Otherwise keep it open (status stays unchanged)
 
     db.update(queries)
       .set(updateData)
       .where(eq(queries.id, queryId))
+      .run();
+
+    // Audit log
+    const auditAction =
+      status === "resolved"
+        ? "query_resolved"
+        : status === "open" && !response
+          ? "query_reopened"
+          : "query_responded";
+
+    db.insert(auditLog)
+      .values({
+        eventId: user.eventId,
+        userId: user.id,
+        userType: "supervisor",
+        action: auditAction,
+        tableName: "queries",
+        recordId: queryId,
+        newValue: JSON.stringify({
+          ...(response ? { response } : {}),
+          status: status || "open",
+        }),
+      })
       .run();
 
     return NextResponse.json({ success: true });

@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CheckCircle2, Clock, Send } from "lucide-react";
+import { CheckCircle2, Clock, Send, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 interface QueryItem {
@@ -85,6 +85,22 @@ export default function SupervisorQueriesPage() {
       }
     } catch {
       toast.error("Failed to resolve query");
+    }
+  };
+
+  const handleReopen = async (queryId: number) => {
+    try {
+      const res = await fetch("/api/supervisor/queries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queryId, status: "open" }),
+      });
+      if (res.ok) {
+        toast.success("Query reopened");
+        loadQueries();
+      }
+    } catch {
+      toast.error("Failed to reopen query");
     }
   };
 
@@ -204,6 +220,18 @@ export default function SupervisorQueriesPage() {
               </div>
             )}
           </>
+        )}
+
+        {q.status === "resolved" && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-amber-300 text-amber-700 hover:bg-amber-50"
+            onClick={() => handleReopen(q.id)}
+          >
+            <RotateCcw className="h-3 w-3 mr-1" />
+            Reopen
+          </Button>
         )}
       </CardContent>
     </Card>

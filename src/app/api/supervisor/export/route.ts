@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, counts, teams } from "@/lib/db/schema";
+import { items, counts, teams, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 import { exportToExcel } from "@/lib/excel";
@@ -28,9 +28,11 @@ export async function GET(request: NextRequest) {
     if (latest) eventId = latest.id;
   }
 
-  let data;
+  let data: Record<string, unknown>[];
 
-  if (type === "variances") {
+  if (type === "serials") {
+    data = buildSerialExport(eventId);
+  } else if (type === "variances") {
     data = db
       .select({
         "Item Code": items.itemCode,
@@ -61,7 +63,7 @@ export async function GET(request: NextRequest) {
       .all();
   } else {
     // Full export - all items with count results
-    data = db
+    const itemRows = db
       .select({
         "Item Code": items.itemCode,
         "Description": items.description,
@@ -92,6 +94,50 @@ export async function GET(request: NextRequest) {
       .where(eq(items.eventId, eventId))
       .orderBy(items.binNumber, items.itemCode)
       .all();
+
+    // Append unknown serials from discrepancies
+    const discRows = db
+      .select({
+        itemCode: serialDiscrepancies.itemCode,
+        description: serialDiscrepancies.description,
+        binNumber: serialDiscrepancies.binNumber,
+        unknownSerials: serialDiscrepancies.unknownSerials,
+        teamName: teams.name,
+      })
+      .from(serialDiscrepancies)
+      .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
+      .where(eq(serialDiscrepancies.eventId, eventId))
+      .all();
+
+    const unknownRows: Record<string, unknown>[] = [];
+    for (const disc of discRows) {
+      const serials = JSON.parse(disc.unknownSerials) as string[];
+      for (const serial of serials) {
+        unknownRows.push({
+          "Item Code": disc.itemCode,
+          "Description": disc.description,
+          "Brand": null,
+          "Category": null,
+          "Bin Number": disc.binNumber,
+          "Warehouse": null,
+          "Division": null,
+          "Stock Status": "Unknown Serial",
+          "Serial Number": serial,
+          "On Hand": 0,
+          "Avg Cost": null,
+          "Total Value": null,
+          "Counted Qty": 1,
+          "Variance": 1,
+          "Variance Value": null,
+          "Is Match": false,
+          "Team": disc.teamName,
+          "Comment": "Unknown serial reported during count",
+          "Counted At": null,
+        });
+      }
+    }
+
+    data = [...itemRows, ...unknownRows];
   }
 
   if (format === "csv") {
@@ -118,9 +164,12 @@ export async function GET(request: NextRequest) {
     ];
 
     const csv = csvRows.join("\n");
-    const filename = type === "variances"
-      ? "stocktake_variances.csv"
-      : "stocktake_full_export.csv";
+    const filenames: Record<string, string> = {
+      variances: "stocktake_variances.csv",
+      serials: "stocktake_serials.csv",
+      full: "stocktake_full_export.csv",
+    };
+    const filename = filenames[type] || filenames.full;
 
     return new NextResponse(csv, {
       headers: {
@@ -131,13 +180,14 @@ export async function GET(request: NextRequest) {
   }
 
   // Excel format
-  const buffer = exportToExcel(
-    data as Record<string, unknown>[]
-  );
+  const buffer = exportToExcel(data);
 
-  const filename = type === "variances"
-    ? "stocktake_variances.xlsx"
-    : "stocktake_full_export.xlsx";
+  const filenames: Record<string, string> = {
+    variances: "stocktake_variances.xlsx",
+    serials: "stocktake_serials.xlsx",
+    full: "stocktake_full_export.xlsx",
+  };
+  const filename = filenames[type] || filenames.full;
 
   return new NextResponse(buffer as unknown as BodyInit, {
     headers: {
@@ -146,4 +196,111 @@ export async function GET(request: NextRequest) {
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
+}
+
+function buildSerialExport(eventId: number): Record<string, unknown>[] {
+  // 1. Get all expected serialized items with their counts and teams
+  const expectedRows = db
+    .select({
+      itemCode: items.itemCode,
+      description: items.description,
+      binNumber: items.binNumber,
+      serialNumber: items.serialNumber,
+      onHand: items.onHand,
+      countedQty: counts.countedQty,
+      teamName: teams.name,
+    })
+    .from(items)
+    .leftJoin(counts, eq(counts.itemId, items.id))
+    .leftJoin(teams, eq(items.teamId, teams.id))
+    .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true)))
+    .orderBy(items.itemCode, items.binNumber, items.serialNumber)
+    .all();
+
+  // 2. Get all serial discrepancies for unknown serials
+  const discrepancyRows = db
+    .select({
+      itemCode: serialDiscrepancies.itemCode,
+      description: serialDiscrepancies.description,
+      binNumber: serialDiscrepancies.binNumber,
+      unknownSerials: serialDiscrepancies.unknownSerials,
+      status: serialDiscrepancies.status,
+      resolution: serialDiscrepancies.resolution,
+      teamName: teams.name,
+    })
+    .from(serialDiscrepancies)
+    .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
+    .where(eq(serialDiscrepancies.eventId, eventId))
+    .all();
+
+  const rows: Record<string, unknown>[] = [];
+
+  // Add expected serial rows
+  for (const row of expectedRows) {
+    let status: string;
+    if (row.countedQty === null || row.countedQty === undefined) {
+      status = "Uncounted";
+    } else if (row.countedQty > 0) {
+      status = "Found";
+    } else {
+      status = "Not Found";
+    }
+
+    rows.push({
+      "Item Code": row.itemCode,
+      "Description": row.description,
+      "Bin Number": row.binNumber,
+      "Serial Number": row.serialNumber,
+      "Source": "Expected",
+      "Status": status,
+      "On Hand": row.onHand,
+      "Counted Qty": row.countedQty,
+      "Team": row.teamName,
+      "Discrepancy Status": "—",
+      "Resolution": "",
+    });
+  }
+
+  // Add unknown serial rows from discrepancies
+  for (const disc of discrepancyRows) {
+    const unknowns = JSON.parse(disc.unknownSerials) as string[];
+    const discStatus = disc.status === "resolved" ? "Resolved" : "Open";
+
+    for (const serial of unknowns) {
+      rows.push({
+        "Item Code": disc.itemCode,
+        "Description": disc.description,
+        "Bin Number": disc.binNumber,
+        "Serial Number": serial,
+        "Source": "Unknown",
+        "Status": "Reported",
+        "On Hand": "",
+        "Counted Qty": "",
+        "Team": disc.teamName,
+        "Discrepancy Status": discStatus,
+        "Resolution": disc.resolution || "",
+      });
+    }
+  }
+
+  // Sort: Item Code, Bin, Source (Expected first), Serial Number
+  rows.sort((a, b) => {
+    const codeA = String(a["Item Code"] || "");
+    const codeB = String(b["Item Code"] || "");
+    if (codeA !== codeB) return codeA.localeCompare(codeB);
+
+    const binA = String(a["Bin Number"] || "");
+    const binB = String(b["Bin Number"] || "");
+    if (binA !== binB) return binA.localeCompare(binB);
+
+    const srcA = a["Source"] === "Expected" ? 0 : 1;
+    const srcB = b["Source"] === "Expected" ? 0 : 1;
+    if (srcA !== srcB) return srcA - srcB;
+
+    const snA = String(a["Serial Number"] || "");
+    const snB = String(b["Serial Number"] || "");
+    return snA.localeCompare(snB);
+  });
+
+  return rows;
 }

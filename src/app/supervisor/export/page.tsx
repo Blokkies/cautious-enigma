@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Download, FileSpreadsheet, FileText } from "lucide-react";
+import { Download, FileSpreadsheet, FileText, ScanBarcode } from "lucide-react";
 import { toast } from "sonner";
 
 interface ExportStats {
@@ -166,6 +166,39 @@ export default function ExportPage() {
             </Button>
             <Button
               onClick={() => handleDownload("variances", "csv")}
+              variant="outline"
+              className="gap-2"
+            >
+              <FileText className="h-4 w-4" />
+              Download CSV
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Serial Numbers Export */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ScanBarcode className="h-5 w-5" />
+            Serial Numbers
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            All serialized items with found/not found/unknown status and
+            supervisor adjustments.
+          </p>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => handleDownload("serials", "xlsx")}
+              className="gap-2"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Download Excel (.xlsx)
+            </Button>
+            <Button
+              onClick={() => handleDownload("serials", "csv")}
               variant="outline"
               className="gap-2"
             >

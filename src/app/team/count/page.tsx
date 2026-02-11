@@ -14,9 +14,12 @@ import {
   CountedItemRow,
   CountItem,
 } from "@/components/counting/item-card";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle } from "lucide-react";
+import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
+import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
+import { useAuth } from "@/contexts/auth-context";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing";
 
@@ -40,6 +43,8 @@ function naturalCompare(a: string, b: string): number {
 
 export default function CountingPage() {
   const router = useRouter();
+  const { user } = useAuth();
+  const sessionKey = `stocktake-last-bin-${user?.id ?? "unknown"}`;
 
   // Data
   const [items, setItems] = useState<CountItem[]>([]);
@@ -66,13 +71,20 @@ export default function CountingPage() {
   const [binTab, setBinTab] = useState<BinTab>("not-started");
   const [completedFilter, setCompletedFilter] = useState<"all" | "variances" | "matched">("all");
 
+  // Aisle collapse state
+  const [collapsedAisles, setCollapsedAisles] = useState<Set<string>>(new Set());
+
   // Counting
   const [currentIndex, setCurrentIndex] = useState(0);
   const [qtyValue, setQtyValue] = useState("");
   const [comment, setComment] = useState("");
-  const [showComment, setShowComment] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showFlash, setShowFlash] = useState(false);
+  const [showBinComplete, setShowBinComplete] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Resume banner
+  const [resumeBin, setResumeBin] = useState<{ binName: string; remaining: number } | null>(null);
 
   // ---------- Load items ----------
   const loadItems = useCallback(async () => {
@@ -94,15 +106,50 @@ export default function CountingPage() {
     loadItems();
   }, [loadItems]);
 
+  // ---------- Check for resume bin on bin-selection load ----------
+  useEffect(() => {
+    if (pageState !== "bin-selection" || items.length === 0) return;
+    try {
+      const stored = sessionStorage.getItem(sessionKey);
+      if (!stored) return;
+      const { binName, timestamp } = JSON.parse(stored);
+      const fourHoursMs = 4 * 60 * 60 * 1000;
+      if (Date.now() - timestamp > fourHoursMs) {
+        sessionStorage.removeItem(sessionKey);
+        return;
+      }
+      const pendingInBin = items.filter(
+        (i) => i.countId === null && (binName === "No Bin" ? !i.binNumber : i.binNumber === binName)
+      );
+      if (pendingInBin.length > 0) {
+        setResumeBin({ binName, remaining: pendingInBin.length });
+      } else {
+        sessionStorage.removeItem(sessionKey);
+        setResumeBin(null);
+      }
+    } catch {
+      setResumeBin(null);
+    }
+  }, [pageState, items, sessionKey]);
+
+  // ---------- Auto-focus search on bin-selection ----------
+  useEffect(() => {
+    if (pageState !== "bin-selection") return;
+    const timer = setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [pageState]);
+
   // ---------- Derived state ----------
   const binStats = useMemo(() => {
     const map = new Map<
       string,
-      { total: number; pending: number; counted: number; matches: number; variances: number }
+      { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number }
     >();
     for (const item of items) {
       const bin = item.binNumber || "No Bin";
-      const entry = map.get(bin) || { total: 0, pending: 0, counted: 0, matches: 0, variances: 0 };
+      const entry = map.get(bin) || { total: 0, pending: 0, counted: 0, matches: 0, variances: 0, supervisorEdited: 0 };
       entry.total++;
       if (item.countId === null) {
         entry.pending++;
@@ -113,16 +160,17 @@ export default function CountingPage() {
         } else {
           entry.variances++;
         }
+        if (item.checkStatus === "accepted") {
+          entry.supervisorEdited++;
+        }
       }
       map.set(bin, entry);
     }
-    // Sort: incomplete first (alpha), then complete sorted by variances desc then alpha
     const entries = Array.from(map.entries());
     entries.sort(([a, aStats], [b, bStats]) => {
       const aComplete = aStats.pending === 0 ? 1 : 0;
       const bComplete = bStats.pending === 0 ? 1 : 0;
       if (aComplete !== bComplete) return aComplete - bComplete;
-      // Within completed: bins with variances first (most variances at top)
       if (aComplete === 1 && bComplete === 1) {
         if (aStats.variances !== bStats.variances) return bStats.variances - aStats.variances;
       }
@@ -194,6 +242,11 @@ export default function CountingPage() {
     return completedBins;
   }, [completedBins, completedFilter]);
 
+  // ---------- Aisle-grouped bins ----------
+  const groupedNotStarted = useMemo(() => groupBinsByAisle(notStartedBins as BinEntry[]), [notStartedBins]);
+  const groupedInProgress = useMemo(() => groupBinsByAisle(inProgressBins as BinEntry[]), [inProgressBins]);
+  const groupedCompleted = useMemo(() => groupBinsByAisle(filteredCompletedBins as BinEntry[]), [filteredCompletedBins]);
+
   // Auto-select first tab that has bins
   useEffect(() => {
     if (pageState !== "bin-selection") return;
@@ -215,26 +268,28 @@ export default function CountingPage() {
     );
   }, [items, selectedBin]);
 
+  // ---------- Auto-fill qty when currentItem changes ----------
+  const currentItemId = currentItem?.id;
+  useEffect(() => {
+    if (pageState !== "counting" || currentItem == null) return;
+    setQtyValue(String(currentItem.onHand ?? 0));
+  }, [currentItemId, pageState]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---------- Index clamping + completion detection ----------
   useEffect(() => {
     if (pageState !== "counting") return;
+    if (showFlash) return; // Wait for flash to finish before detecting completion
     if (pendingItems.length === 0) {
-      // All items in this bin are counted — return to bin list
-      setSelectedBin(null);
-      setPageState("bin-selection");
-      setCurrentIndex(0);
-      toast.success(
-        `${selectedBin === "all" ? "All bins" : selectedBin} complete`
-      );
+      // Show bin complete banner
+      setShowBinComplete(true);
       return;
     }
     if (currentIndex >= pendingItems.length) {
       setCurrentIndex(0);
     }
-  }, [pendingItems.length, currentIndex, pageState, selectedBin]);
+  }, [pendingItems.length, currentIndex, pageState, showFlash]);
 
-  // ---------- Auto-focus ----------
-  const currentItemId = currentItem?.id;
+  // ---------- Auto-focus + select ----------
   useEffect(() => {
     if (pageState !== "counting" || currentItemId == null) return;
     const timer = setTimeout(() => {
@@ -261,9 +316,13 @@ export default function CountingPage() {
         }
         if (pageState === "counting") {
           e.preventDefault();
-          if (qtyValue) {
-            setQtyValue("");
+          const onHandStr = String(currentItem?.onHand ?? 0);
+          if (qtyValue !== onHandStr && qtyValue !== "") {
+            // First Esc: reset to on-hand
+            setQtyValue(onHandStr);
+            inputRef.current?.select();
           } else {
+            // Second Esc (or empty): go back
             goBackToBinSelection();
           }
           return;
@@ -284,7 +343,7 @@ export default function CountingPage() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [pageState, qtyValue, search, recountItem]);
+  }, [pageState, qtyValue, search, recountItem, currentItem]);
 
   // ---------- Core functions ----------
   const handleCount = useCallback(
@@ -378,19 +437,21 @@ export default function CountingPage() {
 
     setIsSubmitting(true);
     handleCount(currentItem.id, qty, comment || undefined).finally(() => {
-      setQtyValue("");
-      setComment("");
-      setShowComment(false);
+      setShowFlash(true);
       setIsSubmitting(false);
     });
   }, [currentItem, qtyValue, comment, isSubmitting, handleCount]);
+
+  const handleFlashComplete = useCallback(() => {
+    setShowFlash(false);
+    setComment("");
+  }, []);
 
   const skipItem = useCallback(() => {
     if (pendingItems.length === 0) return;
     setCurrentIndex((i) => (i + 1) % pendingItems.length);
     setQtyValue("");
     setComment("");
-    setShowComment(false);
   }, [pendingItems.length]);
 
   const selectBin = useCallback(
@@ -399,11 +460,17 @@ export default function CountingPage() {
       setCurrentIndex(0);
       setQtyValue("");
       setComment("");
-      setShowComment(false);
+      setShowFlash(false);
+      setShowBinComplete(false);
       setSearch("");
       setRecountItem(null);
       setRecountQty("");
       setRecountComment("");
+
+      // Save to sessionStorage for resume
+      try {
+        sessionStorage.setItem(sessionKey, JSON.stringify({ binName: bin, timestamp: Date.now() }));
+      } catch { /* ignore */ }
 
       // Check if there are pending items in this bin
       let pending: CountItem[];
@@ -427,12 +494,22 @@ export default function CountingPage() {
     setPageState("bin-selection");
     setQtyValue("");
     setComment("");
-    setShowComment(false);
+    setShowFlash(false);
+    setShowBinComplete(false);
     setCurrentIndex(0);
     setRecountItem(null);
     setRecountQty("");
     setRecountComment("");
   }
+
+  const handleBinCompleteFinish = useCallback(() => {
+    setShowFlash(false);
+    setShowBinComplete(false);
+    setSelectedBin(null);
+    setPageState("bin-selection");
+    setCurrentIndex(0);
+    try { sessionStorage.removeItem(sessionKey); } catch { /* ignore */ }
+  }, []);
 
   // ---------- Recount submit ----------
   const submitRecount = useCallback(async () => {
@@ -461,12 +538,153 @@ export default function CountingPage() {
     }
   }, [recountItem]);
 
+  // ---------- Aisle toggle helper ----------
+  const toggleAisle = useCallback((prefix: string) => {
+    setCollapsedAisles((prev) => {
+      const next = new Set(prev);
+      if (next.has(prefix)) {
+        next.delete(prefix);
+      } else {
+        next.add(prefix);
+      }
+      return next;
+    });
+  }, []);
+
+  // ---------- Render helpers ----------
+  function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number }, variant: "not-started" | "in-progress" | "completed") {
+    const isSingleItem = bStats.total === 1;
+
+    if (variant === "in-progress") {
+      const percent = bStats.total > 0 ? Math.round((bStats.counted / bStats.total) * 100) : 0;
+      return (
+        <button
+          key={bin}
+          className="text-left px-3 py-2.5 rounded-lg border border-blue-200 hover:border-blue-300 hover:shadow-sm transition-all bg-white"
+          onClick={() => selectBin(bin)}
+        >
+          <div className="font-mono font-bold text-sm truncate">{bin}</div>
+          <div className="flex items-center justify-between mt-1">
+            {!isSingleItem && (
+              <span className="text-[10px] text-muted-foreground">{bStats.pending} left</span>
+            )}
+            <span className="text-[10px] font-semibold text-blue-600 ml-auto">{percent}%</span>
+          </div>
+          <Progress value={percent} className="h-1 mt-1" />
+          {bStats.supervisorEdited > 0 && (
+            <span className="text-[10px] font-medium text-indigo-700 mt-1 block">
+              Supervisor edited
+            </span>
+          )}
+        </button>
+      );
+    }
+
+    if (variant === "completed") {
+      const hasVariances = bStats.variances > 0;
+      return (
+        <button
+          key={bin}
+          className={`text-left px-3 py-2.5 rounded-lg border hover:shadow-sm transition-all bg-white ${
+            hasVariances ? "border-amber-200 hover:border-amber-300" : "border-green-200 hover:border-green-300"
+          }`}
+          onClick={() => selectBin(bin)}
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-mono font-bold text-sm truncate">{bin}</span>
+            {hasVariances ? (
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
+            ) : (
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+            )}
+          </div>
+          {!isSingleItem && (
+            <div className="text-[10px] text-muted-foreground mt-1">{bStats.total} items</div>
+          )}
+          {hasVariances && (
+            <span className="text-[10px] font-medium text-amber-700 mt-0.5 block">
+              {bStats.variances} variance{bStats.variances !== 1 ? "s" : ""}
+            </span>
+          )}
+          {bStats.supervisorEdited > 0 && (
+            <span className="text-[10px] font-medium text-indigo-700 mt-0.5 block">
+              Supervisor edited
+            </span>
+          )}
+        </button>
+      );
+    }
+
+    // not-started
+    return (
+      <button
+        key={bin}
+        className="text-left px-3 py-2.5 rounded-lg border border-border hover:border-primary/30 hover:shadow-sm transition-all bg-white"
+        onClick={() => selectBin(bin)}
+      >
+        <div className="font-mono font-bold text-sm truncate">{bin}</div>
+        {!isSingleItem && (
+          <div className="text-[10px] text-muted-foreground mt-1">
+            {bStats.total} items
+          </div>
+        )}
+      </button>
+    );
+  }
+
+  function renderAisleGroupedBins(
+    groups: ReturnType<typeof groupBinsByAisle>,
+    variant: "not-started" | "in-progress" | "completed"
+  ) {
+    const hasMultipleGroups = groups.length > 1;
+
+    return groups.map((group) => {
+      const isCollapsed = collapsedAisles.has(`${variant}-${group.prefix}`);
+      const aisleKey = `${variant}-${group.prefix}`;
+      const totalBins = group.bins.length;
+
+      return (
+        <div key={aisleKey}>
+          {hasMultipleGroups && (
+            <button
+              className="flex items-center gap-2 text-sm font-medium text-muted-foreground mb-2 mt-3 first:mt-0 hover:text-foreground transition-colors w-full text-left"
+              onClick={() => toggleAisle(aisleKey)}
+            >
+              {isCollapsed ? (
+                <ChevronRight className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+              {group.prefix}
+              <span className="text-xs text-muted-foreground/70">({totalBins})</span>
+            </button>
+          )}
+          {!isCollapsed && (
+            <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+              {group.bins.map(([bin, bStats]) => renderBinButton(bin, bStats, variant))}
+            </div>
+          )}
+        </div>
+      );
+    });
+  }
+
   // ---------- Loading ----------
   if (pageState === "loading") {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-muted-foreground">Loading items...</div>
       </div>
+    );
+  }
+
+  // ---------- Bin Complete Banner ----------
+  if (showBinComplete) {
+    return (
+      <BinCompleteBanner
+        binName={selectedBin === "all" ? "All Bins" : selectedBin || "Bin"}
+        onComplete={handleBinCompleteFinish}
+      />
     );
   }
 
@@ -488,7 +706,6 @@ export default function CountingPage() {
       <div className="flex flex-col h-[calc(100vh-7.5rem)]">
         {/* Header: progress + search */}
         <div className="p-4 space-y-3 border-b">
-          <h1 className="text-lg font-semibold">Select a Bin</h1>
           <div className="flex items-center gap-3">
             <Progress value={stats.progressPercent} className="h-3 flex-1" />
             <span className="text-sm font-semibold text-primary min-w-[3rem] text-right">
@@ -510,10 +727,36 @@ export default function CountingPage() {
           </div>
         </div>
 
+        {/* Resume banner */}
+        {!search.trim() && resumeBin && (
+          <div className="mx-4 mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
+            <PlayCircle className="h-5 w-5 text-blue-600 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium">Resume counting</div>
+              <div className="text-xs text-muted-foreground">
+                <span className="font-mono font-medium">{resumeBin.binName}</span>
+                {" — "}{resumeBin.remaining} item{resumeBin.remaining !== 1 ? "s" : ""} remaining
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setResumeBin(null);
+                selectBin(resumeBin.binName);
+              }}
+            >
+              Resume
+            </Button>
+          </div>
+        )}
+
         {/* Tabs (hidden during search) */}
         {!search.trim() && (
           <div className="border-b bg-muted/30">
-            <div className="flex">
+            <div className="px-4 pt-3 pb-1">
+              <h1 className="text-lg font-semibold">Select a Bin</h1>
+            </div>
+            <div className="flex gap-2 px-4 pb-3">
               {([
                 { key: "not-started" as BinTab, label: "Not Started", count: notStartedBins.length },
                 { key: "in-progress" as BinTab, label: "In Progress", count: inProgressBins.length },
@@ -522,23 +765,20 @@ export default function CountingPage() {
                 <button
                   key={tab.key}
                   onClick={() => setBinTab(tab.key)}
-                  className={`flex-1 px-3 py-2.5 text-sm font-medium transition-colors relative ${
+                  className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
                     binTab === tab.key
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground/70"
+                      ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                      : "bg-white text-muted-foreground border-border hover:bg-muted/50 hover:text-foreground"
                   }`}
                 >
                   {tab.label}
                   <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
                     binTab === tab.key
-                      ? "bg-primary/10 text-primary"
+                      ? "bg-primary-foreground/20 text-primary-foreground"
                       : "bg-muted text-muted-foreground"
                   }`}>
                     {tab.count}
                   </span>
-                  {binTab === tab.key && (
-                    <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full" />
-                  )}
                 </button>
               ))}
             </div>
@@ -592,81 +832,26 @@ export default function CountingPage() {
             <>
               {/* Not Started tab */}
               {binTab === "not-started" && (
-                <div className="space-y-3">
+                <div className="space-y-1">
                   {notStartedBins.length === 0 ? (
                     <div className="text-sm text-muted-foreground text-center py-12">
                       All bins have been started
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                      {notStartedBins.map(([bin, bStats]) => (
-                        <Card
-                          key={bin}
-                          className="cursor-pointer hover:shadow-md transition-all hover:border-primary/30"
-                          onClick={() => selectBin(bin)}
-                        >
-                          <CardContent className="p-4 space-y-2">
-                            <div className="font-mono font-bold text-sm">
-                              {bin}
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-muted-foreground">
-                                {bStats.total} item{bStats.total !== 1 ? "s" : ""}
-                              </span>
-                              <Badge variant="secondary" className="text-[10px]">
-                                Not started
-                              </Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
+                    renderAisleGroupedBins(groupedNotStarted, "not-started")
                   )}
                 </div>
               )}
 
               {/* In Progress tab */}
               {binTab === "in-progress" && (
-                <div className="space-y-3">
+                <div className="space-y-1">
                   {inProgressBins.length === 0 ? (
                     <div className="text-sm text-muted-foreground text-center py-12">
                       No bins in progress
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                      {inProgressBins.map(([bin, bStats]) => {
-                        const percent =
-                          bStats.total > 0
-                            ? Math.round((bStats.counted / bStats.total) * 100)
-                            : 0;
-                        return (
-                          <Card
-                            key={bin}
-                            className="cursor-pointer hover:shadow-md transition-all border-blue-200 hover:border-blue-300"
-                            onClick={() => selectBin(bin)}
-                          >
-                            <CardContent className="p-4 space-y-2">
-                              <div className="font-mono font-bold text-sm">
-                                {bin}
-                              </div>
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-muted-foreground">
-                                  {bStats.total} item{bStats.total !== 1 ? "s" : ""}
-                                </span>
-                                <span className="font-semibold text-blue-600">
-                                  {percent}%
-                                </span>
-                              </div>
-                              <Progress value={percent} className="h-1.5" />
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <span>{bStats.counted} counted</span>
-                                <span>{bStats.pending} remaining</span>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
-                    </div>
+                    renderAisleGroupedBins(groupedInProgress, "in-progress")
                   )}
                 </div>
               )}
@@ -706,54 +891,7 @@ export default function CountingPage() {
                           No bins match this filter
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                          {filteredCompletedBins.map(([bin, bStats]) => {
-                            const hasVariances = bStats.variances > 0;
-                            return (
-                              <Card
-                                key={bin}
-                                className={`cursor-pointer hover:shadow-md transition-all ${
-                                  hasVariances
-                                    ? "border-amber-200 hover:border-amber-300"
-                                    : "border-green-200 hover:border-green-300"
-                                }`}
-                                onClick={() => selectBin(bin)}
-                              >
-                                <CardContent className="p-4 space-y-2">
-                                  <div className="flex items-center justify-between">
-                                    <div className="font-mono font-bold text-sm">
-                                      {bin}
-                                    </div>
-                                    {hasVariances ? (
-                                      <AlertTriangle className="h-4 w-4 text-amber-500" />
-                                    ) : (
-                                      <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                    )}
-                                  </div>
-                                  <div className="text-xs text-muted-foreground">
-                                    {bStats.total} item{bStats.total !== 1 ? "s" : ""}
-                                  </div>
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    {hasVariances ? (
-                                      <>
-                                        <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
-                                          {bStats.variances} variance{bStats.variances !== 1 ? "s" : ""}
-                                        </span>
-                                        <span className="text-xs text-green-600">
-                                          {bStats.matches} matched
-                                        </span>
-                                      </>
-                                    ) : (
-                                      <span className="text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded">
-                                        All matched
-                                      </span>
-                                    )}
-                                  </div>
-                                </CardContent>
-                              </Card>
-                            );
-                          })}
-                        </div>
+                        renderAisleGroupedBins(groupedCompleted, "completed")
                       )}
                     </>
                   )}
@@ -997,10 +1135,10 @@ export default function CountingPage() {
             onSkip={skipItem}
             comment={comment}
             onCommentChange={setComment}
-            showComment={showComment}
-            onToggleComment={() => setShowComment((v) => !v)}
             inputRef={inputRef}
             isSubmitting={isSubmitting}
+            showSuccessFlash={showFlash}
+            onFlashComplete={handleFlashComplete}
           />
         </div>
 

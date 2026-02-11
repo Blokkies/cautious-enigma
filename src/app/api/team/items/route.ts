@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
       variance: counts.variance,
       isMatch: counts.isMatch,
       comment: counts.comment,
+      checkStatus: counts.checkStatus,
       countedAt: counts.countedAt,
     })
     .from(items)

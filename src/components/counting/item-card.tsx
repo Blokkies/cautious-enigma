@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageSquare, RotateCcw } from "lucide-react";
+import { SuccessFlash } from "./success-flash";
 
 export interface CountItem {
   id: number;
@@ -24,6 +25,7 @@ export interface CountItem {
   variance: number | null;
   isMatch: boolean | number | null;
   comment: string | null;
+  checkStatus: string | null;
   countedAt: string | null;
 }
 
@@ -35,10 +37,10 @@ interface ActiveItemCardProps {
   onSkip: () => void;
   comment: string;
   onCommentChange: (value: string) => void;
-  showComment: boolean;
-  onToggleComment: () => void;
   inputRef: React.RefObject<HTMLInputElement>;
   isSubmitting: boolean;
+  showSuccessFlash?: boolean;
+  onFlashComplete?: () => void;
 }
 
 export function getStockStatusStyle(status: string | null): string {
@@ -65,15 +67,21 @@ export function ActiveItemCard({
   onSkip,
   comment,
   onCommentChange,
-  showComment,
-  onToggleComment,
   inputRef,
   isSubmitting,
+  showSuccessFlash,
+  onFlashComplete,
 }: ActiveItemCardProps) {
   const isSerialized = item.isSerialized === true || item.isSerialized === 1;
+  const [localShowComment, setLocalShowComment] = useState(false);
+
+  const isMatchValue = qtyValue === String(item.onHand ?? 0);
 
   return (
-    <Card className="border-2 border-primary/30">
+    <Card className="border-2 border-primary/30 relative">
+      {showSuccessFlash && onFlashComplete && (
+        <SuccessFlash onComplete={onFlashComplete} />
+      )}
       <CardContent className="p-4 space-y-4">
         {/* Item Code — prominent */}
         <div className="space-y-1">
@@ -89,13 +97,8 @@ export function ActiveItemCard({
           )}
         </div>
 
-        {/* Metadata row */}
+        {/* Metadata row — no bin badge (already in sticky header) */}
         <div className="flex flex-wrap items-center gap-1.5">
-          {item.binNumber && (
-            <Badge variant="outline" className="text-xs font-mono bg-blue-50 text-blue-700 border-blue-200">
-              {item.binNumber}
-            </Badge>
-          )}
           {item.brand && (
             <Badge variant="secondary" className="text-xs">
               {item.brand}
@@ -121,64 +124,83 @@ export function ActiveItemCard({
         {/* On-hand quantity */}
         <div className="text-center py-2 bg-muted/30 rounded-lg">
           <div className="text-xs font-medium text-muted-foreground mb-1">On Hand</div>
-          <div className="text-4xl font-bold">{item.onHand ?? 0}</div>
+          <div className="text-3xl font-bold">{item.onHand ?? 0}</div>
         </div>
 
-        {/* Quantity input + Submit */}
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            type="number"
-            inputMode="decimal"
-            value={qtyValue}
-            onChange={(e) => onQtyChange(e.target.value)}
-            placeholder="Enter quantity"
-            className="h-14 text-xl text-center flex-1"
-            disabled={isSubmitting}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                onSubmit();
-              } else if (e.key === "Tab") {
-                e.preventDefault();
-                onSkip();
-              }
-            }}
-          />
+        {/* Quantity input */}
+        <Input
+          ref={inputRef}
+          type="number"
+          inputMode="decimal"
+          value={qtyValue}
+          onChange={(e) => onQtyChange(e.target.value)}
+          placeholder="Enter quantity"
+          className="h-16 text-2xl text-center"
+          disabled={isSubmitting}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+        />
+
+        {/* MATCH / Submit Variance button */}
+        {isMatchValue ? (
           <Button
             onClick={onSubmit}
-            className="h-14 px-6 text-base"
+            className="w-full h-14 text-lg font-bold bg-green-600 hover:bg-green-700 text-white"
+            disabled={isSubmitting}
+          >
+            MATCH
+          </Button>
+        ) : (
+          <Button
+            onClick={onSubmit}
+            className="w-full h-14 text-lg font-bold bg-amber-500 hover:bg-amber-600 text-white"
             disabled={!qtyValue || isSubmitting}
           >
-            Submit
+            Submit Variance
           </Button>
-        </div>
+        )}
 
         {/* Keyboard hints */}
         <div className="text-xs text-muted-foreground text-center">
-          Enter to submit · Tab to skip · Esc to go back
+          Enter = submit · Esc = go back
         </div>
 
-        {/* Comment section — always visible area */}
-        <div className="border rounded-lg p-3 bg-muted/20 space-y-2">
+        {/* Skip button — de-emphasized */}
+        <div className="flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-muted-foreground"
+            onClick={onSkip}
+          >
+            Skip this item
+          </Button>
+
+          {/* Add note link */}
           <button
             type="button"
-            onClick={onToggleComment}
-            className="flex items-center gap-2 text-sm font-medium text-foreground w-full text-left"
+            onClick={() => setLocalShowComment((v) => !v)}
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
           >
-            <MessageSquare className="h-4 w-4 text-muted-foreground" />
-            {showComment ? "Comment" : "Add Comment"}
+            <MessageSquare className="h-3 w-3" />
+            {localShowComment ? "Hide note" : "Add note"}
           </button>
-          {showComment && (
-            <Textarea
-              value={comment}
-              onChange={(e) => onCommentChange(e.target.value)}
-              placeholder="Add a comment about this item..."
-              className="text-sm bg-white"
-              rows={2}
-            />
-          )}
         </div>
+
+        {/* Comment textarea — collapsed by default */}
+        {localShowComment && (
+          <Textarea
+            value={comment}
+            onChange={(e) => onCommentChange(e.target.value)}
+            placeholder="Add a note about this item..."
+            className="text-sm"
+            rows={2}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -242,17 +264,24 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
         )}
         <div className="flex-1" />
         {isCounted ? (
-          <Badge
-            className={`text-xs ${
-              isMatch
-                ? "bg-green-100 text-green-800 border-green-300"
-                : Math.abs(variance) > 5
-                  ? "bg-red-100 text-red-800 border-red-300"
-                  : "bg-amber-100 text-amber-800 border-amber-300"
-            }`}
-          >
-            {isMatch ? "Match" : `${variance > 0 ? "+" : ""}${variance}`}
-          </Badge>
+          <>
+            <Badge
+              className={`text-xs ${
+                isMatch
+                  ? "bg-green-100 text-green-800 border-green-300"
+                  : Math.abs(variance) > 5
+                    ? "bg-red-100 text-red-800 border-red-300"
+                    : "bg-amber-100 text-amber-800 border-amber-300"
+              }`}
+            >
+              {isMatch ? "Match" : `${variance > 0 ? "+" : ""}${variance}`}
+            </Badge>
+            {item.checkStatus === "accepted" && (
+              <Badge className="text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
+                Supervisor Edited
+              </Badge>
+            )}
+          </>
         ) : (
           <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">
             Pending

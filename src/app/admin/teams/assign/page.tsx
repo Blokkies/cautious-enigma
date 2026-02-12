@@ -842,12 +842,12 @@ export default function AssignPage() {
       {/* Unassigned Bins */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center justify-between">
-            <span>
+          <CardTitle className="text-lg flex items-center gap-3">
+            <span className="shrink-0">
               Unassigned Bins ({unassignedBins.length})
             </span>
             {selectedBins.size > 0 && (
-              <Badge className="bg-blue-100 text-blue-800">
+              <Badge className="bg-blue-100 text-blue-800 shrink-0">
                 {selectedBins.size} bins selected ({selectedItemCount} items)
               </Badge>
             )}

@@ -40,7 +40,12 @@ export async function GET(request: NextRequest) {
 
   unassignedBinsQuery = sql`${unassignedBinsQuery} GROUP BY bin_number ORDER BY bin_number`;
 
-  const unassignedBins = await db.execute(unassignedBinsQuery) as { bin_number: string; item_count: number; total_value: number }[];
+  const unassignedBinsRaw = await db.execute(unassignedBinsQuery) as { bin_number: string; item_count: string | number; total_value: string | number }[];
+  const unassignedBins = unassignedBinsRaw.map(b => ({
+    bin_number: b.bin_number,
+    item_count: Number(b.item_count),
+    total_value: Number(b.total_value),
+  }));
 
   // Filter options - cross-filtered from unassigned items
   let warehouseFilterQuery = sql`SELECT DISTINCT warehouse FROM items WHERE event_id = ${eid} AND team_id IS NULL AND warehouse IS NOT NULL AND warehouse != ''`;
@@ -111,7 +116,12 @@ export async function GET(request: NextRequest) {
 
       teamBinsQuery = sql`${teamBinsQuery} GROUP BY bin_number ORDER BY bin_number`;
 
-      const teamBins = await db.execute(teamBinsQuery) as { bin_number: string; item_count: number; total_value: number }[];
+      const teamBinsRaw = await db.execute(teamBinsQuery) as { bin_number: string; item_count: string | number; total_value: string | number }[];
+      const teamBins = teamBinsRaw.map(b => ({
+        bin_number: b.bin_number,
+        item_count: Number(b.item_count),
+        total_value: Number(b.total_value),
+      }));
 
       const totalCount = teamBins.reduce((s, b) => s + b.item_count, 0);
       const totalValue = teamBins.reduce((s, b) => s + b.total_value, 0);

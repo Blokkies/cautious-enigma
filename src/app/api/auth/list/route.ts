@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
 
   // List accessible events (active or setup)
   if (type === "events") {
-    const eventList = db
+    const eventList = await db
       .select()
       .from(stocktakeEvents)
       .where(
@@ -17,31 +17,30 @@ export async function GET(request: NextRequest) {
           eq(stocktakeEvents.status, "active"),
           eq(stocktakeEvents.status, "setup")
         )
-      )
-      .all();
+      );
 
-    const enriched = eventList.map((event) => {
-      const teamCount = db
-        .select({ count: sql<number>`count(*)` })
-        .from(teams)
-        .where(eq(teams.eventId, event.id))
-        .get();
+    const enriched = await Promise.all(
+      eventList.map(async (event) => {
+        const [teamCount] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(teams)
+          .where(eq(teams.eventId, event.id));
 
-      const supervisorCount = db
-        .select({ count: sql<number>`count(*)` })
-        .from(supervisors)
-        .where(eq(supervisors.eventId, event.id))
-        .get();
+        const [supervisorCount] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(supervisors)
+          .where(eq(supervisors.eventId, event.id));
 
-      return {
-        id: event.id,
-        name: event.name,
-        location: event.location,
-        status: event.status,
-        teamCount: teamCount?.count || 0,
-        supervisorCount: supervisorCount?.count || 0,
-      };
-    });
+        return {
+          id: event.id,
+          name: event.name,
+          location: event.location,
+          status: event.status,
+          teamCount: teamCount?.count || 0,
+          supervisorCount: supervisorCount?.count || 0,
+        };
+      })
+    );
 
     return NextResponse.json({ events: enriched });
   }
@@ -51,17 +50,19 @@ export async function GET(request: NextRequest) {
   if (eventIdParam) {
     resolvedEventId = Number(eventIdParam);
   } else {
-    const activeEvent = db
+    const [activeEvent] = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.status, "active"))
-      .get();
+      .where(eq(stocktakeEvents.status, "active"));
 
-    const fallbackEvent = activeEvent || db
-      .select()
-      .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.status, "setup"))
-      .get();
+    let fallbackEvent = activeEvent;
+    if (!fallbackEvent) {
+      const [setupEvent] = await db
+        .select()
+        .from(stocktakeEvents)
+        .where(eq(stocktakeEvents.status, "setup"));
+      fallbackEvent = setupEvent;
+    }
 
     resolvedEventId = fallbackEvent?.id ?? null;
   }
@@ -71,20 +72,18 @@ export async function GET(request: NextRequest) {
   }
 
   if (type === "team") {
-    const teamList = db
+    const teamList = await db
       .select({ id: teams.id, name: teams.name })
       .from(teams)
-      .where(eq(teams.eventId, resolvedEventId))
-      .all();
+      .where(eq(teams.eventId, resolvedEventId));
     return NextResponse.json({ items: teamList });
   }
 
   if (type === "supervisor") {
-    const supervisorList = db
+    const supervisorList = await db
       .select({ id: supervisors.id, name: supervisors.name })
       .from(supervisors)
-      .where(eq(supervisors.eventId, resolvedEventId))
-      .all();
+      .where(eq(supervisors.eventId, resolvedEventId));
     return NextResponse.json({ items: supervisorList });
   }
 

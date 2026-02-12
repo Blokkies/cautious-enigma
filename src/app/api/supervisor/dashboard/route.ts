@@ -14,71 +14,62 @@ export async function GET(request: NextRequest) {
 
   // Admin has eventId=0, find the latest event
   if (!eventId || eventId === 0) {
-    const latest = db
+    const [latest] = await db
       .select()
       .from(stocktakeEvents)
       .orderBy(sql`id DESC`)
-      .limit(1)
-      .get();
+      .limit(1);
     if (latest) eventId = latest.id;
   }
 
   // Overall stats (only assigned items count toward completion)
-  const totalItems = db
+  const [totalItems] = await db
     .select({ count: sql<number>`count(*)` })
     .from(items)
-    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)))
-    .get();
+    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)));
 
-  const totalCounted = db
+  const [totalCounted] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(eq(counts.eventId, eventId))
-    .get();
+    .where(eq(counts.eventId, eventId));
 
-  const totalMatched = db
+  const [totalMatched] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, true)))
-    .get();
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, true)));
 
-  const totalVariance = db
+  const [totalVariance] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)))
-    .get();
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)));
 
-  const varianceValue = db
+  const [varianceValue] = await db
     .select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)))
-    .get();
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)));
 
-  const overStats = db
+  const [overStats] = await db
     .select({
       count: sql<number>`count(*)`,
       total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`))
-    .get();
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`));
 
-  const underStats = db
+  const [underStats] = await db
     .select({
       count: sql<number>`count(*)`,
       total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`))
-    .get();
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`));
 
-  const openQueries = db
+  const [openQueries] = await db
     .select({ count: sql<number>`count(*)` })
     .from(queries)
-    .where(and(eq(queries.eventId, eventId), eq(queries.status, "open")))
-    .get();
+    .where(and(eq(queries.eventId, eventId), eq(queries.status, "open")));
 
-  const pendingBreakdowns = db
+  const [pendingBreakdowns] = await db
     .select({ count: sql<number>`count(*)` })
     .from(breakdowns)
     .where(
@@ -86,10 +77,9 @@ export async function GET(request: NextRequest) {
         eq(breakdowns.eventId, eventId),
         eq(breakdowns.approvalStatus, "pending")
       )
-    )
-    .get();
+    );
 
-  const openSerialDiscrepancies = db
+  const [openSerialDiscrepancies] = await db
     .select({ count: sql<number>`count(*)` })
     .from(serialDiscrepancies)
     .where(
@@ -97,26 +87,23 @@ export async function GET(request: NextRequest) {
         eq(serialDiscrepancies.eventId, eventId),
         eq(serialDiscrepancies.status, "open")
       )
-    )
-    .get();
+    );
 
   // Per-team stats
-  const teamList = db.select().from(teams).where(eq(teams.eventId, eventId)).all();
+  const teamList = await db.select().from(teams).where(eq(teams.eventId, eventId));
 
-  const teamProgress = teamList.map((team) => {
-    const teamTotal = db
+  const teamProgress = await Promise.all(teamList.map(async (team) => {
+    const [teamTotal] = await db
       .select({ count: sql<number>`count(*)` })
       .from(items)
-      .where(and(eq(items.eventId, eventId), eq(items.teamId, team.id)))
-      .get();
+      .where(and(eq(items.eventId, eventId), eq(items.teamId, team.id)));
 
-    const teamCounted = db
+    const [teamCounted] = await db
       .select({ count: sql<number>`count(*)` })
       .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id)))
-      .get();
+      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id)));
 
-    const teamVariances = db
+    const [teamVariances] = await db
       .select({ count: sql<number>`count(*)` })
       .from(counts)
       .where(
@@ -125,16 +112,14 @@ export async function GET(request: NextRequest) {
           eq(counts.teamId, team.id),
           eq(counts.isMatch, false)
         )
-      )
-      .get();
+      );
 
-    const lastCount = db
+    const [lastCount] = await db
       .select({ countedAt: counts.countedAt })
       .from(counts)
       .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id)))
       .orderBy(sql`counted_at DESC`)
-      .limit(1)
-      .get();
+      .limit(1);
 
     const total = teamTotal?.count || 0;
     const counted = teamCounted?.count || 0;
@@ -151,10 +136,10 @@ export async function GET(request: NextRequest) {
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
       lastActivity: lastCount?.countedAt || null,
     };
-  });
+  }));
 
   // Recent activity (last 20 counts)
-  const recentActivity = db
+  const recentActivity = await db
     .select({
       teamName: teams.name,
       itemCode: items.itemCode,
@@ -168,8 +153,7 @@ export async function GET(request: NextRequest) {
     .innerJoin(items, eq(counts.itemId, items.id))
     .where(eq(counts.eventId, eventId))
     .orderBy(sql`counted_at DESC`)
-    .limit(20)
-    .all();
+    .limit(20);
 
   const total = totalItems?.count || 0;
   const counted = totalCounted?.count || 0;

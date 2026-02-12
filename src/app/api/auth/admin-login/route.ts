@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Try to match against admins in the database
-    const allAdmins = db.select().from(admins).all();
+    const allAdmins = await db.select().from(admins);
 
     // If no admins exist, accept env var password and auto-create admin row
     if (allAdmins.length === 0) {
@@ -23,10 +23,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Invalid password" }, { status: 401 });
       }
       const hash = bcrypt.hashSync(password, 10);
-      const result = db.insert(admins).values({ name: "Admin", passwordHash: hash }).run();
+      const [{ id }] = await db
+        .insert(admins)
+        .values({ name: "Admin", passwordHash: hash })
+        .returning({ id: admins.id });
 
       const token = await createToken({
-        id: Number(result.lastInsertRowid),
+        id,
         type: "admin",
         name: "Admin",
         eventId: 0,
@@ -35,7 +38,7 @@ export async function POST(request: NextRequest) {
 
       const response = NextResponse.json({
         success: true,
-        user: { id: Number(result.lastInsertRowid), type: "admin", name: "Admin" },
+        user: { id, type: "admin", name: "Admin" },
       });
       response.cookies.set({ ...getTokenCookieOptions(), value: token });
       return response;

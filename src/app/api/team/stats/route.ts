@@ -10,23 +10,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const totalItems = db
+  const [totalItems] = await db
     .select({ count: sql<number>`count(*)` })
     .from(items)
     .where(
       and(eq(items.eventId, user.eventId), eq(items.teamId, user.id))
-    )
-    .get();
+    );
 
-  const countedItems = db
+  const [countedItems] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
     .where(
       and(eq(counts.eventId, user.eventId), eq(counts.teamId, user.id))
-    )
-    .get();
+    );
 
-  const matchedItems = db
+  const [matchedItems] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
     .where(
@@ -35,10 +33,9 @@ export async function GET(request: NextRequest) {
         eq(counts.teamId, user.id),
         eq(counts.isMatch, true)
       )
-    )
-    .get();
+    );
 
-  const varianceItems = db
+  const [varianceItems] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
     .where(
@@ -47,8 +44,7 @@ export async function GET(request: NextRequest) {
         eq(counts.teamId, user.id),
         eq(counts.isMatch, false)
       )
-    )
-    .get();
+    );
 
   const total = totalItems?.count || 0;
   const counted = countedItems?.count || 0;

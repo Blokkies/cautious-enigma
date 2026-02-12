@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = db
+    const [{ id }] = await db
       .insert(serialDiscrepancies)
       .values({
         eventId: user.eventId,
@@ -42,11 +42,11 @@ export async function POST(request: NextRequest) {
         unknownSerials: JSON.stringify(unknownSerials),
         status: "open",
       })
-      .run();
+      .returning({ id: serialDiscrepancies.id });
 
     return NextResponse.json({
       success: true,
-      id: Number(result.lastInsertRowid),
+      id,
     });
   } catch (error) {
     console.error("Serial discrepancy creation error:", error);

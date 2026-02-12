@@ -1,10 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Required for better-sqlite3 native module
-  experimental: {
-    serverComponentsExternalPackages: ["better-sqlite3"],
-  },
-
   // Allow local network access
   async headers() {
     return [

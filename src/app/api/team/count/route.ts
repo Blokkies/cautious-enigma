@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
     // Handle verification count submission
     if (verificationId) {
-      const va = db
+      const [va] = await db
         .select()
         .from(verificationAssignments)
         .where(
@@ -38,8 +38,7 @@ export async function POST(request: NextRequest) {
             eq(verificationAssignments.eventId, user.eventId),
             eq(verificationAssignments.status, "pending")
           )
-        )
-        .get();
+        );
 
       if (!va) {
         return NextResponse.json(
@@ -48,11 +47,10 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const item = db
+      const [item] = await db
         .select()
         .from(items)
-        .where(eq(items.id, itemId))
-        .get();
+        .where(eq(items.id, itemId));
 
       if (!item) {
         return NextResponse.json(
@@ -66,7 +64,7 @@ export async function POST(request: NextRequest) {
       const computedIsMatch = variance === 0;
 
       // Insert a new verification count (never upsert)
-      const insertResult = db
+      const [{ id: insertedId }] = await db
         .insert(counts)
         .values({
           itemId,
@@ -83,45 +81,42 @@ export async function POST(request: NextRequest) {
           countType: "verification",
           verificationId,
         })
-        .run();
+        .returning({ id: counts.id });
 
       // Update verification assignment status
-      db.update(verificationAssignments)
+      await db.update(verificationAssignments)
         .set({
           status: "completed",
           completedAt: new Date().toISOString(),
         })
-        .where(eq(verificationAssignments.id, verificationId))
-        .run();
+        .where(eq(verificationAssignments.id, verificationId));
 
-      const result = db
+      const [result] = await db
         .select()
         .from(counts)
-        .where(eq(counts.id, Number(insertResult.lastInsertRowid)))
-        .get();
+        .where(eq(counts.id, insertedId));
 
       // Audit log
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
           userType: "team",
           action: "verification_count",
           tableName: "counts",
-          recordId: Number(insertResult.lastInsertRowid),
+          recordId: insertedId,
           newValue: JSON.stringify({
             countedQty,
             variance,
             verificationId,
           }),
-        })
-        .run();
+        });
 
       return NextResponse.json({ success: true, count: result });
     }
 
     // Verify item belongs to this team
-    const item = db
+    const [item] = await db
       .select()
       .from(items)
       .where(
@@ -130,8 +125,7 @@ export async function POST(request: NextRequest) {
           eq(items.teamId, user.id),
           eq(items.eventId, user.eventId)
         )
-      )
-      .get();
+      );
 
     if (!item) {
       return NextResponse.json(
@@ -142,11 +136,10 @@ export async function POST(request: NextRequest) {
 
     // Check for duplicate sync (clientId dedup)
     if (clientId) {
-      const existing = db
+      const [existing] = await db
         .select()
         .from(counts)
-        .where(eq(counts.clientId, clientId))
-        .get();
+        .where(eq(counts.clientId, clientId));
 
       if (existing) {
         return NextResponse.json({
@@ -161,7 +154,7 @@ export async function POST(request: NextRequest) {
     const varianceValue = variance * (item.avgCost || 0);
 
     // Check if already counted (initial counts only) - update if so
-    const existingCount = db
+    const [existingCount] = await db
       .select()
       .from(counts)
       .where(
@@ -170,14 +163,13 @@ export async function POST(request: NextRequest) {
           eq(counts.teamId, user.id),
           eq(counts.countType, "initial")
         )
-      )
-      .get();
+      );
 
     let result;
 
     if (existingCount) {
       // Update existing count
-      db.update(counts)
+      await db.update(counts)
         .set({
           countedQty,
           variance,
@@ -188,17 +180,16 @@ export async function POST(request: NextRequest) {
           syncedAt: new Date().toISOString(),
           clientId: clientId || existingCount.clientId,
         })
-        .where(eq(counts.id, existingCount.id))
-        .run();
+        .where(eq(counts.id, existingCount.id));
 
-      result = db
+      const [updated] = await db
         .select()
         .from(counts)
-        .where(eq(counts.id, existingCount.id))
-        .get();
+        .where(eq(counts.id, existingCount.id));
+      result = updated;
 
       // Audit log
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -211,11 +202,10 @@ export async function POST(request: NextRequest) {
             variance: existingCount.variance,
           }),
           newValue: JSON.stringify({ countedQty, variance }),
-        })
-        .run();
+        });
     } else {
       // Insert new count
-      const insertResult = db
+      const [{ id: insertedId }] = await db
         .insert(counts)
         .values({
           itemId,
@@ -230,26 +220,25 @@ export async function POST(request: NextRequest) {
           syncedAt: new Date().toISOString(),
           clientId: clientId || null,
         })
-        .run();
+        .returning({ id: counts.id });
 
-      result = db
+      const [inserted] = await db
         .select()
         .from(counts)
-        .where(eq(counts.id, Number(insertResult.lastInsertRowid)))
-        .get();
+        .where(eq(counts.id, insertedId));
+      result = inserted;
 
       // Audit log
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
           userType: "team",
           action: "create_count",
           tableName: "counts",
-          recordId: Number(insertResult.lastInsertRowid),
+          recordId: insertedId,
           newValue: JSON.stringify({ countedQty, variance, isMatch }),
-        })
-        .run();
+        });
     }
 
     return NextResponse.json({ success: true, count: result });
@@ -269,7 +258,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -291,11 +280,10 @@ export async function PUT(request: NextRequest) {
 
       // Dedup check
       if (clientId) {
-        const existing = db
+        const [existing] = await db
           .select()
           .from(counts)
-          .where(eq(counts.clientId, clientId))
-          .get();
+          .where(eq(counts.clientId, clientId));
 
         if (existing) {
           results.push({ itemId, deduplicated: true });
@@ -303,7 +291,7 @@ export async function PUT(request: NextRequest) {
         }
       }
 
-      const item = db
+      const [item] = await db
         .select()
         .from(items)
         .where(
@@ -312,8 +300,7 @@ export async function PUT(request: NextRequest) {
             eq(items.teamId, user.id),
             eq(items.eventId, user.eventId)
           )
-        )
-        .get();
+        );
 
       if (!item) {
         results.push({ itemId, error: "Not found" });
@@ -323,7 +310,7 @@ export async function PUT(request: NextRequest) {
       const variance = countedQty - (item.onHand || 0);
       const varianceValue = variance * (item.avgCost || 0);
 
-      const existingCount = db
+      const [existingCount] = await db
         .select()
         .from(counts)
         .where(
@@ -332,11 +319,10 @@ export async function PUT(request: NextRequest) {
             eq(counts.teamId, user.id),
             eq(counts.countType, "initial")
           )
-        )
-        .get();
+        );
 
       if (existingCount) {
-        db.update(counts)
+        await db.update(counts)
           .set({
             countedQty,
             variance,
@@ -347,10 +333,9 @@ export async function PUT(request: NextRequest) {
             syncedAt: new Date().toISOString(),
             clientId: clientId || existingCount.clientId,
           })
-          .where(eq(counts.id, existingCount.id))
-          .run();
+          .where(eq(counts.id, existingCount.id));
       } else {
-        db.insert(counts)
+        await db.insert(counts)
           .values({
             itemId,
             teamId: user.id,
@@ -363,8 +348,7 @@ export async function PUT(request: NextRequest) {
             countedAt: new Date().toISOString(),
             syncedAt: new Date().toISOString(),
             clientId: clientId || null,
-          })
-          .run();
+          });
       }
 
       results.push({ itemId, success: true });

@@ -12,29 +12,25 @@ export async function GET(request: NextRequest) {
 
   const eid = Number(eventId);
 
-  const itemCount = db
+  const [itemCount] = await db
     .select({ count: sql<number>`count(*)` })
     .from(items)
-    .where(eq(items.eventId, eid))
-    .get();
+    .where(eq(items.eventId, eid));
 
-  const teamCount = db
+  const [teamCount] = await db
     .select({ count: sql<number>`count(*)` })
     .from(teams)
-    .where(eq(teams.eventId, eid))
-    .get();
+    .where(eq(teams.eventId, eid));
 
-  const supervisorCount = db
+  const [supervisorCount] = await db
     .select({ count: sql<number>`count(*)` })
     .from(supervisors)
-    .where(eq(supervisors.eventId, eid))
-    .get();
+    .where(eq(supervisors.eventId, eid));
 
-  const unassignedCount = db
+  const [unassignedCount] = await db
     .select({ count: sql<number>`count(*)` })
     .from(items)
-    .where(and(eq(items.eventId, eid), isNull(items.teamId)))
-    .get();
+    .where(and(eq(items.eventId, eid), isNull(items.teamId)));
 
   return NextResponse.json({
     hasItems: (itemCount?.count || 0) > 0,
@@ -50,11 +46,12 @@ export async function POST(request: NextRequest) {
   try {
     const { eventId } = await request.json();
 
-    const event = db
+    const events = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, Number(eventId)))
-      .get();
+      .where(eq(stocktakeEvents.id, Number(eventId)));
+
+    const [event] = events;
 
     if (!event) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
@@ -68,10 +65,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Activate this event
-    db.update(stocktakeEvents)
+    await db.update(stocktakeEvents)
       .set({ status: "active", updatedAt: new Date().toISOString() })
-      .where(eq(stocktakeEvents.id, Number(eventId)))
-      .run();
+      .where(eq(stocktakeEvents.id, Number(eventId)));
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -92,10 +88,9 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
-    db.update(stocktakeEvents)
+    await db.update(stocktakeEvents)
       .set({ status, updatedAt: new Date().toISOString() })
-      .where(eq(stocktakeEvents.id, Number(eventId)))
-      .run();
+      .where(eq(stocktakeEvents.id, Number(eventId)));
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -113,27 +108,28 @@ export async function DELETE(request: NextRequest) {
     const { eventId } = await request.json();
     const eid = Number(eventId);
 
-    const event = db
+    const events = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, eid))
-      .get();
+      .where(eq(stocktakeEvents.id, eid));
+
+    const [event] = events;
 
     if (!event) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
 
     // Cascade delete all related data in correct order (children first)
-    db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid)).run();
-    db.delete(auditLog).where(eq(auditLog.eventId, eid)).run();
-    db.delete(breakdowns).where(eq(breakdowns.eventId, eid)).run();
-    db.delete(queries).where(eq(queries.eventId, eid)).run();
-    db.delete(counts).where(eq(counts.eventId, eid)).run();
-    db.delete(teamAssignments).where(eq(teamAssignments.eventId, eid)).run();
-    db.delete(items).where(eq(items.eventId, eid)).run();
-    db.delete(supervisors).where(eq(supervisors.eventId, eid)).run();
-    db.delete(teams).where(eq(teams.eventId, eid)).run();
-    db.delete(stocktakeEvents).where(eq(stocktakeEvents.id, eid)).run();
+    await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
+    await db.delete(auditLog).where(eq(auditLog.eventId, eid));
+    await db.delete(breakdowns).where(eq(breakdowns.eventId, eid));
+    await db.delete(queries).where(eq(queries.eventId, eid));
+    await db.delete(counts).where(eq(counts.eventId, eid));
+    await db.delete(teamAssignments).where(eq(teamAssignments.eventId, eid));
+    await db.delete(items).where(eq(items.eventId, eid));
+    await db.delete(supervisors).where(eq(supervisors.eventId, eid));
+    await db.delete(teams).where(eq(teams.eventId, eid));
+    await db.delete(stocktakeEvents).where(eq(stocktakeEvents.id, eid));
 
     return NextResponse.json({ success: true });
   } catch (error) {

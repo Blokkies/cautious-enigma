@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, teams } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 // GET: Get assignment overview - unassigned bins and per-team bin breakdown
 export async function GET(request: NextRequest) {
@@ -11,18 +11,15 @@ export async function GET(request: NextRequest) {
   }
 
   const eid = Number(eventId);
-  const { sqlite } = await import("@/lib/db");
 
   // Check for bin items request (Feature 4)
   const binNumber = request.nextUrl.searchParams.get("binNumber");
   if (binNumber) {
-    const binItems = sqlite
-      .prepare(
-        `SELECT id, item_code, description, brand, warehouse, on_hand, total_value, stock_status, serial_number
-         FROM items WHERE event_id = ? AND bin_number = ? AND team_id IS NULL
+    const binItems = await db.execute(
+      sql`SELECT id, item_code, description, brand, warehouse, on_hand, total_value, stock_status, serial_number
+         FROM items WHERE event_id = ${eid} AND bin_number = ${binNumber} AND team_id IS NULL
          ORDER BY item_code`
-      )
-      .all(eid, binNumber);
+    );
     return NextResponse.json({ binItems });
   }
 
@@ -31,114 +28,113 @@ export async function GET(request: NextRequest) {
   const brand = request.nextUrl.searchParams.get("brand");
 
   // Build unassigned bins query with optional filters
-  let unassignedBinsQuery = `SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
-     FROM items WHERE event_id = ? AND team_id IS NULL AND bin_number IS NOT NULL`;
-  const queryParams: (number | string)[] = [eid];
+  let unassignedBinsQuery = sql`SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
+     FROM items WHERE event_id = ${eid} AND team_id IS NULL AND bin_number IS NOT NULL`;
 
   if (warehouse) {
-    unassignedBinsQuery += ` AND warehouse = ?`;
-    queryParams.push(warehouse);
+    unassignedBinsQuery = sql`${unassignedBinsQuery} AND warehouse = ${warehouse}`;
   }
   if (brand) {
-    unassignedBinsQuery += ` AND brand = ?`;
-    queryParams.push(brand);
+    unassignedBinsQuery = sql`${unassignedBinsQuery} AND brand = ${brand}`;
   }
 
-  unassignedBinsQuery += ` GROUP BY bin_number ORDER BY bin_number`;
+  unassignedBinsQuery = sql`${unassignedBinsQuery} GROUP BY bin_number ORDER BY bin_number`;
 
-  const unassignedBins = sqlite
-    .prepare(unassignedBinsQuery)
-    .all(...queryParams) as { bin_number: string; item_count: number; total_value: number }[];
+  const unassignedBins = await db.execute(unassignedBinsQuery) as { bin_number: string; item_count: number; total_value: number }[];
 
   // Filter options - cross-filtered from unassigned items
-  let warehouseFilterQuery = `SELECT DISTINCT warehouse FROM items WHERE event_id = ? AND team_id IS NULL AND warehouse IS NOT NULL AND warehouse != ''`;
-  const warehouseParams: (number | string)[] = [eid];
+  let warehouseFilterQuery = sql`SELECT DISTINCT warehouse FROM items WHERE event_id = ${eid} AND team_id IS NULL AND warehouse IS NOT NULL AND warehouse != ''`;
   if (brand) {
-    warehouseFilterQuery += ` AND brand = ?`;
-    warehouseParams.push(brand);
+    warehouseFilterQuery = sql`${warehouseFilterQuery} AND brand = ${brand}`;
   }
-  warehouseFilterQuery += ` ORDER BY warehouse`;
+  warehouseFilterQuery = sql`${warehouseFilterQuery} ORDER BY warehouse`;
 
-  let brandFilterQuery = `SELECT DISTINCT brand FROM items WHERE event_id = ? AND team_id IS NULL AND brand IS NOT NULL AND brand != ''`;
-  const brandParams: (number | string)[] = [eid];
+  let brandFilterQuery = sql`SELECT DISTINCT brand FROM items WHERE event_id = ${eid} AND team_id IS NULL AND brand IS NOT NULL AND brand != ''`;
   if (warehouse) {
-    brandFilterQuery += ` AND warehouse = ?`;
-    brandParams.push(warehouse);
+    brandFilterQuery = sql`${brandFilterQuery} AND warehouse = ${warehouse}`;
   }
-  brandFilterQuery += ` ORDER BY brand`;
+  brandFilterQuery = sql`${brandFilterQuery} ORDER BY brand`;
 
-  const warehouses = (sqlite.prepare(warehouseFilterQuery).all(...warehouseParams) as { warehouse: string }[]).map(r => r.warehouse);
-  const brands = (sqlite.prepare(brandFilterQuery).all(...brandParams) as { brand: string }[]).map(r => r.brand);
+  const warehousesResult = await db.execute(warehouseFilterQuery) as { warehouse: string }[];
+  const brandsResult = await db.execute(brandFilterQuery) as { brand: string }[];
+  const warehouses = warehousesResult.map(r => r.warehouse);
+  const brands = brandsResult.map(r => r.brand);
 
   // Summary stats - respect filters
-  let statsFilter = `WHERE event_id = ?`;
-  const statsParams: (number | string)[] = [eid];
+  let statsQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid}`;
   if (warehouse) {
-    statsFilter += ` AND warehouse = ?`;
-    statsParams.push(warehouse);
+    statsQuery = sql`${statsQuery} AND warehouse = ${warehouse}`;
   }
   if (brand) {
-    statsFilter += ` AND brand = ?`;
-    statsParams.push(brand);
+    statsQuery = sql`${statsQuery} AND brand = ${brand}`;
   }
 
-  const totalItems = sqlite
-    .prepare(`SELECT count(*) as count FROM items ${statsFilter}`)
-    .get(...statsParams) as { count: number } | undefined;
+  const totalItemsResult = await db.execute(statsQuery);
+  const totalItems = Number((totalItemsResult[0] as Record<string, unknown>)?.count ?? 0);
 
-  const assignedItems = sqlite
-    .prepare(`SELECT count(*) as count FROM items ${statsFilter} AND team_id IS NOT NULL`)
-    .get(...statsParams) as { count: number } | undefined;
+  let assignedQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid} AND team_id IS NOT NULL`;
+  if (warehouse) {
+    assignedQuery = sql`${assignedQuery} AND warehouse = ${warehouse}`;
+  }
+  if (brand) {
+    assignedQuery = sql`${assignedQuery} AND brand = ${brand}`;
+  }
 
-  const unassignedItems = sqlite
-    .prepare(`SELECT count(*) as count FROM items ${statsFilter} AND team_id IS NULL`)
-    .get(...statsParams) as { count: number } | undefined;
+  const assignedItemsResult = await db.execute(assignedQuery);
+  const assignedItems = Number((assignedItemsResult[0] as Record<string, unknown>)?.count ?? 0);
+
+  let unassignedQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid} AND team_id IS NULL`;
+  if (warehouse) {
+    unassignedQuery = sql`${unassignedQuery} AND warehouse = ${warehouse}`;
+  }
+  if (brand) {
+    unassignedQuery = sql`${unassignedQuery} AND brand = ${brand}`;
+  }
+
+  const unassignedItemsResult = await db.execute(unassignedQuery);
+  const unassignedItems = Number((unassignedItemsResult[0] as Record<string, unknown>)?.count ?? 0);
 
   // Per-team: bins assigned with item counts - respect filters
-  const teamList = db.select().from(teams).where(eq(teams.eventId, eid)).all();
+  const teamList = await db.select().from(teams).where(eq(teams.eventId, eid));
 
-  // Build filter clause for team queries
-  let teamFilterClause = "";
-  const teamFilterParams: string[] = [];
-  if (warehouse) {
-    teamFilterClause += ` AND warehouse = ?`;
-    teamFilterParams.push(warehouse);
-  }
-  if (brand) {
-    teamFilterClause += ` AND brand = ?`;
-    teamFilterParams.push(brand);
-  }
+  const teamDetails = await Promise.all(
+    teamList.map(async (team) => {
+      let teamBinsQuery = sql`SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
+         FROM items WHERE event_id = ${eid} AND team_id = ${team.id} AND bin_number IS NOT NULL`;
 
-  const teamDetails = teamList.map((team) => {
-    const teamBins = sqlite
-      .prepare(
-        `SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
-         FROM items WHERE event_id = ? AND team_id = ? AND bin_number IS NOT NULL${teamFilterClause}
-         GROUP BY bin_number ORDER BY bin_number`
-      )
-      .all(eid, team.id, ...teamFilterParams) as { bin_number: string; item_count: number; total_value: number }[];
+      if (warehouse) {
+        teamBinsQuery = sql`${teamBinsQuery} AND warehouse = ${warehouse}`;
+      }
+      if (brand) {
+        teamBinsQuery = sql`${teamBinsQuery} AND brand = ${brand}`;
+      }
 
-    const totalCount = teamBins.reduce((s, b) => s + b.item_count, 0);
-    const totalValue = teamBins.reduce((s, b) => s + b.total_value, 0);
+      teamBinsQuery = sql`${teamBinsQuery} GROUP BY bin_number ORDER BY bin_number`;
 
-    return {
-      id: team.id,
-      name: team.name,
-      member1: team.member1,
-      member2: team.member2,
-      itemCount: totalCount,
-      totalValue,
-      bins: teamBins,
-    };
-  });
+      const teamBins = await db.execute(teamBinsQuery) as { bin_number: string; item_count: number; total_value: number }[];
+
+      const totalCount = teamBins.reduce((s, b) => s + b.item_count, 0);
+      const totalValue = teamBins.reduce((s, b) => s + b.total_value, 0);
+
+      return {
+        id: team.id,
+        name: team.name,
+        member1: team.member1,
+        member2: team.member2,
+        itemCount: totalCount,
+        totalValue,
+        bins: teamBins,
+      };
+    })
+  );
 
   return NextResponse.json({
     unassignedBins,
     filterOptions: { warehouses, brands },
     stats: {
-      total: totalItems?.count || 0,
-      assigned: assignedItems?.count || 0,
-      unassigned: unassignedItems?.count || 0,
+      total: totalItems,
+      assigned: assignedItems,
+      unassigned: unassignedItems,
     },
     teamDetails,
   });
@@ -155,7 +151,6 @@ export async function POST(request: NextRequest) {
     }
 
     const eid = Number(eventId);
-    const { sqlite } = await import("@/lib/db");
 
     // Auto-balance: assign multiple teams at once in a transaction
     if (action === "auto-balance") {
@@ -165,19 +160,16 @@ export async function POST(request: NextRequest) {
       }
 
       let totalAssigned = 0;
-      const runInTransaction = sqlite.transaction(() => {
+      await db.transaction(async (tx) => {
         for (const { teamId, bins } of assignments) {
           if (!bins || bins.length === 0) continue;
-          const placeholders = bins.map(() => "?").join(",");
-          const result = sqlite
-            .prepare(
-              `UPDATE items SET team_id = ? WHERE event_id = ? AND bin_number IN (${placeholders}) AND team_id IS NULL`
-            )
-            .run(teamId, eid, ...bins);
-          totalAssigned += result.changes;
+          const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
+          const result = await tx.execute(
+            sql`UPDATE items SET team_id = ${teamId} WHERE event_id = ${eid} AND bin_number IN (${binList}) AND team_id IS NULL RETURNING id`
+          );
+          totalAssigned += result.length;
         }
       });
-      runInTransaction();
 
       return NextResponse.json({ success: true, assignedCount: totalAssigned });
     }
@@ -192,16 +184,14 @@ export async function POST(request: NextRequest) {
     }
 
     const tid = Number(teamId);
-    const placeholders = bins.map(() => "?").join(",");
-    const result = sqlite
-      .prepare(
-        `UPDATE items SET team_id = ? WHERE event_id = ? AND bin_number IN (${placeholders}) AND team_id IS NULL`
-      )
-      .run(tid, eid, ...bins);
+    const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
+    const result = await db.execute(
+      sql`UPDATE items SET team_id = ${tid} WHERE event_id = ${eid} AND bin_number IN (${binList}) AND team_id IS NULL RETURNING id`
+    );
 
     return NextResponse.json({
       success: true,
-      assignedCount: result.changes,
+      assignedCount: result.length,
     });
   } catch (error) {
     console.error("Assignment error:", error);
@@ -224,24 +214,23 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const { sqlite } = await import("@/lib/db");
+    const eid = Number(eventId);
+    const tid = Number(teamId);
 
     if (bins && Array.isArray(bins) && bins.length > 0) {
       // Unassign specific bins
-      const placeholders = bins.map(() => "?").join(",");
-      sqlite
-        .prepare(
-          `UPDATE items SET team_id = NULL WHERE event_id = ? AND team_id = ? AND bin_number IN (${placeholders})`
-        )
-        .run(Number(eventId), Number(teamId), ...bins);
+      const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
+      await db.execute(
+        sql`UPDATE items SET team_id = NULL WHERE event_id = ${eid} AND team_id = ${tid} AND bin_number IN (${binList})`
+      );
     } else {
       // Unassign all items from this team
-      db.update(items)
+      await db
+        .update(items)
         .set({ teamId: null })
         .where(
-          and(eq(items.eventId, Number(eventId)), eq(items.teamId, Number(teamId)))
-        )
-        .run();
+          and(eq(items.eventId, eid), eq(items.teamId, tid))
+        );
     }
 
     return NextResponse.json({ success: true });

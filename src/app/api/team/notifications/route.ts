@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   const lastSeenVerifications = searchParams.get("lastSeenVerifications") || "1970-01-01T00:00:00Z";
 
   // Count queries with new supervisor messages since lastSeen
-  const queriesCount = db.get<{ count: number }>(
+  const queriesResult = await db.execute(
     sql`SELECT COUNT(DISTINCT qm.query_id) as count
         FROM query_messages qm
         INNER JOIN queries q ON q.id = qm.query_id
@@ -24,9 +24,10 @@ export async function GET(request: NextRequest) {
           AND qm.sender_type = 'supervisor'
           AND qm.created_at > ${lastSeenQueries}`
   );
+  const queriesCountVal = Number((queriesResult[0] as Record<string, unknown>)?.count ?? 0);
 
   // Count breakdowns with new supervisor messages or status changes since lastSeen
-  const breakdownsCombined = db.get<{ count: number }>(
+  const breakdownsResult = await db.execute(
     sql`SELECT COUNT(*) as count FROM (
           SELECT DISTINCT bm.breakdown_id as id
           FROM breakdown_messages bm
@@ -42,11 +43,12 @@ export async function GET(request: NextRequest) {
             AND event_id = ${user.eventId}
             AND resolved_at IS NOT NULL
             AND resolved_at > ${lastSeenBreakdowns}
-        )`
+        ) AS combined`
   );
+  const breakdownsCountVal = Number((breakdownsResult[0] as Record<string, unknown>)?.count ?? 0);
 
   // Count pending verification assignments created since lastSeen
-  const verificationsCount = db.get<{ count: number }>(
+  const verificationsResult = await db.execute(
     sql`SELECT COUNT(*) as count
         FROM verification_assignments
         WHERE assigned_team_id = ${user.id}
@@ -54,10 +56,11 @@ export async function GET(request: NextRequest) {
           AND status = 'pending'
           AND assigned_at > ${lastSeenVerifications}`
   );
+  const verificationsCountVal = Number((verificationsResult[0] as Record<string, unknown>)?.count ?? 0);
 
   return NextResponse.json({
-    queries: queriesCount?.count ?? 0,
-    breakdowns: breakdownsCombined?.count ?? 0,
-    verifications: verificationsCount?.count ?? 0,
+    queries: queriesCountVal,
+    breakdowns: breakdownsCountVal,
+    verifications: verificationsCountVal,
   });
 }

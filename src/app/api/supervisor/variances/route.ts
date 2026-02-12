@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
           sql`${counts.checkStatus} != 'accepted'`
         );
 
-  const variances = db
+  const variances = await db
     .select(selectShape)
     .from(counts)
     .innerJoin(items, eq(counts.itemId, items.id))
@@ -61,8 +61,7 @@ export async function GET(request: NextRequest) {
         eq(counts.countType, "initial")
       )
     )
-    .orderBy(sql`abs(variance_value) DESC`)
-    .all();
+    .orderBy(sql`abs(variance_value) DESC`);
 
   // Enrich with verification data
   const countIds = variances.map((v) => v.countId);
@@ -77,7 +76,7 @@ export async function GET(request: NextRequest) {
   }> = {};
 
   if (countIds.length > 0) {
-    const verifications = db
+    const verifications = await db
       .select({
         id: verificationAssignments.id,
         countId: verificationAssignments.countId,
@@ -88,8 +87,7 @@ export async function GET(request: NextRequest) {
       })
       .from(verificationAssignments)
       .innerJoin(teams, eq(verificationAssignments.assignedTeamId, teams.id))
-      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, user.eventId)))
-      .all();
+      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, user.eventId)));
 
     // For completed verifications, fetch the verification count records
     const verificationIds = verifications
@@ -98,7 +96,7 @@ export async function GET(request: NextRequest) {
 
     const verCountMap: Record<number, { countedQty: number; variance: number; countedAt: string }> = {};
     if (verificationIds.length > 0) {
-      const verCounts = db
+      const verCounts = await db
         .select({
           verificationId: counts.verificationId,
           countedQty: counts.countedQty,
@@ -112,8 +110,7 @@ export async function GET(request: NextRequest) {
             eq(counts.countType, "verification"),
             inArray(counts.verificationId, verificationIds)
           )
-        )
-        .all();
+        );
 
       for (const vc of verCounts) {
         if (vc.verificationId != null) {
@@ -148,7 +145,7 @@ export async function GET(request: NextRequest) {
   // For the active tab, include unknown serials from open serial discrepancies as synthetic variance rows.
   // Each unknown serial represents a found item not in the expected list (variance = +1).
   if (!tab) {
-    const openDiscrepancies = db
+    const openDiscrepancies = await db
       .select({
         id: serialDiscrepancies.id,
         itemCode: serialDiscrepancies.itemCode,
@@ -164,15 +161,14 @@ export async function GET(request: NextRequest) {
           eq(serialDiscrepancies.eventId, user.eventId),
           eq(serialDiscrepancies.status, "open")
         )
-      )
-      .all();
+      );
 
     for (const disc of openDiscrepancies) {
       const unknowns: string[] = JSON.parse(disc.unknownSerials);
       if (unknowns.length === 0) continue;
 
       // Look up avgCost from any item with this itemCode in the event
-      const refItem = db
+      const [refItem] = await db
         .select({ avgCost: items.avgCost })
         .from(items)
         .where(
@@ -180,8 +176,7 @@ export async function GET(request: NextRequest) {
             eq(items.eventId, user.eventId),
             eq(items.itemCode, disc.itemCode)
           )
-        )
-        .get();
+        );
       const avgCost = refItem?.avgCost ?? 0;
 
       for (let i = 0; i < unknowns.length; i++) {
@@ -248,7 +243,7 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
-      const va = db
+      const [va] = await db
         .select()
         .from(verificationAssignments)
         .where(
@@ -256,8 +251,7 @@ export async function PATCH(request: NextRequest) {
             eq(verificationAssignments.id, verificationId),
             eq(verificationAssignments.eventId, user.eventId)
           )
-        )
-        .get();
+        );
 
       if (!va) {
         return NextResponse.json(
@@ -268,7 +262,7 @@ export async function PATCH(request: NextRequest) {
 
       if (action === "accept_verification") {
         // Get the verification count
-        const verCount = db
+        const [verCount] = await db
           .select({
             countedQty: counts.countedQty,
             variance: counts.variance,
@@ -281,8 +275,7 @@ export async function PATCH(request: NextRequest) {
               eq(counts.verificationId, verificationId),
               eq(counts.countType, "verification")
             )
-          )
-          .get();
+          );
 
         if (!verCount) {
           return NextResponse.json(
@@ -293,7 +286,7 @@ export async function PATCH(request: NextRequest) {
 
         // Update the original count with verification values
         const isMatch = verCount.variance === 0;
-        db.update(counts)
+        await db.update(counts)
           .set({
             countedQty: verCount.countedQty,
             variance: verCount.variance,
@@ -301,24 +294,21 @@ export async function PATCH(request: NextRequest) {
             isMatch,
             checkStatus: "accepted",
           })
-          .where(eq(counts.id, va.countId))
-          .run();
+          .where(eq(counts.id, va.countId));
       } else {
         // accept_original — just mark the original as accepted
-        db.update(counts)
+        await db.update(counts)
           .set({ checkStatus: "accepted" })
-          .where(eq(counts.id, va.countId))
-          .run();
+          .where(eq(counts.id, va.countId));
       }
 
       // Update verification assignment status
-      db.update(verificationAssignments)
+      await db.update(verificationAssignments)
         .set({ status: "accepted" })
-        .where(eq(verificationAssignments.id, verificationId))
-        .run();
+        .where(eq(verificationAssignments.id, verificationId));
 
       // Audit log
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -327,8 +317,7 @@ export async function PATCH(request: NextRequest) {
           tableName: "verification_assignments",
           recordId: verificationId,
           newValue: JSON.stringify({ action, countId: va.countId }),
-        })
-        .run();
+        });
 
       return NextResponse.json({ success: true, action });
     }
@@ -343,11 +332,10 @@ export async function PATCH(request: NextRequest) {
       }
 
       // Verify count belongs to supervisor's event
-      const count = db
+      const [count] = await db
         .select({ id: counts.id, eventId: counts.eventId })
         .from(counts)
-        .where(eq(counts.id, countId))
-        .get();
+        .where(eq(counts.id, countId));
 
       if (!count) {
         return NextResponse.json({ error: "Count not found" }, { status: 404 });
@@ -358,12 +346,11 @@ export async function PATCH(request: NextRequest) {
 
       const newStatus = action === "accept_variance" ? "accepted" : "pending";
 
-      db.update(counts)
+      await db.update(counts)
         .set({ checkStatus: newStatus })
-        .where(eq(counts.id, countId))
-        .run();
+        .where(eq(counts.id, countId));
 
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -372,8 +359,7 @@ export async function PATCH(request: NextRequest) {
           tableName: "counts",
           recordId: countId,
           newValue: JSON.stringify({ checkStatus: newStatus }),
-        })
-        .run();
+        });
 
       return NextResponse.json({ success: true, action });
     }
@@ -386,7 +372,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Fetch count joined to item for recalculation
-    const existing = db
+    const [existing] = await db
       .select({
         countId: counts.id,
         countedQty: counts.countedQty,
@@ -398,8 +384,7 @@ export async function PATCH(request: NextRequest) {
       })
       .from(counts)
       .innerJoin(items, eq(counts.itemId, items.id))
-      .where(eq(counts.id, countId))
-      .get();
+      .where(eq(counts.id, countId));
 
     if (!existing) {
       return NextResponse.json({ error: "Count not found" }, { status: 404 });
@@ -425,7 +410,7 @@ export async function PATCH(request: NextRequest) {
     const isMatch = variance === 0;
 
     // Update the count
-    db.update(counts)
+    await db.update(counts)
       .set({
         countedQty: newQty,
         variance,
@@ -433,11 +418,10 @@ export async function PATCH(request: NextRequest) {
         isMatch,
         checkStatus: "accepted",
       })
-      .where(eq(counts.id, countId))
-      .run();
+      .where(eq(counts.id, countId));
 
     // Audit log
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -454,8 +438,7 @@ export async function PATCH(request: NextRequest) {
           variance,
           ...(reason ? { reason } : {}),
         }),
-      })
-      .run();
+      });
 
     return NextResponse.json({
       success: true,

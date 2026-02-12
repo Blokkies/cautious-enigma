@@ -15,35 +15,38 @@ export async function GET(request: NextRequest) {
   const lastSeenSerials = searchParams.get("lastSeenSerials") || "1970-01-01T00:00:00Z";
 
   // Count open queries created since lastSeen
-  const queriesCount = db.get<{ count: number }>(
+  const queriesResult = await db.execute(
     sql`SELECT COUNT(*) as count
         FROM queries
         WHERE event_id = ${user.eventId}
           AND status = 'open'
           AND created_at > ${lastSeenQueries}`
   );
+  const queriesCountVal = Number((queriesResult[0] as Record<string, unknown>)?.count ?? 0);
 
   // Count pending breakdowns created since lastSeen
-  const breakdownsCount = db.get<{ count: number }>(
+  const breakdownsResult = await db.execute(
     sql`SELECT COUNT(*) as count
         FROM breakdowns
         WHERE event_id = ${user.eventId}
           AND approval_status = 'pending'
           AND created_at > ${lastSeenBreakdowns}`
   );
+  const breakdownsCountVal = Number((breakdownsResult[0] as Record<string, unknown>)?.count ?? 0);
 
   // Count open serial discrepancies created since lastSeen
-  const serialsCount = db.get<{ count: number }>(
+  const serialsResult = await db.execute(
     sql`SELECT COUNT(*) as count
         FROM serial_discrepancies
         WHERE event_id = ${user.eventId}
           AND status = 'open'
           AND created_at > ${lastSeenSerials}`
   );
+  const serialsCountVal = Number((serialsResult[0] as Record<string, unknown>)?.count ?? 0);
 
   return NextResponse.json({
-    queries: queriesCount?.count ?? 0,
-    breakdowns: breakdownsCount?.count ?? 0,
-    serials: serialsCount?.count ?? 0,
+    queries: queriesCountVal,
+    breakdowns: breakdownsCountVal,
+    serials: serialsCountVal,
   });
 }

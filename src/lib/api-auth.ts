@@ -30,12 +30,11 @@ export function getApiUser(request: NextRequest): ApiUser | null {
  * Check if an event is still accepting write operations (counts, queries, breakdowns).
  * Returns null if the event is active, or an error string if it's locked/completed.
  */
-export function checkEventActive(eventId: number): string | null {
-  const event = db
+export async function checkEventActive(eventId: number): Promise<string | null> {
+  const [event] = await db
     .select({ status: stocktakeEvents.status })
     .from(stocktakeEvents)
-    .where(eq(stocktakeEvents.id, eventId))
-    .get();
+    .where(eq(stocktakeEvents.id, eventId));
 
   if (!event) return "Event not found";
   if (event.status === "completed" || event.status === "locked") {

@@ -21,11 +21,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate team belongs to this event
-    const team = db
+    const [team] = await db
       .select({ id: teams.id })
       .from(teams)
-      .where(and(eq(teams.id, assignedTeamId), eq(teams.eventId, user.eventId)))
-      .get();
+      .where(and(eq(teams.id, assignedTeamId), eq(teams.eventId, user.eventId)));
 
     if (!team) {
       return NextResponse.json(
@@ -35,7 +34,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch the counts and validate
-    const targetCounts = db
+    const targetCounts = await db
       .select({
         id: counts.id,
         itemId: counts.itemId,
@@ -43,8 +42,7 @@ export async function POST(request: NextRequest) {
         isMatch: counts.isMatch,
       })
       .from(counts)
-      .where(and(inArray(counts.id, countIds), eq(counts.eventId, user.eventId)))
-      .all();
+      .where(and(inArray(counts.id, countIds), eq(counts.eventId, user.eventId)));
 
     if (targetCounts.length === 0) {
       return NextResponse.json(
@@ -71,7 +69,7 @@ export async function POST(request: NextRequest) {
 
     // Check no existing pending verification for the same items
     const itemIds = targetCounts.map((c) => c.itemId);
-    const existingVerifications = db
+    const existingVerifications = await db
       .select({ itemId: verificationAssignments.itemId })
       .from(verificationAssignments)
       .where(
@@ -80,8 +78,7 @@ export async function POST(request: NextRequest) {
           eq(verificationAssignments.eventId, user.eventId),
           eq(verificationAssignments.status, "pending")
         )
-      )
-      .all();
+      );
 
     if (existingVerifications.length > 0) {
       const existingItemIds = existingVerifications.map((v) => v.itemId);
@@ -96,7 +93,7 @@ export async function POST(request: NextRequest) {
     // Insert verification assignments
     const created: number[] = [];
     for (const c of targetCounts) {
-      const result = db
+      const [{ id }] = await db
         .insert(verificationAssignments)
         .values({
           countId: c.id,
@@ -105,13 +102,13 @@ export async function POST(request: NextRequest) {
           assignedTeamId,
           assignedBy: user.id,
         })
-        .run();
+        .returning({ id: verificationAssignments.id });
 
-      created.push(Number(result.lastInsertRowid));
+      created.push(id);
     }
 
     // Audit log
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -123,8 +120,7 @@ export async function POST(request: NextRequest) {
           assignedTeamId,
           verificationIds: created,
         }),
-      })
-      .run();
+      });
 
     return NextResponse.json({
       success: true,
@@ -160,7 +156,7 @@ export async function GET(request: NextRequest) {
     )!;
   }
 
-  const assignments = db
+  const assignments = await db
     .select({
       id: verificationAssignments.id,
       countId: verificationAssignments.countId,
@@ -176,8 +172,7 @@ export async function GET(request: NextRequest) {
     .from(verificationAssignments)
     .innerJoin(teams, eq(verificationAssignments.assignedTeamId, teams.id))
     .innerJoin(items, eq(verificationAssignments.itemId, items.id))
-    .where(whereClause)
-    .all();
+    .where(whereClause);
 
   return NextResponse.json({ assignments });
 }

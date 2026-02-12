@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const allQueries = db
+  const allQueries = await db
     .select({
       id: queries.id,
       queryType: queries.queryType,
@@ -29,8 +29,7 @@ export async function GET(request: NextRequest) {
     .innerJoin(teams, eq(queries.teamId, teams.id))
     .leftJoin(items, eq(queries.itemId, items.id))
     .where(eq(queries.eventId, user.eventId))
-    .orderBy(desc(queries.createdAt))
-    .all();
+    .orderBy(desc(queries.createdAt));
 
   // Fetch messages for all queries
   const queryIds = allQueries.map((q) => q.id);
@@ -43,7 +42,7 @@ export async function GET(request: NextRequest) {
   const messagesMap: Record<number, { senderType: string; senderName: string; message: string; createdAt: string }[]> = {};
 
   if (queryIds.length > 0) {
-    const allMsgs = db
+    const allMsgs = await db
       .select({
         queryId: queryMessages.queryId,
         senderType: queryMessages.senderType,
@@ -53,8 +52,7 @@ export async function GET(request: NextRequest) {
       })
       .from(queryMessages)
       .where(inArray(queryMessages.queryId, queryIds))
-      .orderBy(asc(queryMessages.createdAt))
-      .all();
+      .orderBy(asc(queryMessages.createdAt));
 
     // Look up supervisor names
     const supervisorIds = Array.from(new Set(
@@ -62,11 +60,10 @@ export async function GET(request: NextRequest) {
     ));
     const supervisorNames: Record<number, string> = {};
     if (supervisorIds.length > 0) {
-      const sups = db
+      const sups = await db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
-        .all();
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)));
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
       }
@@ -101,7 +98,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -118,14 +115,13 @@ export async function POST(request: NextRequest) {
 
     // If a response text was provided, add it as a message
     if (response) {
-      db.insert(queryMessages)
+      await db.insert(queryMessages)
         .values({
           queryId,
           senderType: "supervisor",
           senderId: user.id,
           message: response,
-        })
-        .run();
+        });
     }
 
     const updateData: Record<string, unknown> = {
@@ -141,10 +137,9 @@ export async function POST(request: NextRequest) {
       updateData.resolvedAt = null;
     }
 
-    db.update(queries)
+    await db.update(queries)
       .set(updateData)
-      .where(and(eq(queries.id, queryId), eq(queries.eventId, user.eventId)))
-      .run();
+      .where(and(eq(queries.id, queryId), eq(queries.eventId, user.eventId)));
 
     // Audit log
     const auditAction =
@@ -154,7 +149,7 @@ export async function POST(request: NextRequest) {
           ? "query_reopened"
           : "query_responded";
 
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -166,8 +161,7 @@ export async function POST(request: NextRequest) {
           ...(response ? { response } : {}),
           status: status || "open",
         }),
-      })
-      .run();
+      });
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -197,23 +191,22 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Verify the query belongs to this event
-    const query = db
+    const [query] = await db
       .select({ id: queries.id })
       .from(queries)
-      .where(and(eq(queries.id, queryId), eq(queries.eventId, user.eventId)))
-      .get();
+      .where(and(eq(queries.id, queryId), eq(queries.eventId, user.eventId)));
 
     if (!query) {
       return NextResponse.json({ error: "Query not found" }, { status: 404 });
     }
 
     // Delete messages first (foreign key)
-    db.delete(queryMessages).where(eq(queryMessages.queryId, queryId)).run();
+    await db.delete(queryMessages).where(eq(queryMessages.queryId, queryId));
     // Delete the query
-    db.delete(queries).where(eq(queries.id, queryId)).run();
+    await db.delete(queries).where(eq(queries.id, queryId));
 
     // Audit log
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -221,8 +214,7 @@ export async function DELETE(request: NextRequest) {
         action: "query_deleted",
         tableName: "queries",
         recordId: queryId,
-      })
-      .run();
+      });
 
     return NextResponse.json({ success: true });
   } catch (error) {

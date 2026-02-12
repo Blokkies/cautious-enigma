@@ -6,44 +6,39 @@ import { eq, and, isNotNull, sql } from "drizzle-orm";
 const VALID_STATUSES = ["setup", "active", "completed", "locked"] as const;
 
 export async function GET() {
-  const events = db
+  const events = await db
     .select()
-    .from(stocktakeEvents)
-    .all();
+    .from(stocktakeEvents);
 
-  const enriched = events.map((event) => {
-    const totalItemCount = db
+  const enriched = await Promise.all(events.map(async (event) => {
+    const [totalItemCountRow] = await db
       .select({ count: sql<number>`count(*)` })
       .from(items)
-      .where(eq(items.eventId, event.id))
-      .get();
+      .where(eq(items.eventId, event.id));
 
-    const assignedItemCount = db
+    const [assignedItemCountRow] = await db
       .select({ count: sql<number>`count(*)` })
       .from(items)
-      .where(and(eq(items.eventId, event.id), isNotNull(items.teamId)))
-      .get();
+      .where(and(eq(items.eventId, event.id), isNotNull(items.teamId)));
 
-    const teamCount = db
+    const [teamCountRow] = await db
       .select({ count: sql<number>`count(*)` })
       .from(teams)
-      .where(eq(teams.eventId, event.id))
-      .get();
+      .where(eq(teams.eventId, event.id));
 
-    const supervisorCount = db
+    const [supervisorCountRow] = await db
       .select({ count: sql<number>`count(*)` })
       .from(supervisors)
-      .where(eq(supervisors.eventId, event.id))
-      .get();
+      .where(eq(supervisors.eventId, event.id));
 
     return {
       ...event,
-      itemCount: assignedItemCount?.count || 0,
-      totalItemCount: totalItemCount?.count || 0,
-      teamCount: teamCount?.count || 0,
-      supervisorCount: supervisorCount?.count || 0,
+      itemCount: assignedItemCountRow?.count || 0,
+      totalItemCount: totalItemCountRow?.count || 0,
+      teamCount: teamCountRow?.count || 0,
+      supervisorCount: supervisorCountRow?.count || 0,
     };
-  });
+  }));
 
   return NextResponse.json({ events: enriched });
 }
@@ -59,7 +54,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = db
+    const [result] = await db
       .insert(stocktakeEvents)
       .values({
         name,
@@ -68,11 +63,11 @@ export async function POST(request: NextRequest) {
         endDate: endDate || null,
         status: "setup",
       })
-      .run();
+      .returning({ id: stocktakeEvents.id });
 
     return NextResponse.json({
       success: true,
-      id: Number(result.lastInsertRowid),
+      id: result.id,
     });
   } catch (error) {
     console.error("Create event error:", error);
@@ -101,11 +96,10 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const existing = db
+    const [existing] = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, Number(id)))
-      .get();
+      .where(eq(stocktakeEvents.id, Number(id)));
 
     if (!existing) {
       return NextResponse.json(
@@ -114,10 +108,9 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    db.update(stocktakeEvents)
+    await db.update(stocktakeEvents)
       .set({ status, updatedAt: new Date().toISOString() })
-      .where(eq(stocktakeEvents.id, Number(id)))
-      .run();
+      .where(eq(stocktakeEvents.id, Number(id)));
 
     return NextResponse.json({ success: true });
   } catch (error) {

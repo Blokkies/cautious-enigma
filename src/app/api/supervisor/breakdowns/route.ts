@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const allBreakdowns = db
+  const allBreakdowns = await db
     .select({
       id: breakdowns.id,
       clientName: breakdowns.clientName,
@@ -30,8 +30,7 @@ export async function GET(request: NextRequest) {
     .innerJoin(teams, eq(breakdowns.teamId, teams.id))
     .leftJoin(items, eq(breakdowns.itemId, items.id))
     .where(eq(breakdowns.eventId, user.eventId))
-    .orderBy(desc(breakdowns.createdAt))
-    .all();
+    .orderBy(desc(breakdowns.createdAt));
 
   // Fetch messages for all breakdowns
   const breakdownIds = allBreakdowns.map((b) => b.id);
@@ -43,7 +42,7 @@ export async function GET(request: NextRequest) {
   const messagesMap: Record<number, { senderType: string; senderName: string; message: string; createdAt: string }[]> = {};
 
   if (breakdownIds.length > 0) {
-    const allMsgs = db
+    const allMsgs = await db
       .select({
         breakdownId: breakdownMessages.breakdownId,
         senderType: breakdownMessages.senderType,
@@ -53,8 +52,7 @@ export async function GET(request: NextRequest) {
       })
       .from(breakdownMessages)
       .where(inArray(breakdownMessages.breakdownId, breakdownIds))
-      .orderBy(asc(breakdownMessages.createdAt))
-      .all();
+      .orderBy(asc(breakdownMessages.createdAt));
 
     // Look up supervisor names
     const supervisorIds = Array.from(new Set(
@@ -62,11 +60,10 @@ export async function GET(request: NextRequest) {
     ));
     const supervisorNames: Record<number, string> = {};
     if (supervisorIds.length > 0) {
-      const sups = db
+      const sups = await db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
-        .all();
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)));
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
       }
@@ -101,7 +98,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -118,28 +115,26 @@ export async function POST(request: NextRequest) {
 
     // If a message was provided, add it
     if (message) {
-      db.insert(breakdownMessages)
+      await db.insert(breakdownMessages)
         .values({
           breakdownId,
           senderType: "supervisor",
           senderId: user.id,
           message,
-        })
-        .run();
+        });
     }
 
     // If status change requested
     if (status && ["approved", "rejected", "pending"].includes(status)) {
-      db.update(breakdowns)
+      await db.update(breakdowns)
         .set({
           approvalStatus: status,
           approvedBy: user.id,
           resolvedAt: status === "pending" ? null : new Date().toISOString(),
         })
-        .where(and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId)))
-        .run();
+        .where(and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId)));
 
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -148,10 +143,9 @@ export async function POST(request: NextRequest) {
           tableName: "breakdowns",
           recordId: breakdownId,
           newValue: JSON.stringify({ status, ...(message ? { message } : {}) }),
-        })
-        .run();
+        });
     } else if (message) {
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -160,8 +154,7 @@ export async function POST(request: NextRequest) {
           tableName: "breakdown_messages",
           recordId: breakdownId,
           newValue: JSON.stringify({ message }),
-        })
-        .run();
+        });
     }
 
     return NextResponse.json({ success: true });
@@ -191,20 +184,19 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const breakdown = db
+    const [breakdown] = await db
       .select({ id: breakdowns.id })
       .from(breakdowns)
-      .where(and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId)))
-      .get();
+      .where(and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId)));
 
     if (!breakdown) {
       return NextResponse.json({ error: "Breakdown not found" }, { status: 404 });
     }
 
-    db.delete(breakdownMessages).where(eq(breakdownMessages.breakdownId, breakdownId)).run();
-    db.delete(breakdowns).where(eq(breakdowns.id, breakdownId)).run();
+    await db.delete(breakdownMessages).where(eq(breakdownMessages.breakdownId, breakdownId));
+    await db.delete(breakdowns).where(eq(breakdowns.id, breakdownId));
 
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -212,8 +204,7 @@ export async function DELETE(request: NextRequest) {
         action: "breakdown_deleted",
         tableName: "breakdowns",
         recordId: breakdownId,
-      })
-      .run();
+      });
 
     return NextResponse.json({ success: true });
   } catch (error) {

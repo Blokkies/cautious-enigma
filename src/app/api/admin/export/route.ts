@@ -12,17 +12,18 @@ export async function GET(request: NextRequest) {
 
   const eid = Number(eventId);
 
-  const event = db
+  const events = await db
     .select()
     .from(stocktakeEvents)
-    .where(eq(stocktakeEvents.id, eid))
-    .get();
+    .where(eq(stocktakeEvents.id, eid));
+
+  const [event] = events;
 
   if (!event) {
     return NextResponse.json({ error: "Event not found" }, { status: 404 });
   }
 
-  const rows = db
+  const rows = await db
     .select({
       internalId: items.internalId,
       itemCode: items.itemCode,
@@ -40,8 +41,7 @@ export async function GET(request: NextRequest) {
       isSerialized: items.isSerialized,
     })
     .from(items)
-    .where(eq(items.eventId, eid))
-    .all();
+    .where(eq(items.eventId, eid));
 
   const exportRows = rows.map((r) => ({
     "Internal ID": r.internalId || "",

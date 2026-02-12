@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const allDiscrepancies = db
+  const allDiscrepancies = await db
     .select({
       id: serialDiscrepancies.id,
       itemCode: serialDiscrepancies.itemCode,
@@ -27,13 +27,12 @@ export async function GET(request: NextRequest) {
     .from(serialDiscrepancies)
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
     .where(eq(serialDiscrepancies.eventId, user.eventId))
-    .orderBy(desc(serialDiscrepancies.createdAt))
-    .all();
+    .orderBy(desc(serialDiscrepancies.createdAt));
 
   // Enrich each discrepancy with expected serial info
-  const enriched = allDiscrepancies.map((disc) => {
+  const enriched = await Promise.all(allDiscrepancies.map(async (disc) => {
     // Find expected serialized items matching itemCode + binNumber in this event
-    const expectedItems = db
+    const expectedItems = await db
       .select({
         id: items.id,
         serialNumber: items.serialNumber,
@@ -46,16 +45,14 @@ export async function GET(request: NextRequest) {
           eq(items.isSerialized, true),
           ...(disc.binNumber ? [eq(items.binNumber, disc.binNumber)] : [])
         )
-      )
-      .all();
+      );
 
     // Check count status for each expected serial
-    const expectedSerials = expectedItems.map((item) => {
-      const count = db
+    const expectedSerials = await Promise.all(expectedItems.map(async (item) => {
+      const [count] = await db
         .select({ id: counts.id, countedQty: counts.countedQty })
         .from(counts)
-        .where(and(eq(counts.itemId, item.id), eq(counts.eventId, user.eventId)))
-        .get();
+        .where(and(eq(counts.itemId, item.id), eq(counts.eventId, user.eventId)));
 
       let status: "found" | "not_found" | "uncounted";
       if (!count) {
@@ -71,7 +68,7 @@ export async function GET(request: NextRequest) {
         serialNumber: item.serialNumber,
         status,
       };
-    });
+    }));
 
     return {
       id: disc.id,
@@ -87,7 +84,7 @@ export async function GET(request: NextRequest) {
       teamName: disc.teamName,
       teamId: disc.teamId,
     };
-  });
+  }));
 
   return NextResponse.json({ discrepancies: enriched });
 }
@@ -98,7 +95,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -127,18 +124,16 @@ export async function PATCH(request: NextRequest) {
       }
 
       // Get old value for audit
-      const oldDisc = db
+      const [oldDisc] = await db
         .select({ unknownSerials: serialDiscrepancies.unknownSerials })
         .from(serialDiscrepancies)
-        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
-        .get();
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
 
-      db.update(serialDiscrepancies)
+      await db.update(serialDiscrepancies)
         .set({ unknownSerials: JSON.stringify(unknownSerials) })
-        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
-        .run();
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
 
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -148,8 +143,7 @@ export async function PATCH(request: NextRequest) {
           recordId: discrepancyId,
           oldValue: oldDisc?.unknownSerials ?? null,
           newValue: JSON.stringify(unknownSerials),
-        })
-        .run();
+        });
 
       return NextResponse.json({ success: true });
     }
@@ -168,11 +162,10 @@ export async function PATCH(request: NextRequest) {
       }
 
       // Look up the item to get onHand and avgCost for variance calc
-      const item = db
+      const [item] = await db
         .select()
         .from(items)
-        .where(and(eq(items.id, itemId), eq(items.eventId, user.eventId)))
-        .get();
+        .where(and(eq(items.id, itemId), eq(items.eventId, user.eventId)));
 
       if (!item) {
         return NextResponse.json(
@@ -188,15 +181,14 @@ export async function PATCH(request: NextRequest) {
       const isMatch = variance === 0;
 
       // Check if count already exists
-      const existingCount = db
+      const [existingCount] = await db
         .select()
         .from(counts)
-        .where(and(eq(counts.itemId, itemId), eq(counts.eventId, user.eventId)))
-        .get();
+        .where(and(eq(counts.itemId, itemId), eq(counts.eventId, user.eventId)));
 
       if (existingCount) {
         const oldCountedQty = existingCount.countedQty;
-        db.update(counts)
+        await db.update(counts)
           .set({
             countedQty,
             variance,
@@ -205,10 +197,9 @@ export async function PATCH(request: NextRequest) {
             countedAt: new Date().toISOString(),
             comment: `Supervisor override: ${newStatus}`,
           })
-          .where(eq(counts.id, existingCount.id))
-          .run();
+          .where(eq(counts.id, existingCount.id));
 
-        db.insert(auditLog)
+        await db.insert(auditLog)
           .values({
             eventId: user.eventId,
             userId: user.id,
@@ -218,8 +209,7 @@ export async function PATCH(request: NextRequest) {
             recordId: existingCount.id,
             oldValue: JSON.stringify({ countedQty: oldCountedQty, serialNumber: item.serialNumber }),
             newValue: JSON.stringify({ countedQty, newStatus, serialNumber: item.serialNumber }),
-          })
-          .run();
+          });
       } else {
         // Insert new count using the item's teamId
         const teamId = item.teamId;
@@ -230,7 +220,7 @@ export async function PATCH(request: NextRequest) {
           );
         }
 
-        const result = db.insert(counts)
+        const [{ id }] = await db.insert(counts)
           .values({
             itemId,
             teamId,
@@ -242,36 +232,34 @@ export async function PATCH(request: NextRequest) {
             comment: `Supervisor override: ${newStatus}`,
             countedAt: new Date().toISOString(),
           })
-          .run();
+          .returning({ id: counts.id });
 
-        db.insert(auditLog)
+        await db.insert(auditLog)
           .values({
             eventId: user.eventId,
             userId: user.id,
             userType: "supervisor",
             action: "serial_override_expected",
             tableName: "counts",
-            recordId: Number(result.lastInsertRowid),
+            recordId: id,
             newValue: JSON.stringify({ countedQty, newStatus, serialNumber: item.serialNumber }),
-          })
-          .run();
+          });
       }
 
       return NextResponse.json({ success: true });
     }
 
     if (effectiveAction === "reopen") {
-      db.update(serialDiscrepancies)
+      await db.update(serialDiscrepancies)
         .set({
           status: "open",
           resolution: null,
           resolvedBy: null,
           resolvedAt: null,
         })
-        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
-        .run();
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
 
-      db.insert(auditLog)
+      await db.insert(auditLog)
         .values({
           eventId: user.eventId,
           userId: user.id,
@@ -279,8 +267,7 @@ export async function PATCH(request: NextRequest) {
           action: "serial_discrepancy_reopened",
           tableName: "serial_discrepancies",
           recordId: discrepancyId,
-        })
-        .run();
+        });
 
       return NextResponse.json({ success: true });
     }
@@ -288,17 +275,16 @@ export async function PATCH(request: NextRequest) {
     // Default: resolve
     const { resolution } = body;
 
-    db.update(serialDiscrepancies)
+    await db.update(serialDiscrepancies)
       .set({
         status: "resolved",
         resolution: resolution || null,
         resolvedBy: user.id,
         resolvedAt: new Date().toISOString(),
       })
-      .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
-      .run();
+      .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
 
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -307,8 +293,7 @@ export async function PATCH(request: NextRequest) {
         tableName: "serial_discrepancies",
         recordId: discrepancyId,
         newValue: JSON.stringify({ resolution: resolution || null }),
-      })
-      .run();
+      });
 
     return NextResponse.json({ success: true });
   } catch (error) {

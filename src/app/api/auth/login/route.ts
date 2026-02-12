@@ -18,17 +18,17 @@ export async function POST(request: NextRequest) {
     // Resolve the event: use provided eventId, or fall back to finding active event
     let event;
     if (eventId) {
-      event = db
+      const [result] = await db
         .select()
         .from(stocktakeEvents)
-        .where(eq(stocktakeEvents.id, Number(eventId)))
-        .get();
+        .where(eq(stocktakeEvents.id, Number(eventId)));
+      event = result;
     } else {
-      event = db
+      const [result] = await db
         .select()
         .from(stocktakeEvents)
-        .where(eq(stocktakeEvents.status, "active"))
-        .get();
+        .where(eq(stocktakeEvents.status, "active"));
+      event = result;
     }
 
     if (!event) {
@@ -39,11 +39,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (type === "team") {
-      const team = db
+      const [team] = await db
         .select()
         .from(teams)
-        .where(and(eq(teams.id, Number(id)), eq(teams.eventId, event.id)))
-        .get();
+        .where(and(eq(teams.id, Number(id)), eq(teams.eventId, event.id)));
 
       if (!team) {
         return NextResponse.json({ error: "Team not found" }, { status: 401 });
@@ -76,7 +75,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (type === "supervisor") {
-      const supervisor = db
+      const [supervisor] = await db
         .select()
         .from(supervisors)
         .where(
@@ -84,8 +83,7 @@ export async function POST(request: NextRequest) {
             eq(supervisors.id, Number(id)),
             eq(supervisors.eventId, event.id)
           )
-        )
-        .get();
+        );
 
       if (!supervisor) {
         return NextResponse.json(

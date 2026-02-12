@@ -32,10 +32,10 @@ export async function GET(request: NextRequest) {
       // Send initial heartbeat
       sendEvent("connected", { time: new Date().toISOString() });
 
-      const interval = setInterval(() => {
+      const interval = setInterval(async () => {
         try {
           // Check for new counts since last check
-          const newCounts = db
+          const newCounts = await db
             .select({
               teamName: teams.name,
               itemCode: items.itemCode,
@@ -54,8 +54,7 @@ export async function GET(request: NextRequest) {
               )
             )
             .orderBy(desc(counts.countedAt))
-            .limit(10)
-            .all();
+            .limit(10);
 
           if (newCounts.length > 0) {
             sendEvent("counts", newCounts);
@@ -63,17 +62,15 @@ export async function GET(request: NextRequest) {
           }
 
           // Overall progress
-          const totalItems = db
+          const [totalItems] = await db
             .select({ count: sql<number>`count(*)` })
             .from(items)
-            .where(eq(items.eventId, eventId))
-            .get();
+            .where(eq(items.eventId, eventId));
 
-          const totalCounted = db
+          const [totalCounted] = await db
             .select({ count: sql<number>`count(*)` })
             .from(counts)
-            .where(eq(counts.eventId, eventId))
-            .get();
+            .where(eq(counts.eventId, eventId));
 
           const total = totalItems?.count || 0;
           const counted = totalCounted?.count || 0;

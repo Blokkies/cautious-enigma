@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const teamQueries = db
+  const teamQueries = await db
     .select({
       id: queries.id,
       queryType: queries.queryType,
@@ -27,15 +27,14 @@ export async function GET(request: NextRequest) {
     .where(
       and(eq(queries.teamId, user.id), eq(queries.eventId, user.eventId))
     )
-    .orderBy(desc(queries.createdAt))
-    .all();
+    .orderBy(desc(queries.createdAt));
 
   // Fetch messages for all queries
   const queryIds = teamQueries.map((q) => q.id);
   const messagesMap: Record<number, { senderType: string; senderName: string; message: string; createdAt: string }[]> = {};
 
   if (queryIds.length > 0) {
-    const allMsgs = db
+    const allMsgs = await db
       .select({
         queryId: queryMessages.queryId,
         senderType: queryMessages.senderType,
@@ -45,8 +44,7 @@ export async function GET(request: NextRequest) {
       })
       .from(queryMessages)
       .where(inArray(queryMessages.queryId, queryIds))
-      .orderBy(asc(queryMessages.createdAt))
-      .all();
+      .orderBy(asc(queryMessages.createdAt));
 
     // Look up supervisor names for supervisor messages
     const supervisorIds = Array.from(new Set(
@@ -54,11 +52,10 @@ export async function GET(request: NextRequest) {
     ));
     const supervisorNames: Record<number, string> = {};
     if (supervisorIds.length > 0) {
-      const sups = db
+      const sups = await db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
-        .all();
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)));
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
       }
@@ -92,7 +89,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -110,7 +107,7 @@ export async function POST(request: NextRequest) {
     // If itemId is an item code string, look it up
     let resolvedItemId: number | null = null;
     if (itemId) {
-      const item = db
+      const [item] = await db
         .select({ id: items.id })
         .from(items)
         .where(
@@ -118,12 +115,11 @@ export async function POST(request: NextRequest) {
             eq(items.itemCode, String(itemId)),
             eq(items.eventId, user.eventId)
           )
-        )
-        .get();
+        );
       resolvedItemId = item?.id || null;
     }
 
-    const result = db
+    const [{ id }] = await db
       .insert(queries)
       .values({
         eventId: user.eventId,
@@ -134,11 +130,11 @@ export async function POST(request: NextRequest) {
         message,
         status: "open",
       })
-      .run();
+      .returning({ id: queries.id });
 
     return NextResponse.json({
       success: true,
-      id: Number(result.lastInsertRowid),
+      id,
     });
   } catch (error) {
     console.error("Query creation error:", error);
@@ -156,7 +152,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -172,13 +168,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Verify the query belongs to this team and is open
-    const query = db
+    const [query] = await db
       .select({ id: queries.id, teamId: queries.teamId, status: queries.status })
       .from(queries)
       .where(
         and(eq(queries.id, queryId), eq(queries.eventId, user.eventId))
-      )
-      .get();
+      );
 
     if (!query || query.teamId !== user.id) {
       return NextResponse.json({ error: "Query not found" }, { status: 404 });
@@ -191,16 +186,15 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    db.insert(queryMessages)
+    await db.insert(queryMessages)
       .values({
         queryId,
         senderType: "team",
         senderId: user.id,
         message: message.trim(),
-      })
-      .run();
+      });
 
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -209,8 +203,7 @@ export async function PATCH(request: NextRequest) {
         tableName: "query_messages",
         recordId: queryId,
         newValue: JSON.stringify({ message: message.trim() }),
-      })
-      .run();
+      });
 
     return NextResponse.json({ success: true });
   } catch (error) {

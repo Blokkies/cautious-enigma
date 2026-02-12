@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Get all items assigned to this team with their count status
-  const teamItems = db
+  const teamItems = await db
     .select({
       id: items.id,
       itemCode: items.itemCode,
@@ -42,8 +42,7 @@ export async function GET(request: NextRequest) {
     .where(
       and(eq(items.eventId, user.eventId), eq(items.teamId, user.id))
     )
-    .orderBy(items.binNumber, items.itemCode)
-    .all();
+    .orderBy(items.binNumber, items.itemCode);
 
   // Group by bin number
   const groupedByBin: Record<
@@ -65,7 +64,7 @@ export async function GET(request: NextRequest) {
   const progressPercent = total > 0 ? Math.round((counted / total) * 100) : 0;
 
   // Fetch verification assignments for this team
-  const verificationItems = db
+  const verificationItems = await db
     .select({
       verificationId: verificationAssignments.id,
       countId: verificationAssignments.countId,
@@ -93,8 +92,7 @@ export async function GET(request: NextRequest) {
         eq(verificationAssignments.status, "pending")
       )
     )
-    .orderBy(items.binNumber, items.itemCode)
-    .all();
+    .orderBy(items.binNumber, items.itemCode);
 
   return NextResponse.json({
     items: teamItems,

@@ -1,27 +1,27 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, serial, doublePrecision, boolean } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 // ─── Stocktake Events ───────────────────────────────────────────────────────
-export const stocktakeEvents = sqliteTable("stocktake_events", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const stocktakeEvents = pgTable("stocktake_events", {
+  id: serial("id").primaryKey(),
   name: text("name").notNull(),
   location: text("location"),
   startDate: text("start_date"),
   endDate: text("end_date"),
-  status: text("status", { enum: ["setup", "active", "completed", "locked"] })
+  status: text("status")
     .notNull()
     .default("setup"),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
   updatedAt: text("updated_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Teams ──────────────────────────────────────────────────────────────────
-export const teams = sqliteTable("teams", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const teams = pgTable("teams", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -31,12 +31,12 @@ export const teams = sqliteTable("teams", {
   pinHash: text("pin_hash").notNull(),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Supervisors ────────────────────────────────────────────────────────────
-export const supervisors = sqliteTable("supervisors", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const supervisors = pgTable("supervisors", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -45,12 +45,12 @@ export const supervisors = sqliteTable("supervisors", {
   role: text("role").default("supervisor"),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Items (imported from NetSuite) ─────────────────────────────────────────
-export const items = sqliteTable("items", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const items = pgTable("items", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -62,21 +62,21 @@ export const items = sqliteTable("items", {
   binNumber: text("bin_number"),
   warehouse: text("warehouse"),
   division: text("division"),
-  onHand: real("on_hand").default(0),
-  avgCost: real("avg_cost").default(0),
-  totalValue: real("total_value").default(0),
+  onHand: doublePrecision("on_hand").default(0),
+  avgCost: doublePrecision("avg_cost").default(0),
+  totalValue: doublePrecision("total_value").default(0),
   stockStatus: text("stock_status"),
   serialNumber: text("serial_number"),
-  isSerialized: integer("is_serialized", { mode: "boolean" }).default(false),
+  isSerialized: boolean("is_serialized").default(false),
   teamId: integer("team_id").references(() => teams.id),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Team Assignments (filter rules for bulk assignment) ────────────────────
-export const teamAssignments = sqliteTable("team_assignments", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const teamAssignments = pgTable("team_assignments", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -87,12 +87,12 @@ export const teamAssignments = sqliteTable("team_assignments", {
   filterValue: text("filter_value").notNull(),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Verification Assignments ────────────────────────────────────────────────
-export const verificationAssignments = sqliteTable("verification_assignments", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const verificationAssignments = pgTable("verification_assignments", {
+  id: serial("id").primaryKey(),
   countId: integer("count_id")
     .notNull()
     .references(() => counts.id),
@@ -108,18 +108,18 @@ export const verificationAssignments = sqliteTable("verification_assignments", {
   assignedBy: integer("assigned_by")
     .notNull()
     .references(() => supervisors.id),
-  status: text("status", { enum: ["pending", "completed", "accepted"] })
+  status: text("status")
     .notNull()
     .default("pending"),
   assignedAt: text("assigned_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
   completedAt: text("completed_at"),
 });
 
 // ─── Counts ─────────────────────────────────────────────────────────────────
-export const counts = sqliteTable("counts", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const counts = pgTable("counts", {
+  id: serial("id").primaryKey(),
   itemId: integer("item_id")
     .notNull()
     .references(() => items.id),
@@ -129,28 +129,26 @@ export const counts = sqliteTable("counts", {
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
-  countedQty: real("counted_qty").notNull(),
-  variance: real("variance").default(0),
-  varianceValue: real("variance_value").default(0),
-  isMatch: integer("is_match", { mode: "boolean" }).default(false),
-  checkStatus: text("check_status", {
-    enum: ["pending", "accepted", "recounted", "queried"],
-  }).default("pending"),
+  countedQty: doublePrecision("counted_qty").notNull(),
+  variance: doublePrecision("variance").default(0),
+  varianceValue: doublePrecision("variance_value").default(0),
+  isMatch: boolean("is_match").default(false),
+  checkStatus: text("check_status").default("pending"),
   comment: text("comment"),
   countedAt: text("counted_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
   syncedAt: text("synced_at"),
   clientId: text("client_id"), // for offline sync dedup
-  countType: text("count_type", { enum: ["initial", "verification"] })
+  countType: text("count_type")
     .notNull()
     .default("initial"),
   verificationId: integer("verification_id"),
 });
 
 // ─── Queries (team-to-supervisor communication) ─────────────────────────────
-export const queries = sqliteTable("queries", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const queries = pgTable("queries", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -159,39 +157,37 @@ export const queries = sqliteTable("queries", {
     .references(() => teams.id),
   itemId: integer("item_id").references(() => items.id),
   itemCode: text("item_code"),
-  queryType: text("query_type", {
-    enum: ["missing_item", "damaged", "wrong_location", "quantity_question", "other"],
-  }).notNull(),
+  queryType: text("query_type").notNull(),
   message: text("message").notNull(),
   response: text("response"),
   respondedBy: integer("responded_by").references(() => supervisors.id),
   teamReply: text("team_reply"),
-  status: text("status", { enum: ["open", "resolved", "escalated"] })
+  status: text("status")
     .notNull()
     .default("open"),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
   resolvedAt: text("resolved_at"),
 });
 
 // ─── Query Messages (threaded conversation) ─────────────────────────────────
-export const queryMessages = sqliteTable("query_messages", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const queryMessages = pgTable("query_messages", {
+  id: serial("id").primaryKey(),
   queryId: integer("query_id")
     .notNull()
     .references(() => queries.id),
-  senderType: text("sender_type", { enum: ["team", "supervisor"] }).notNull(),
+  senderType: text("sender_type").notNull(),
   senderId: integer("sender_id").notNull(),
   message: text("message").notNull(),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Breakdowns (stock movements during count) ─────────────────────────────
-export const breakdowns = sqliteTable("breakdowns", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const breakdowns = pgTable("breakdowns", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -201,52 +197,50 @@ export const breakdowns = sqliteTable("breakdowns", {
   itemId: integer("item_id").references(() => items.id),
   itemCode: text("item_code"),
   clientName: text("client_name"),
-  quantity: real("quantity").notNull(),
+  quantity: doublePrecision("quantity").notNull(),
   poNumber: text("po_number"),
   reason: text("reason"),
-  approvalStatus: text("approval_status", {
-    enum: ["pending", "approved", "rejected"],
-  })
+  approvalStatus: text("approval_status")
     .notNull()
     .default("pending"),
   approvedBy: integer("approved_by").references(() => supervisors.id),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
   resolvedAt: text("resolved_at"),
 });
 
 // ─── Breakdown Messages ─────────────────────────────────────────────────────
-export const breakdownMessages = sqliteTable("breakdown_messages", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const breakdownMessages = pgTable("breakdown_messages", {
+  id: serial("id").primaryKey(),
   breakdownId: integer("breakdown_id")
     .notNull()
     .references(() => breakdowns.id),
-  senderType: text("sender_type", { enum: ["team", "supervisor"] }).notNull(),
+  senderType: text("sender_type").notNull(),
   senderId: integer("sender_id").notNull(),
   message: text("message").notNull(),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Admins ─────────────────────────────────────────────────────────────────
-export const admins = sqliteTable("admins", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const admins = pgTable("admins", {
+  id: serial("id").primaryKey(),
   name: text("name").notNull(),
   passwordHash: text("password_hash").notNull(),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
   createdBy: integer("created_by"),
 });
 
 // ─── Audit Log ──────────────────────────────────────────────────────────────
-export const auditLog = sqliteTable("audit_log", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const auditLog = pgTable("audit_log", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id").references(() => stocktakeEvents.id),
   userId: integer("user_id"),
-  userType: text("user_type", { enum: ["team", "supervisor", "admin"] }),
+  userType: text("user_type"),
   action: text("action").notNull(),
   tableName: text("table_name"),
   recordId: integer("record_id"),
@@ -254,12 +248,12 @@ export const auditLog = sqliteTable("audit_log", {
   newValue: text("new_value"),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Serial Discrepancies ───────────────────────────────────────────────
-export const serialDiscrepancies = sqliteTable("serial_discrepancies", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const serialDiscrepancies = pgTable("serial_discrepancies", {
+  id: serial("id").primaryKey(),
   eventId: integer("event_id")
     .notNull()
     .references(() => stocktakeEvents.id),
@@ -270,7 +264,7 @@ export const serialDiscrepancies = sqliteTable("serial_discrepancies", {
   description: text("description"),
   binNumber: text("bin_number"),
   unknownSerials: text("unknown_serials").notNull(),
-  status: text("status", { enum: ["open", "resolved"] })
+  status: text("status")
     .notNull()
     .default("open"),
   resolution: text("resolution"),
@@ -278,7 +272,7 @@ export const serialDiscrepancies = sqliteTable("serial_discrepancies", {
   resolvedAt: text("resolved_at"),
   createdAt: text("created_at")
     .notNull()
-    .default(sql`(datetime('now'))`),
+    .default(sql`now()`),
 });
 
 // ─── Type exports ───────────────────────────────────────────────────────────

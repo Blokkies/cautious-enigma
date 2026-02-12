@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, RotateCcw } from "lucide-react";
+import { MessageSquare, RotateCcw, ChevronRight, ChevronDown } from "lucide-react";
 import { SuccessFlash } from "./success-flash";
 
 export interface CountItem {
@@ -447,6 +447,220 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
           <span className="font-semibold">{item.countedQty ?? "—"}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+// --- Serialized group display for review state ---
+
+export interface ReviewDisplayRow {
+  type: "single" | "serialized-group";
+  item?: CountItem;
+  itemCode?: string;
+  description?: string | null;
+  items?: CountItem[];
+  totalOnHand?: number;
+  totalCounted?: number;
+  totalVariance?: number;
+  foundCount?: number;
+  notFoundCount?: number;
+  pendingCount?: number;
+}
+
+export function groupReviewItems(items: CountItem[]): ReviewDisplayRow[] {
+  const groupMap = new Map<string, { firstIndex: number; items: CountItem[] }>();
+  const result: ReviewDisplayRow[] = [];
+  const usedKeys = new Set<string>();
+
+  // First pass: collect serialized items by itemCode
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const isSerialized = item.isSerialized === true || item.isSerialized === 1;
+    if (!isSerialized) continue;
+
+    const key = item.itemCode;
+    if (!groupMap.has(key)) {
+      groupMap.set(key, { firstIndex: i, items: [] });
+    }
+    groupMap.get(key)!.items.push(item);
+  }
+
+  // Second pass: build result
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const isSerialized = item.isSerialized === true || item.isSerialized === 1;
+
+    if (!isSerialized) {
+      result.push({ type: "single", item });
+      continue;
+    }
+
+    const key = item.itemCode;
+    if (usedKeys.has(key)) continue;
+    usedKeys.add(key);
+
+    const group = groupMap.get(key)!;
+    if (group.items.length === 1) {
+      result.push({ type: "single", item: group.items[0] });
+      continue;
+    }
+
+    let totalOnHand = 0;
+    let totalCounted = 0;
+    let totalVariance = 0;
+    let foundCount = 0;
+    let notFoundCount = 0;
+    let pendingCount = 0;
+
+    for (const gi of group.items) {
+      totalOnHand += gi.onHand ?? 0;
+      if (gi.countId !== null) {
+        totalCounted += gi.countedQty ?? 0;
+        totalVariance += gi.variance ?? 0;
+        if ((gi.countedQty ?? 0) > 0) foundCount++;
+        else notFoundCount++;
+      } else {
+        pendingCount++;
+      }
+    }
+
+    result.push({
+      type: "serialized-group",
+      itemCode: group.items[0].itemCode,
+      description: group.items[0].description,
+      items: group.items,
+      totalOnHand,
+      totalCounted,
+      totalVariance,
+      foundCount,
+      notFoundCount,
+      pendingCount,
+    });
+  }
+
+  return result;
+}
+
+interface CountedSerialGroupRowProps {
+  row: ReviewDisplayRow & { type: "serialized-group" };
+  onRecount: (itemId: number) => void;
+}
+
+export function CountedSerialGroupRow({ row, onRecount }: CountedSerialGroupRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const totalItems = row.items!.length;
+  const totalVariance = row.totalVariance ?? 0;
+  const hasVariance = totalVariance !== 0;
+  const allCounted = (row.pendingCount ?? 0) === 0;
+
+  return (
+    <div className="border-b last:border-b-0">
+      {/* Collapsed header */}
+      <div
+        className={`px-4 py-3 cursor-pointer hover:bg-purple-50/50 ${hasVariance ? "bg-red-50/20" : ""}`}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 text-purple-600 flex-shrink-0" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-purple-600 flex-shrink-0" />
+          )}
+          <span className="font-mono font-bold text-sm">{row.itemCode}</span>
+          <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-[10px]">
+            {totalItems} serials
+          </Badge>
+          <div className="flex-1" />
+          {allCounted ? (
+            <Badge
+              className={`text-xs ${
+                hasVariance
+                  ? Math.abs(totalVariance) > 5
+                    ? "bg-red-100 text-red-800 border-red-300"
+                    : "bg-amber-100 text-amber-800 border-amber-300"
+                  : "bg-green-100 text-green-800 border-green-300"
+              }`}
+            >
+              {hasVariance ? `${totalVariance > 0 ? "+" : ""}${totalVariance}` : "All Match"}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">
+              {row.pendingCount} pending
+            </Badge>
+          )}
+        </div>
+        {row.description && (
+          <div className="text-sm text-muted-foreground leading-snug mb-1 ml-6">
+            {row.description}
+          </div>
+        )}
+        <div className="flex items-center gap-4 text-sm ml-6">
+          {(row.foundCount ?? 0) > 0 && (
+            <span className="text-green-600 text-xs">{row.foundCount} found</span>
+          )}
+          {(row.notFoundCount ?? 0) > 0 && (
+            <span className="text-red-600 text-xs">{row.notFoundCount} not found</span>
+          )}
+          {(row.pendingCount ?? 0) > 0 && (
+            <span className="text-muted-foreground text-xs">{row.pendingCount} pending</span>
+          )}
+        </div>
+      </div>
+
+      {/* Expanded sub-rows */}
+      {expanded && row.items!.map((item) => {
+        const variance = item.variance ?? 0;
+        const isCounted = item.countId !== null;
+        const isMatch = variance === 0 && isCounted;
+
+        return (
+          <div
+            key={item.id}
+            className={`px-4 py-2 border-t border-dashed ml-6 ${
+              !isCounted ? "bg-amber-50/30" : isMatch ? "bg-purple-50/10" : "bg-red-50/20"
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-0.5">
+              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-[10px] font-mono">
+                S/N: {item.serialNumber || "—"}
+              </Badge>
+              <div className="flex-1" />
+              {isCounted ? (
+                <Badge
+                  className={`text-xs ${
+                    isMatch
+                      ? "bg-green-100 text-green-800 border-green-300"
+                      : "bg-red-100 text-red-800 border-red-300"
+                  }`}
+                >
+                  {isMatch ? "Found" : "Not Found"}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">
+                  Pending
+                </Badge>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRecount(item.id);
+                }}
+              >
+                <RotateCcw className="h-3 w-3 mr-1" />
+                Recount
+              </Button>
+            </div>
+            <div className="flex items-center gap-4 text-xs">
+              <span className="text-muted-foreground">On Hand: <span className="font-semibold text-foreground">{item.onHand ?? 0}</span></span>
+              <span className="text-muted-foreground">→</span>
+              <span className="text-muted-foreground">Counted: <span className="font-semibold text-foreground">{item.countedQty ?? "—"}</span></span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

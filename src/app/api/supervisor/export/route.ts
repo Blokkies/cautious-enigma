@@ -28,21 +28,20 @@ export async function GET(request: NextRequest) {
   // Admin has eventId=0, find the latest event
   if (!eventId || eventId === 0) {
     const { stocktakeEvents } = await import("@/lib/db/schema");
-    const latest = db
+    const [latest] = await db
       .select()
       .from(stocktakeEvents)
       .orderBy(sql`id DESC`)
-      .limit(1)
-      .get();
+      .limit(1);
     if (latest) eventId = latest.id;
   }
 
   let data: Record<string, unknown>[];
 
   if (type === "serials") {
-    data = buildSerialExport(eventId);
+    data = await buildSerialExport(eventId);
   } else if (type === "variances") {
-    data = db
+    data = await db
       .select({
         "Item Code": items.itemCode,
         "Description": items.description,
@@ -66,11 +65,10 @@ export async function GET(request: NextRequest) {
       .innerJoin(counts, and(latestCountJoin(eventId), eq(counts.isMatch, false)))
       .leftJoin(teams, eq(items.teamId, teams.id))
       .where(eq(items.eventId, eventId))
-      .orderBy(sql`abs(${counts.varianceValue}) DESC`)
-      .all();
+      .orderBy(sql`abs(${counts.varianceValue}) DESC`);
   } else {
     // Full export - all items with their latest count
-    const itemRows = db
+    const itemRows = await db
       .select({
         "Item Code": items.itemCode,
         "Description": items.description,
@@ -96,11 +94,10 @@ export async function GET(request: NextRequest) {
       .leftJoin(counts, latestCountJoin(eventId))
       .leftJoin(teams, eq(items.teamId, teams.id))
       .where(eq(items.eventId, eventId))
-      .orderBy(items.binNumber, items.itemCode)
-      .all();
+      .orderBy(items.binNumber, items.itemCode);
 
     // Append unknown serials from discrepancies
-    const discRows = db
+    const discRows = await db
       .select({
         itemCode: serialDiscrepancies.itemCode,
         description: serialDiscrepancies.description,
@@ -110,8 +107,7 @@ export async function GET(request: NextRequest) {
       })
       .from(serialDiscrepancies)
       .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
-      .where(eq(serialDiscrepancies.eventId, eventId))
-      .all();
+      .where(eq(serialDiscrepancies.eventId, eventId));
 
     const unknownRows: Record<string, unknown>[] = [];
     for (const disc of discRows) {
@@ -202,9 +198,9 @@ export async function GET(request: NextRequest) {
   });
 }
 
-function buildSerialExport(eventId: number): Record<string, unknown>[] {
+async function buildSerialExport(eventId: number): Promise<Record<string, unknown>[]> {
   // Get all expected serialized items with their latest count and team
-  const expectedRows = db
+  const expectedRows = await db
     .select({
       itemCode: items.itemCode,
       description: items.description,
@@ -218,11 +214,10 @@ function buildSerialExport(eventId: number): Record<string, unknown>[] {
     .leftJoin(counts, latestCountJoin(eventId))
     .leftJoin(teams, eq(items.teamId, teams.id))
     .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true)))
-    .orderBy(items.itemCode, items.binNumber, items.serialNumber)
-    .all();
+    .orderBy(items.itemCode, items.binNumber, items.serialNumber);
 
   // Get all serial discrepancies for unknown serials
-  const discrepancyRows = db
+  const discrepancyRows = await db
     .select({
       itemCode: serialDiscrepancies.itemCode,
       description: serialDiscrepancies.description,
@@ -234,8 +229,7 @@ function buildSerialExport(eventId: number): Record<string, unknown>[] {
     })
     .from(serialDiscrepancies)
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
-    .where(eq(serialDiscrepancies.eventId, eventId))
-    .all();
+    .where(eq(serialDiscrepancies.eventId, eventId));
 
   const rows: Record<string, unknown>[] = [];
 

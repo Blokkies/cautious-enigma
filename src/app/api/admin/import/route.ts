@@ -18,11 +18,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify event exists and is in setup status
-    const event = db
+    const events = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, Number(eventId)))
-      .get();
+      .where(eq(stocktakeEvents.id, Number(eventId)));
+
+    const [event] = events;
 
     if (!event) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
@@ -51,13 +52,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Clear existing items for this event
-    db.delete(items).where(eq(items.eventId, Number(eventId))).run();
+    await db.delete(items).where(eq(items.eventId, Number(eventId)));
 
     // Batch insert items
     const BATCH_SIZE = 500;
     for (let i = 0; i < parsed.items.length; i += BATCH_SIZE) {
       const batch = parsed.items.slice(i, i + BATCH_SIZE);
-      db.insert(items)
+      await db.insert(items)
         .values(
           batch.map((item) => ({
             eventId: Number(eventId),
@@ -76,34 +77,29 @@ export async function POST(request: NextRequest) {
             serialNumber: item.serialNumber || null,
             isSerialized: !!item.serialNumber,
           }))
-        )
-        .run();
+        );
     }
 
     // Get import summary
-    const totalImported = db
+    const [totalImported] = await db
       .select({ count: sql<number>`count(*)` })
       .from(items)
-      .where(eq(items.eventId, Number(eventId)))
-      .get();
+      .where(eq(items.eventId, Number(eventId)));
 
-    const uniqueBins = db
+    const [uniqueBins] = await db
       .select({ count: sql<number>`count(DISTINCT bin_number)` })
       .from(items)
-      .where(eq(items.eventId, Number(eventId)))
-      .get();
+      .where(eq(items.eventId, Number(eventId)));
 
-    const uniqueBrands = db
+    const [uniqueBrands] = await db
       .select({ count: sql<number>`count(DISTINCT brand)` })
       .from(items)
-      .where(eq(items.eventId, Number(eventId)))
-      .get();
+      .where(eq(items.eventId, Number(eventId)));
 
-    const totalValue = db
+    const [totalValue] = await db
       .select({ total: sql<number>`sum(total_value)` })
       .from(items)
-      .where(eq(items.eventId, Number(eventId)))
-      .get();
+      .where(eq(items.eventId, Number(eventId)));
 
     return NextResponse.json({
       success: true,

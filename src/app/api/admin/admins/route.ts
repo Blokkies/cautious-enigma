@@ -18,14 +18,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const allAdmins = db
+  const allAdmins = await db
     .select({
       id: admins.id,
       name: admins.name,
       createdAt: admins.createdAt,
     })
-    .from(admins)
-    .all();
+    .from(admins);
 
   return NextResponse.json({ admins: allAdmins });
 }
@@ -49,14 +48,14 @@ export async function POST(request: NextRequest) {
     }
 
     const hash = bcrypt.hashSync(password, 10);
-    const result = db
+    const [result] = await db
       .insert(admins)
       .values({ name, passwordHash: hash, createdBy: user.id })
-      .run();
+      .returning({ id: admins.id });
 
     return NextResponse.json({
       success: true,
-      admin: { id: Number(result.lastInsertRowid), name },
+      admin: { id: result.id, name },
     });
   } catch (error) {
     console.error("Create admin error:", error);
@@ -84,17 +83,16 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Atomic check-and-delete inside a transaction to prevent race conditions
-    const result = db.transaction((tx) => {
-      const count = tx
+    const result = await db.transaction(async (tx) => {
+      const [count] = await tx
         .select({ count: sql<number>`count(*)` })
-        .from(admins)
-        .get();
+        .from(admins);
 
       if ((count?.count || 0) <= 1) {
         return { error: "Cannot delete the last admin" } as const;
       }
 
-      tx.delete(admins).where(eq(admins.id, id)).run();
+      await tx.delete(admins).where(eq(admins.id, id));
       return { success: true } as const;
     });
 

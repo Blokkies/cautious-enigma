@@ -1,52 +1,50 @@
-import Database from "better-sqlite3";
+import postgres from "postgres";
 import bcrypt from "bcryptjs";
-import path from "path";
-import fs from "fs";
+import dotenv from "dotenv";
 
-const DB_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DB_DIR, "stocktake.db");
+dotenv.config({ path: ".env.local" });
 
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+const connectionString = process.env.DATABASE_URL!;
+if (!connectionString) {
+  console.error("DATABASE_URL not set in .env.local");
+  process.exit(1);
 }
 
-const sqlite = new Database(DB_PATH);
-sqlite.pragma("journal_mode = WAL");
-sqlite.pragma("foreign_keys = ON");
+const sql = postgres(connectionString, { prepare: false });
 
 const migration = `
 CREATE TABLE IF NOT EXISTS stocktake_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   location TEXT,
   start_date TEXT,
   end_date TEXT,
   status TEXT NOT NULL DEFAULT 'setup' CHECK(status IN ('setup','active','completed','locked')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now(),
+  updated_at TEXT NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS teams (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   name TEXT NOT NULL,
   member1 TEXT,
   member2 TEXT,
   pin_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS supervisors (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   name TEXT NOT NULL,
   pin_hash TEXT NOT NULL,
   role TEXT DEFAULT 'supervisor',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   internal_id TEXT,
   item_code TEXT NOT NULL,
@@ -56,92 +54,115 @@ CREATE TABLE IF NOT EXISTS items (
   bin_number TEXT,
   warehouse TEXT,
   division TEXT,
-  on_hand REAL DEFAULT 0,
-  avg_cost REAL DEFAULT 0,
-  total_value REAL DEFAULT 0,
+  on_hand DOUBLE PRECISION DEFAULT 0,
+  avg_cost DOUBLE PRECISION DEFAULT 0,
+  total_value DOUBLE PRECISION DEFAULT 0,
   stock_status TEXT,
   serial_number TEXT,
-  is_serialized INTEGER DEFAULT 0,
+  is_serialized BOOLEAN DEFAULT FALSE,
   team_id INTEGER REFERENCES teams(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS team_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   team_id INTEGER NOT NULL REFERENCES teams(id),
   filter_type TEXT NOT NULL,
   filter_value TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS counts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   item_id INTEGER NOT NULL REFERENCES items(id),
   team_id INTEGER NOT NULL REFERENCES teams(id),
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
-  counted_qty REAL NOT NULL,
-  variance REAL DEFAULT 0,
-  variance_value REAL DEFAULT 0,
-  is_match INTEGER DEFAULT 0,
+  counted_qty DOUBLE PRECISION NOT NULL,
+  variance DOUBLE PRECISION DEFAULT 0,
+  variance_value DOUBLE PRECISION DEFAULT 0,
+  is_match BOOLEAN DEFAULT FALSE,
   check_status TEXT DEFAULT 'pending' CHECK(check_status IN ('pending','accepted','recounted','queried')),
   comment TEXT,
-  counted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  counted_at TEXT NOT NULL DEFAULT now(),
   synced_at TEXT,
-  client_id TEXT
+  client_id TEXT,
+  count_type TEXT NOT NULL DEFAULT 'initial' CHECK(count_type IN ('initial','verification')),
+  verification_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS queries (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   team_id INTEGER NOT NULL REFERENCES teams(id),
   item_id INTEGER REFERENCES items(id),
+  item_code TEXT,
   query_type TEXT NOT NULL CHECK(query_type IN ('missing_item','damaged','wrong_location','quantity_question','other')),
   message TEXT NOT NULL,
   response TEXT,
   responded_by INTEGER REFERENCES supervisors(id),
+  team_reply TEXT,
   status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','escalated')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT now(),
   resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS query_messages (
+  id SERIAL PRIMARY KEY,
+  query_id INTEGER NOT NULL REFERENCES queries(id),
+  sender_type TEXT NOT NULL CHECK(sender_type IN ('team','supervisor')),
+  sender_id INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS breakdowns (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   team_id INTEGER NOT NULL REFERENCES teams(id),
   item_id INTEGER REFERENCES items(id),
+  item_code TEXT,
   client_name TEXT,
-  quantity REAL NOT NULL,
+  quantity DOUBLE PRECISION NOT NULL,
   po_number TEXT,
   reason TEXT,
   approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved','rejected')),
   approved_by INTEGER REFERENCES supervisors(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT now(),
   resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS breakdown_messages (
+  id SERIAL PRIMARY KEY,
+  breakdown_id INTEGER NOT NULL REFERENCES breakdowns(id),
+  sender_type TEXT NOT NULL CHECK(sender_type IN ('team','supervisor')),
+  sender_id INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS admins (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT now(),
   created_by INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS verification_assignments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   count_id INTEGER NOT NULL REFERENCES counts(id),
   item_id INTEGER NOT NULL REFERENCES items(id),
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   assigned_team_id INTEGER NOT NULL REFERENCES teams(id),
   assigned_by INTEGER NOT NULL REFERENCES supervisors(id),
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','completed','accepted')),
-  assigned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  assigned_at TEXT NOT NULL DEFAULT now(),
   completed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER REFERENCES stocktake_events(id),
   user_id INTEGER,
   user_type TEXT CHECK(user_type IN ('team','supervisor','admin')),
@@ -150,11 +171,11 @@ CREATE TABLE IF NOT EXISTS audit_log (
   record_id INTEGER,
   old_value TEXT,
   new_value TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS serial_discrepancies (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
   team_id INTEGER NOT NULL REFERENCES teams(id),
   item_code TEXT NOT NULL,
@@ -165,7 +186,7 @@ CREATE TABLE IF NOT EXISTS serial_discrepancies (
   resolution TEXT,
   resolved_by INTEGER REFERENCES supervisors(id),
   resolved_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT now()
 );
 
 -- Indexes for performance
@@ -174,130 +195,58 @@ CREATE INDEX IF NOT EXISTS idx_items_team ON items(team_id);
 CREATE INDEX IF NOT EXISTS idx_items_bin ON items(bin_number);
 CREATE INDEX IF NOT EXISTS idx_items_brand ON items(brand);
 CREATE INDEX IF NOT EXISTS idx_items_code ON items(item_code);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items(stock_status);
+CREATE INDEX IF NOT EXISTS idx_items_serialized ON items(is_serialized);
+CREATE INDEX IF NOT EXISTS idx_items_warehouse ON items(warehouse);
 CREATE INDEX IF NOT EXISTS idx_counts_item ON counts(item_id);
 CREATE INDEX IF NOT EXISTS idx_counts_team ON counts(team_id);
 CREATE INDEX IF NOT EXISTS idx_counts_event ON counts(event_id);
 CREATE INDEX IF NOT EXISTS idx_counts_client_id ON counts(client_id);
-CREATE TABLE IF NOT EXISTS query_messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  query_id INTEGER NOT NULL REFERENCES queries(id),
-  sender_type TEXT NOT NULL CHECK(sender_type IN ('team','supervisor')),
-  sender_id INTEGER NOT NULL,
-  message TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
+CREATE INDEX IF NOT EXISTS idx_counts_type ON counts(count_type);
+CREATE INDEX IF NOT EXISTS idx_counts_verification ON counts(verification_id);
 CREATE INDEX IF NOT EXISTS idx_queries_event ON queries(event_id);
 CREATE INDEX IF NOT EXISTS idx_queries_team ON queries(team_id);
 CREATE INDEX IF NOT EXISTS idx_query_messages_query ON query_messages(query_id);
-CREATE TABLE IF NOT EXISTS breakdown_messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  breakdown_id INTEGER NOT NULL REFERENCES breakdowns(id),
-  sender_type TEXT NOT NULL CHECK(sender_type IN ('team','supervisor')),
-  sender_id INTEGER NOT NULL,
-  message TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE INDEX IF NOT EXISTS idx_breakdowns_event ON breakdowns(event_id);
 CREATE INDEX IF NOT EXISTS idx_breakdowns_team ON breakdowns(team_id);
 CREATE INDEX IF NOT EXISTS idx_breakdown_messages_breakdown ON breakdown_messages(breakdown_id);
 CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_log(event_id);
+CREATE INDEX IF NOT EXISTS idx_verification_event ON verification_assignments(event_id);
+CREATE INDEX IF NOT EXISTS idx_verification_team ON verification_assignments(assigned_team_id);
+CREATE INDEX IF NOT EXISTS idx_verification_item ON verification_assignments(item_id);
+CREATE INDEX IF NOT EXISTS idx_serial_disc_event ON serial_discrepancies(event_id);
+CREATE INDEX IF NOT EXISTS idx_serial_disc_status ON serial_discrepancies(status);
+CREATE INDEX IF NOT EXISTS idx_serial_disc_item_code ON serial_discrepancies(item_code);
 `;
 
-// Migration for existing databases - add new columns if they don't exist
-const alterStatements = [
-  `ALTER TABLE items ADD COLUMN stock_status TEXT`,
-  `ALTER TABLE items ADD COLUMN serial_number TEXT`,
-  `ALTER TABLE items ADD COLUMN is_serialized INTEGER DEFAULT 0`,
-  `ALTER TABLE items ADD COLUMN internal_id TEXT`,
-  `ALTER TABLE counts ADD COLUMN count_type TEXT NOT NULL DEFAULT 'initial'`,
-  `ALTER TABLE counts ADD COLUMN verification_id INTEGER`,
-  `ALTER TABLE queries ADD COLUMN team_reply TEXT`,
-  `ALTER TABLE queries ADD COLUMN item_code TEXT`,
-  `ALTER TABLE breakdowns ADD COLUMN item_code TEXT`,
-];
+async function migrate() {
+  console.log("Running PostgreSQL migration...");
 
-// Execute all statements
-const statements = migration
-  .split(";")
-  .map((s) => s.trim())
-  .filter((s) => s.length > 0);
+  // Execute all statements
+  const statements = migration
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 
-for (const stmt of statements) {
-  sqlite.exec(stmt + ";");
-}
-
-// Apply ALTER TABLE migrations (ignore errors if columns already exist)
-for (const stmt of alterStatements) {
-  try {
-    sqlite.exec(stmt + ";");
-  } catch {
-    // Column already exists, ignore
+  for (const stmt of statements) {
+    await sql.unsafe(stmt + ";");
   }
-}
 
-// Create indexes that depend on new columns (after ALTER TABLE)
-const postAlterIndexes = [
-  `CREATE INDEX IF NOT EXISTS idx_items_status ON items(stock_status)`,
-  `CREATE INDEX IF NOT EXISTS idx_items_serialized ON items(is_serialized)`,
-  `CREATE INDEX IF NOT EXISTS idx_items_warehouse ON items(warehouse)`,
-  `CREATE INDEX IF NOT EXISTS idx_verification_event ON verification_assignments(event_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_verification_team ON verification_assignments(assigned_team_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_verification_item ON verification_assignments(item_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_counts_type ON counts(count_type)`,
-  `CREATE INDEX IF NOT EXISTS idx_counts_verification ON counts(verification_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_serial_disc_event ON serial_discrepancies(event_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_serial_disc_status ON serial_discrepancies(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_serial_disc_item_code ON serial_discrepancies(item_code)`,
-];
-for (const idx of postAlterIndexes) {
-  try {
-    sqlite.exec(idx + ";");
-  } catch {
-    // ignore
+  // Seed default admin if admins table is empty
+  const result = await sql`SELECT COUNT(*) as count FROM admins`;
+  const adminCount = Number(result[0].count);
+  if (adminCount === 0) {
+    const defaultPassword = process.env.ADMIN_PASSWORD || "admin2026";
+    const hash = bcrypt.hashSync(defaultPassword, 10);
+    await sql`INSERT INTO admins (name, password_hash) VALUES ('Admin', ${hash})`;
+    console.log("Default admin seeded (name: Admin)");
   }
+
+  console.log("Database migration completed successfully!");
+  await sql.end();
 }
 
-// Migrate existing query response/teamReply into query_messages (one-time)
-try {
-  // Migrate supervisor responses that don't have a corresponding message yet
-  sqlite.exec(`
-    INSERT INTO query_messages (query_id, sender_type, sender_id, message, created_at)
-    SELECT q.id, 'supervisor', q.responded_by, q.response, q.created_at
-    FROM queries q
-    WHERE q.response IS NOT NULL
-      AND q.responded_by IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM query_messages qm
-        WHERE qm.query_id = q.id AND qm.sender_type = 'supervisor'
-      );
-  `);
-  // Migrate team replies
-  sqlite.exec(`
-    INSERT INTO query_messages (query_id, sender_type, sender_id, message, created_at)
-    SELECT q.id, 'team', q.team_id, q.team_reply, q.created_at
-    FROM queries q
-    WHERE q.team_reply IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM query_messages qm
-        WHERE qm.query_id = q.id AND qm.sender_type = 'team'
-      );
-  `);
-} catch {
-  // query_messages table may not exist yet on first run before CREATE TABLE
-}
-
-// Seed default admin if admins table is empty
-const adminCount = sqlite.prepare("SELECT COUNT(*) as count FROM admins").get() as { count: number };
-if (adminCount.count === 0) {
-  const defaultPassword = process.env.ADMIN_PASSWORD || "admin2026";
-  const hash = bcrypt.hashSync(defaultPassword, 10);
-  sqlite.prepare("INSERT INTO admins (name, password_hash) VALUES (?, ?)").run("Admin", hash);
-  console.log("Default admin seeded (name: Admin)");
-}
-
-console.log("Database migration completed successfully!");
-console.log(`Database location: ${DB_PATH}`);
-
-sqlite.close();
+migrate().catch((err) => {
+  console.error("Migration failed:", err);
+  process.exit(1);
+});

@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const teamBreakdowns = db
+  const teamBreakdowns = await db
     .select({
       id: breakdowns.id,
       clientName: breakdowns.clientName,
@@ -31,15 +31,14 @@ export async function GET(request: NextRequest) {
         eq(breakdowns.eventId, user.eventId)
       )
     )
-    .orderBy(desc(breakdowns.createdAt))
-    .all();
+    .orderBy(desc(breakdowns.createdAt));
 
   // Fetch messages
   const breakdownIds = teamBreakdowns.map((b) => b.id);
   const messagesMap: Record<number, { senderType: string; senderName: string; message: string; createdAt: string }[]> = {};
 
   if (breakdownIds.length > 0) {
-    const allMsgs = db
+    const allMsgs = await db
       .select({
         breakdownId: breakdownMessages.breakdownId,
         senderType: breakdownMessages.senderType,
@@ -49,19 +48,17 @@ export async function GET(request: NextRequest) {
       })
       .from(breakdownMessages)
       .where(inArray(breakdownMessages.breakdownId, breakdownIds))
-      .orderBy(asc(breakdownMessages.createdAt))
-      .all();
+      .orderBy(asc(breakdownMessages.createdAt));
 
     const supervisorIds = Array.from(new Set(
       allMsgs.filter((m) => m.senderType === "supervisor").map((m) => m.senderId)
     ));
     const supervisorNames: Record<number, string> = {};
     if (supervisorIds.length > 0) {
-      const sups = db
+      const sups = await db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)))
-        .all();
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)));
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
       }
@@ -95,7 +92,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -113,7 +110,7 @@ export async function POST(request: NextRequest) {
 
     let resolvedItemId: number | null = null;
     if (itemCode) {
-      const item = db
+      const [item] = await db
         .select({ id: items.id })
         .from(items)
         .where(
@@ -121,12 +118,11 @@ export async function POST(request: NextRequest) {
             eq(items.itemCode, String(itemCode)),
             eq(items.eventId, user.eventId)
           )
-        )
-        .get();
+        );
       resolvedItemId = item?.id || null;
     }
 
-    const result = db
+    const [{ id }] = await db
       .insert(breakdowns)
       .values({
         eventId: user.eventId,
@@ -138,11 +134,11 @@ export async function POST(request: NextRequest) {
         poNumber: poNumber || null,
         reason: reason || null,
       })
-      .run();
+      .returning({ id: breakdowns.id });
 
     return NextResponse.json({
       success: true,
-      id: Number(result.lastInsertRowid),
+      id,
     });
   } catch (error) {
     console.error("Breakdown creation error:", error);
@@ -160,7 +156,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const lockError = checkEventActive(user.eventId);
+  const lockError = await checkEventActive(user.eventId);
   if (lockError) {
     return NextResponse.json({ error: lockError }, { status: 403 });
   }
@@ -175,28 +171,26 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const breakdown = db
+    const [breakdown] = await db
       .select({ id: breakdowns.id, teamId: breakdowns.teamId })
       .from(breakdowns)
       .where(
         and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId))
-      )
-      .get();
+      );
 
     if (!breakdown || breakdown.teamId !== user.id) {
       return NextResponse.json({ error: "Breakdown not found" }, { status: 404 });
     }
 
-    db.insert(breakdownMessages)
+    await db.insert(breakdownMessages)
       .values({
         breakdownId,
         senderType: "team",
         senderId: user.id,
         message: message.trim(),
-      })
-      .run();
+      });
 
-    db.insert(auditLog)
+    await db.insert(auditLog)
       .values({
         eventId: user.eventId,
         userId: user.id,
@@ -205,8 +199,7 @@ export async function PATCH(request: NextRequest) {
         tableName: "breakdown_messages",
         recordId: breakdownId,
         newValue: JSON.stringify({ message: message.trim() }),
-      })
-      .run();
+      });
 
     return NextResponse.json({ success: true });
   } catch (error) {

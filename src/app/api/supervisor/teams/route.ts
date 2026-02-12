@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const eventTeams = db
+  const eventTeams = await db
     .select({
       id: teams.id,
       name: teams.name,
@@ -18,8 +18,7 @@ export async function GET(request: NextRequest) {
       member2: teams.member2,
     })
     .from(teams)
-    .where(eq(teams.eventId, user.eventId))
-    .all();
+    .where(eq(teams.eventId, user.eventId));
 
   return NextResponse.json({ teams: eventTeams });
 }

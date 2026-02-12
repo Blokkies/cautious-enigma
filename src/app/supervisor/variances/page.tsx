@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck, ChevronRight, ChevronDown } from "lucide-react";
+import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { groupSerializedVariances, type DisplayRow, type SerializedGroupRow } from "@/lib/variance-grouping";
 
@@ -65,6 +65,7 @@ interface Team {
 
 export default function VariancesPage() {
   const [activeVariances, setActiveVariances] = useState<VarianceItem[]>([]);
+  const [acceptedVariances, setAcceptedVariances] = useState<VarianceItem[]>([]);
   const [resolvedVariances, setResolvedVariances] = useState<VarianceItem[]>([]);
   const [activeTotalValue, setActiveTotalValue] = useState(0);
   const [overCount, setOverCount] = useState(0);
@@ -72,6 +73,13 @@ export default function VariancesPage() {
   const [overValue, setOverValue] = useState(0);
   const [underValue, setUnderValue] = useState(0);
   const [netVarianceValue, setNetVarianceValue] = useState(0);
+  // Accepted tab stats
+  const [acceptedTotalValue, setAcceptedTotalValue] = useState(0);
+  const [acceptedOverCount, setAcceptedOverCount] = useState(0);
+  const [acceptedUnderCount, setAcceptedUnderCount] = useState(0);
+  const [acceptedOverValue, setAcceptedOverValue] = useState(0);
+  const [acceptedUnderValue, setAcceptedUnderValue] = useState(0);
+  const [acceptedNetVarianceValue, setAcceptedNetVarianceValue] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<"contains" | "starts" | "exact" | "bin">("contains");
@@ -94,8 +102,9 @@ export default function VariancesPage() {
 
   const loadVariances = useCallback(async () => {
     try {
-      const [activeRes, resolvedRes] = await Promise.all([
+      const [activeRes, acceptedRes, resolvedRes] = await Promise.all([
         fetch("/api/supervisor/variances"),
+        fetch("/api/supervisor/variances?tab=accepted"),
         fetch("/api/supervisor/variances?tab=resolved"),
       ]);
 
@@ -108,6 +117,17 @@ export default function VariancesPage() {
         setOverValue(data.overValue || 0);
         setUnderValue(data.underValue || 0);
         setNetVarianceValue(data.netVarianceValue || 0);
+      }
+
+      if (acceptedRes.ok) {
+        const data = await acceptedRes.json();
+        setAcceptedVariances(data.variances || []);
+        setAcceptedTotalValue(data.totalVarianceValue || 0);
+        setAcceptedOverCount(data.overCount || 0);
+        setAcceptedUnderCount(data.underCount || 0);
+        setAcceptedOverValue(data.overValue || 0);
+        setAcceptedUnderValue(data.underValue || 0);
+        setAcceptedNetVarianceValue(data.netVarianceValue || 0);
       }
 
       if (resolvedRes.ok) {
@@ -155,6 +175,11 @@ export default function VariancesPage() {
       return;
     }
 
+    if (editingItem.isSerialized && newQty !== 0 && newQty !== 1) {
+      toast.error("Serialized items can only be 0 or 1");
+      return;
+    }
+
     if (newQty === editingItem.countedQty) {
       closeEditDialog();
       return;
@@ -180,14 +205,22 @@ export default function VariancesPage() {
 
       const { count } = await res.json();
 
+      const wasAccepted = editingItem.checkStatus === "accepted";
+
       if (count.isMatch) {
-        // Variance resolved — remove from active, add to resolved
-        setActiveVariances((prev) =>
-          prev.filter((v) => v.countId !== editingItem.countId)
-        );
-        setActiveTotalValue(
-          (prev) => prev - Math.abs(editingItem.varianceValue)
-        );
+        // Variance resolved — remove from source list, add to resolved
+        if (wasAccepted) {
+          setAcceptedVariances((prev) =>
+            prev.filter((v) => v.countId !== editingItem.countId)
+          );
+        } else {
+          setActiveVariances((prev) =>
+            prev.filter((v) => v.countId !== editingItem.countId)
+          );
+          setActiveTotalValue(
+            (prev) => prev - Math.abs(editingItem.varianceValue)
+          );
+        }
         setResolvedVariances((prev) => [
           {
             ...editingItem,
@@ -199,9 +232,9 @@ export default function VariancesPage() {
           ...prev,
         ]);
         toast.success(`${editingItem.itemCode} — variance resolved`);
-      } else {
-        // Update row in place
-        setActiveVariances((prev) =>
+      } else if (wasAccepted) {
+        // Editing from accepted tab — update in place in accepted list
+        setAcceptedVariances((prev) =>
           prev.map((v) =>
             v.countId === editingItem.countId
               ? {
@@ -214,12 +247,28 @@ export default function VariancesPage() {
               : v
           )
         );
+        toast.success(
+          `${editingItem.itemCode} count updated to ${count.countedQty}`
+        );
+      } else {
+        // Editing from active tab — moves to accepted (API sets checkStatus=accepted)
+        setActiveVariances((prev) =>
+          prev.filter((v) => v.countId !== editingItem.countId)
+        );
         setActiveTotalValue(
           (prev) =>
-            prev -
-            Math.abs(editingItem.varianceValue) +
-            Math.abs(count.varianceValue)
+            prev - Math.abs(editingItem.varianceValue)
         );
+        setAcceptedVariances((prev) => [
+          {
+            ...editingItem,
+            countedQty: count.countedQty,
+            variance: count.variance,
+            varianceValue: count.varianceValue,
+            checkStatus: "accepted",
+          },
+          ...prev,
+        ]);
         toast.success(
           `${editingItem.itemCode} count updated to ${count.countedQty}`
         );
@@ -400,6 +449,70 @@ export default function VariancesPage() {
     }
   };
 
+  // Accept a variance (move from active to accepted)
+  const handleAcceptVariance = async (v: VarianceItem) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accept_variance", countId: v.countId }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to accept variance");
+        return;
+      }
+
+      // Optimistic move from active to accepted
+      setActiveVariances((prev) =>
+        prev.filter((item) => item.countId !== v.countId)
+      );
+      setAcceptedVariances((prev) => [
+        { ...v, checkStatus: "accepted" },
+        ...prev,
+      ]);
+      toast.success(`${v.itemCode} variance accepted`);
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Reopen a variance (move from accepted back to active)
+  const handleReopenVariance = async (v: VarianceItem) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reopen_variance", countId: v.countId }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to reopen variance");
+        return;
+      }
+
+      // Optimistic move from accepted to active
+      setAcceptedVariances((prev) =>
+        prev.filter((item) => item.countId !== v.countId)
+      );
+      setActiveVariances((prev) => [
+        { ...v, checkStatus: "pending" },
+        ...prev,
+      ]);
+      toast.success(`${v.itemCode} moved back to active`);
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const filterItems = (items: VarianceItem[]) => {
     if (!search) return items;
     const q = search.toLowerCase();
@@ -437,6 +550,7 @@ export default function VariancesPage() {
   };
 
   const filteredActive = filterItems(activeVariances);
+  const filteredAccepted = filterItems(acceptedVariances);
   const filteredResolved = filterItems(resolvedVariances);
 
   // Summary counts for header badges
@@ -477,23 +591,25 @@ export default function VariancesPage() {
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
-            {overCount} over R{overValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-          </Badge>
-          <span className="text-muted-foreground text-xs">·</span>
-          <Badge className="bg-red-100 text-red-800 border-red-300 text-xs">
-            {underCount} under R{underValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-          </Badge>
-          <span className="text-muted-foreground text-xs">·</span>
-          <Badge className={`text-xs ${netVarianceValue >= 0 ? "bg-green-100 text-green-800 border-green-300" : "bg-red-100 text-red-800 border-red-300"}`}>
-            Net: {netVarianceValue >= 0 ? "" : "-"}R{Math.abs(netVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-          </Badge>
-          <span className="text-muted-foreground text-xs">·</span>
-          <Badge variant="destructive" className="text-xs">
-            R{activeTotalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} total
-          </Badge>
-        </div>
+        {activeTab !== "resolved" && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+              {activeTab === "accepted" ? acceptedOverCount : overCount} over R{(activeTab === "accepted" ? acceptedOverValue : overValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </Badge>
+            <span className="text-muted-foreground text-xs">·</span>
+            <Badge className="bg-red-100 text-red-800 border-red-300 text-xs">
+              {activeTab === "accepted" ? acceptedUnderCount : underCount} under R{(activeTab === "accepted" ? acceptedUnderValue : underValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </Badge>
+            <span className="text-muted-foreground text-xs">·</span>
+            <Badge className={`text-xs ${(activeTab === "accepted" ? acceptedNetVarianceValue : netVarianceValue) >= 0 ? "bg-green-100 text-green-800 border-green-300" : "bg-red-100 text-red-800 border-red-300"}`}>
+              Net: {(activeTab === "accepted" ? acceptedNetVarianceValue : netVarianceValue) >= 0 ? "" : "-"}R{Math.abs(activeTab === "accepted" ? acceptedNetVarianceValue : netVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </Badge>
+            <span className="text-muted-foreground text-xs">·</span>
+            <Badge variant="destructive" className="text-xs">
+              R{(activeTab === "accepted" ? acceptedTotalValue : activeTotalValue).toLocaleString(undefined, { maximumFractionDigits: 0 })} total
+            </Badge>
+          </div>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -540,7 +656,10 @@ export default function VariancesPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full">
           <TabsTrigger value="active" className="flex-1">
-            Active Variances ({activeVariances.length})
+            Active ({activeVariances.length})
+          </TabsTrigger>
+          <TabsTrigger value="accepted" className="flex-1">
+            Accepted ({acceptedVariances.length})
           </TabsTrigger>
           <TabsTrigger value="resolved" className="flex-1">
             Resolved ({resolvedVariances.length})
@@ -618,16 +737,38 @@ export default function VariancesPage() {
             }
             showEditButton
             showCheckbox
+            showAcceptButton
             onEdit={openEditDialog}
             selectedCountIds={selectedCountIds}
             onToggleSelect={toggleSelection}
             canSelect={canSelect}
             onAccept={handleAccept}
+            onAcceptVariance={handleAcceptVariance}
             isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
             {filteredActive.length} variance
             {filteredActive.length !== 1 ? "s" : ""}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="accepted">
+          <VarianceTable
+            items={filteredAccepted}
+            emptyMessage={
+              search
+                ? "No matching accepted variances"
+                : "No accepted variances yet"
+            }
+            showEditButton
+            showCheckbox={false}
+            showReopenButton
+            onEdit={openEditDialog}
+            onReopenVariance={handleReopenVariance}
+            isSaving={saving}
+          />
+          <div className="text-sm text-muted-foreground mt-2">
+            {filteredAccepted.length} accepted
           </div>
         </TabsContent>
 
@@ -641,6 +782,7 @@ export default function VariancesPage() {
             }
             showEditButton={false}
             showCheckbox={false}
+            groupsCollapsed
           />
           <div className="text-sm text-muted-foreground mt-2">
             {filteredResolved.length} resolved
@@ -721,18 +863,39 @@ export default function VariancesPage() {
               <div className="space-y-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="edit-qty">New Counted Qty</Label>
-                  <Input
-                    id="edit-qty"
-                    ref={editInputRef}
-                    type="number"
-                    inputMode="decimal"
-                    value={editQty}
-                    onChange={(e) => setEditQty(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") saveEdit();
-                    }}
-                    autoFocus
-                  />
+                  {editingItem.isSerialized ? (
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant={editQty === "0" ? "default" : "outline"}
+                        className={`flex-1 ${editQty === "0" ? "bg-red-600 hover:bg-red-700" : ""}`}
+                        onClick={() => setEditQty("0")}
+                      >
+                        0 — Not Found
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={editQty === "1" ? "default" : "outline"}
+                        className={`flex-1 ${editQty === "1" ? "bg-green-600 hover:bg-green-700" : ""}`}
+                        onClick={() => setEditQty("1")}
+                      >
+                        1 — Found
+                      </Button>
+                    </div>
+                  ) : (
+                    <Input
+                      id="edit-qty"
+                      ref={editInputRef}
+                      type="number"
+                      inputMode="decimal"
+                      value={editQty}
+                      onChange={(e) => setEditQty(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveEdit();
+                      }}
+                      autoFocus
+                    />
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="edit-reason">Reason (optional)</Label>
@@ -863,17 +1026,25 @@ function VarianceTable({
   emptyMessage,
   showEditButton,
   showCheckbox,
+  showAcceptButton,
+  showReopenButton,
+  groupsCollapsed,
   onEdit,
   selectedCountIds,
   onToggleSelect,
   canSelect,
   onAccept,
+  onAcceptVariance,
+  onReopenVariance,
   isSaving,
 }: {
   items: VarianceItem[];
   emptyMessage: string;
   showEditButton: boolean;
   showCheckbox: boolean;
+  showAcceptButton?: boolean;
+  showReopenButton?: boolean;
+  groupsCollapsed?: boolean;
   onEdit?: (item: VarianceItem) => void;
   selectedCountIds?: Set<number>;
   onToggleSelect?: (countId: number) => void;
@@ -882,6 +1053,8 @@ function VarianceTable({
     action: "accept_original" | "accept_verification",
     item: VarianceItem
   ) => void;
+  onAcceptVariance?: (item: VarianceItem) => void;
+  onReopenVariance?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -959,18 +1132,22 @@ function VarianceTable({
                     return renderSingleRow(row.item, {
                       showEditButton,
                       showCheckbox,
+                      showAcceptButton,
+                      showReopenButton,
                       onEdit,
                       selectedCountIds,
                       onToggleSelect,
                       canSelect,
                       onAccept,
+                      onAcceptVariance,
+                      onReopenVariance,
                       isSaving,
                     });
                   }
 
                   // Serialized group
                   const groupKey = `${row.itemCode}::${row.binNumber || ""}`;
-                  const isExpanded = expandedGroups.has(groupKey);
+                  const isExpanded = !groupsCollapsed && expandedGroups.has(groupKey);
                   const selectableInGroup = row.items.filter((i) => canSelect?.(i));
                   const allGroupSelected =
                     selectableInGroup.length > 0 &&
@@ -980,8 +1157,8 @@ function VarianceTable({
                     <React.Fragment key={groupKey}>
                       {/* Group header row */}
                       <TableRow
-                        className="bg-purple-50/60 hover:bg-purple-100/60 cursor-pointer"
-                        onClick={() => toggleGroup(groupKey)}
+                        className={`bg-purple-50/60 ${groupsCollapsed ? "" : "hover:bg-purple-100/60 cursor-pointer"}`}
+                        onClick={groupsCollapsed ? undefined : () => toggleGroup(groupKey)}
                       >
                         {showCheckbox && (
                           <TableCell onClick={(e) => e.stopPropagation()}>
@@ -997,10 +1174,12 @@ function VarianceTable({
                         )}
                         <TableCell className="font-mono text-sm">
                           <div className="flex items-center gap-1.5">
-                            {isExpanded ? (
-                              <ChevronDown className="h-4 w-4 text-purple-600 flex-shrink-0" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4 text-purple-600 flex-shrink-0" />
+                            {!groupsCollapsed && (
+                              isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-purple-600 flex-shrink-0" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-purple-600 flex-shrink-0" />
+                              )
                             )}
                             <span>{row.itemCode}</span>
                             <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-[10px]">
@@ -1058,11 +1237,15 @@ function VarianceTable({
                       {isExpanded && row.items.map((v) => renderSubRow(v, {
                         showEditButton,
                         showCheckbox,
+                        showAcceptButton,
+                        showReopenButton,
                         onEdit,
                         selectedCountIds,
                         onToggleSelect,
                         canSelect,
                         onAccept,
+                        onAcceptVariance,
+                        onReopenVariance,
                         isSaving,
                       }))}
                     </React.Fragment>
@@ -1081,16 +1264,20 @@ function VarianceTable({
 interface RowProps {
   showEditButton: boolean;
   showCheckbox: boolean;
+  showAcceptButton?: boolean;
+  showReopenButton?: boolean;
   onEdit?: (item: VarianceItem) => void;
   selectedCountIds?: Set<number>;
   onToggleSelect?: (countId: number) => void;
   canSelect?: (item: VarianceItem) => boolean;
   onAccept?: (action: "accept_original" | "accept_verification", item: VarianceItem) => void;
+  onAcceptVariance?: (item: VarianceItem) => void;
+  onReopenVariance?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }
 
 function renderSingleRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1211,14 +1398,40 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
       {showEditButton && (
         <TableCell>
           {!v.isUnknownSerial && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => onEdit?.(v)}
-            >
-              Edit
-            </Button>
+            <div className="flex items-center gap-1">
+              {showAcceptButton && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2 text-green-700 border-green-300 hover:bg-green-50"
+                  onClick={() => onAcceptVariance?.(v)}
+                  disabled={isSaving}
+                  title="Accept variance"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {showReopenButton && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2 text-amber-700 border-amber-300 hover:bg-amber-50"
+                  onClick={() => onReopenVariance?.(v)}
+                  disabled={isSaving}
+                  title="Reopen variance"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => onEdit?.(v)}
+              >
+                Edit
+              </Button>
+            </div>
           )}
         </TableCell>
       )}
@@ -1227,7 +1440,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
 }
 
 function renderSubRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1341,14 +1554,40 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
       {showEditButton && (
         <TableCell>
           {!isUnknown && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => onEdit?.(v)}
-            >
-              Edit
-            </Button>
+            <div className="flex items-center gap-1">
+              {showAcceptButton && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2 text-green-700 border-green-300 hover:bg-green-50"
+                  onClick={() => onAcceptVariance?.(v)}
+                  disabled={isSaving}
+                  title="Accept variance"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              {showReopenButton && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2 text-amber-700 border-amber-300 hover:bg-amber-50"
+                  onClick={() => onReopenVariance?.(v)}
+                  disabled={isSaving}
+                  title="Reopen variance"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => onEdit?.(v)}
+              >
+                Edit
+              </Button>
+            </div>
           )}
         </TableCell>
       )}

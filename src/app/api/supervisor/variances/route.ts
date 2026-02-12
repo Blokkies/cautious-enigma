@@ -11,7 +11,6 @@ export async function GET(request: NextRequest) {
   }
 
   const tab = request.nextUrl.searchParams.get("tab");
-  const isResolved = tab === "resolved";
 
   const selectShape = {
     countId: counts.id,
@@ -32,13 +31,24 @@ export async function GET(request: NextRequest) {
     isSerialized: items.isSerialized,
   };
 
-  const whereClause = isResolved
+  // 3-way filter: active (default), accepted, resolved
+  const whereClause = tab === "resolved"
     ? and(
         eq(counts.eventId, user.eventId),
         eq(counts.checkStatus, "accepted"),
         eq(counts.isMatch, true)
       )
-    : and(eq(counts.eventId, user.eventId), eq(counts.isMatch, false));
+    : tab === "accepted"
+      ? and(
+          eq(counts.eventId, user.eventId),
+          eq(counts.isMatch, false),
+          eq(counts.checkStatus, "accepted")
+        )
+      : and(
+          eq(counts.eventId, user.eventId),
+          eq(counts.isMatch, false),
+          sql`${counts.checkStatus} != 'accepted'`
+        );
 
   const variances = db
     .select(selectShape)
@@ -137,7 +147,7 @@ export async function GET(request: NextRequest) {
 
   // For the active tab, include unknown serials from open serial discrepancies as synthetic variance rows.
   // Each unknown serial represents a found item not in the expected list (variance = +1).
-  if (!isResolved) {
+  if (!tab) {
     const openDiscrepancies = db
       .select({
         id: serialDiscrepancies.id,
@@ -323,6 +333,51 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: true, action });
     }
 
+    // Handle accept/reopen variance actions
+    if (action === "accept_variance" || action === "reopen_variance") {
+      if (!countId) {
+        return NextResponse.json(
+          { error: "countId is required" },
+          { status: 400 }
+        );
+      }
+
+      // Verify count belongs to supervisor's event
+      const count = db
+        .select({ id: counts.id, eventId: counts.eventId })
+        .from(counts)
+        .where(eq(counts.id, countId))
+        .get();
+
+      if (!count) {
+        return NextResponse.json({ error: "Count not found" }, { status: 404 });
+      }
+      if (count.eventId !== user.eventId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+      }
+
+      const newStatus = action === "accept_variance" ? "accepted" : "pending";
+
+      db.update(counts)
+        .set({ checkStatus: newStatus })
+        .where(eq(counts.id, countId))
+        .run();
+
+      db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: action === "accept_variance" ? "supervisor_accept_variance" : "supervisor_reopen_variance",
+          tableName: "counts",
+          recordId: countId,
+          newValue: JSON.stringify({ checkStatus: newStatus }),
+        })
+        .run();
+
+      return NextResponse.json({ success: true, action });
+    }
+
     if (countId === undefined || newQty === undefined) {
       return NextResponse.json(
         { error: "countId and newQty are required" },
@@ -339,6 +394,7 @@ export async function PATCH(request: NextRequest) {
         eventId: counts.eventId,
         onHand: items.onHand,
         avgCost: items.avgCost,
+        isSerialized: items.isSerialized,
       })
       .from(counts)
       .innerJoin(items, eq(counts.itemId, items.id))
@@ -352,6 +408,14 @@ export async function PATCH(request: NextRequest) {
     // Verify count belongs to supervisor's event
     if (existing.eventId !== user.eventId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+
+    // Serialized items can only be 0 or 1
+    if (existing.isSerialized && newQty > 1) {
+      return NextResponse.json(
+        { error: "Serialized items can only have a quantity of 0 or 1" },
+        { status: 400 }
+      );
     }
 
     const onHand = existing.onHand || 0;

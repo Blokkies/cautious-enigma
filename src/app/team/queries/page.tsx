@@ -19,7 +19,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Plus, MessageSquare, CheckCircle2, Clock, Send, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, MessageSquare, Send, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { markNotificationSeen } from "@/hooks/use-notifications";
 

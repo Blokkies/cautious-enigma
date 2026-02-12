@@ -25,7 +25,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
-import { groupSerializedVariances, type DisplayRow, type SerializedGroupRow } from "@/lib/variance-grouping";
+import { groupSerializedVariances, type SerializedGroupRow } from "@/lib/variance-grouping";
 
 interface VarianceItem {
   countId: number;

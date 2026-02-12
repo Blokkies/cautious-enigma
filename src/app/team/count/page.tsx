@@ -13,7 +13,6 @@ import {
   CountedItemRow,
   CountedSerialGroupRow,
   CountItem,
-  QueueEntry,
   buildCountingQueue,
   groupReviewItems,
   type ReviewDisplayRow,

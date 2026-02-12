@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ClipboardList, Shield, Lock, ArrowLeft, MapPin } from "lucide-react";
+import { ClipboardList, Shield, Lock, ArrowLeft, MapPin, ArrowRight, BarChart3, Users, Package } from "lucide-react";
 
 type LoginStep = "choose" | "event" | "credentials" | "admin";
 
@@ -66,7 +65,6 @@ export default function LoginPage() {
       const data = await res.json();
       const eventList: EventInfo[] = data.events || [];
 
-      // Filter events that have teams/supervisors based on login type
       const relevantEvents = eventList.filter((e) =>
         type === "team" ? e.teamCount > 0 : e.supervisorCount > 0
       );
@@ -158,8 +156,8 @@ export default function LoginPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg text-muted-foreground">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-slate-950">
+        <div className="text-lg text-slate-400">Loading...</div>
       </div>
     );
   }
@@ -167,250 +165,342 @@ export default function LoginPage() {
   if (user) return null;
 
   const statusColors: Record<string, string> = {
-    setup: "bg-blue-100 text-blue-800",
-    active: "bg-green-100 text-green-800",
+    setup: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+    active: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-b from-blue-50 to-white">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary">Rubicon Stocktake</h1>
-          <p className="text-muted-foreground mt-2">Annual Stock Count 2026</p>
+    <div className="min-h-screen flex flex-col lg:flex-row">
+      {/* Left panel - branding */}
+      <div className="lg:w-[45%] bg-slate-950 text-white p-8 lg:p-12 flex flex-col justify-between relative overflow-hidden">
+        {/* Subtle grid pattern */}
+        <div className="absolute inset-0 opacity-[0.03]" style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+        }} />
+
+        {/* Accent gradient */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+        <div className="absolute bottom-0 left-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="h-10 w-10 rounded-lg bg-blue-500 flex items-center justify-center">
+              <Package className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Rubicon</h1>
+              <p className="text-xs text-slate-400 uppercase tracking-widest">Stocktake</p>
+            </div>
+          </div>
         </div>
 
-        {/* Step 1: Choose login type */}
-        {step === "choose" && (
-          <div className="space-y-4">
-            <Button
-              onClick={() => handleModeSelect("team")}
-              disabled={loadingEvents}
-              className="w-full h-20 text-xl gap-3"
-              size="lg"
-            >
-              <ClipboardList className="h-8 w-8" />
-              {loadingEvents && loginType === "team" ? "Loading..." : "Team Login"}
-            </Button>
-            <Button
-              onClick={() => handleModeSelect("supervisor")}
-              disabled={loadingEvents}
-              variant="outline"
-              className="w-full h-20 text-xl gap-3 border-2"
-              size="lg"
-            >
-              <Shield className="h-8 w-8" />
-              {loadingEvents && loginType === "supervisor" ? "Loading..." : "Supervisor Login"}
-            </Button>
-            <Button
-              onClick={() => { setStep("admin"); setError(""); }}
-              variant="ghost"
-              className="w-full h-12 text-sm text-muted-foreground gap-2"
-            >
-              <Lock className="h-4 w-4" />
-              Admin Setup
-            </Button>
-            {error && (
-              <div className="text-destructive text-center font-medium bg-destructive/10 p-3 rounded-lg">
-                {error}
-              </div>
-            )}
-          </div>
-        )}
+        <div className="relative z-10 hidden lg:block">
+          <h2 className="text-4xl font-bold tracking-tight leading-tight mb-4">
+            Annual Stock<br />Count 2026
+          </h2>
+          <p className="text-slate-400 text-lg max-w-sm">
+            Inventory verification system for warehouse teams and supervisors.
+          </p>
 
-        {/* Step 2: Event picker (only shown when multiple events) */}
-        {step === "event" && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleBack}
-                  className="touch-target"
-                >
-                  <ArrowLeft className="h-5 w-5" />
-                </Button>
-                <CardTitle className="text-xl">Select Event</CardTitle>
+          <div className="mt-10 grid grid-cols-3 gap-6">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-slate-400">
+                <Users className="h-4 w-4" />
+                <span className="text-xs uppercase tracking-wider">Teams</span>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {events.map((event) => (
+              <p className="text-sm text-slate-500">Bin-based counting with offline support</p>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-slate-400">
+                <Shield className="h-4 w-4" />
+                <span className="text-xs uppercase tracking-wider">Supervisors</span>
+              </div>
+              <p className="text-sm text-slate-500">Real-time monitoring and approvals</p>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-slate-400">
+                <BarChart3 className="h-4 w-4" />
+                <span className="text-xs uppercase tracking-wider">Analytics</span>
+              </div>
+              <p className="text-sm text-slate-500">Variance tracking and audit reports</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative z-10 hidden lg:block">
+          <div className="border-t border-slate-800 pt-4">
+            <p className="text-xs text-slate-600">Rubicon Industrial Tech</p>
+          </div>
+        </div>
+
+        {/* Mobile: just show subtitle */}
+        <div className="relative z-10 lg:hidden mt-4">
+          <p className="text-slate-400">Annual Stock Count 2026</p>
+        </div>
+      </div>
+
+      {/* Right panel - login */}
+      <div className="flex-1 flex items-center justify-center p-6 lg:p-12 bg-slate-50">
+        <div className="w-full max-w-md">
+          {/* Step 1: Choose login type */}
+          {step === "choose" && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-semibold text-slate-900">Sign in</h2>
+                <p className="text-slate-500 mt-1">Select your role to continue</p>
+              </div>
+
+              <div className="space-y-3">
                 <button
-                  key={event.id}
-                  onClick={() => handleEventSelect(event.id)}
-                  className="w-full text-left p-4 border rounded-lg hover:bg-accent transition-colors"
+                  onClick={() => handleModeSelect("team")}
+                  disabled={loadingEvents}
+                  className="w-full group flex items-center justify-between p-5 bg-white border border-slate-200 rounded-xl hover:border-blue-300 hover:shadow-md hover:shadow-blue-500/5 transition-all disabled:opacity-50"
                 >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="font-semibold">{event.name}</div>
-                      {event.location && (
-                        <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
-                          <MapPin className="h-3 w-3" />
-                          {event.location}
-                        </div>
-                      )}
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {loginType === "team"
-                          ? `${event.teamCount} team${event.teamCount !== 1 ? "s" : ""}`
-                          : `${event.supervisorCount} supervisor${event.supervisorCount !== 1 ? "s" : ""}`}
-                      </div>
+                  <div className="flex items-center gap-4">
+                    <div className="h-12 w-12 rounded-lg bg-blue-500 flex items-center justify-center shrink-0">
+                      <ClipboardList className="h-6 w-6 text-white" />
                     </div>
-                    <Badge className={statusColors[event.status] || ""}>
-                      {event.status}
-                    </Badge>
+                    <div className="text-left">
+                      <div className="font-semibold text-slate-900">
+                        {loadingEvents && loginType === "team" ? "Loading..." : "Team Login"}
+                      </div>
+                      <div className="text-sm text-slate-500">Count items assigned to your team</div>
+                    </div>
                   </div>
+                  <ArrowRight className="h-5 w-5 text-slate-300 group-hover:text-blue-500 transition-colors" />
                 </button>
-              ))}
+
+                <button
+                  onClick={() => handleModeSelect("supervisor")}
+                  disabled={loadingEvents}
+                  className="w-full group flex items-center justify-between p-5 bg-white border border-slate-200 rounded-xl hover:border-emerald-300 hover:shadow-md hover:shadow-emerald-500/5 transition-all disabled:opacity-50"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="h-12 w-12 rounded-lg bg-emerald-600 flex items-center justify-center shrink-0">
+                      <Shield className="h-6 w-6 text-white" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-semibold text-slate-900">
+                        {loadingEvents && loginType === "supervisor" ? "Loading..." : "Supervisor Login"}
+                      </div>
+                      <div className="text-sm text-slate-500">Monitor progress and review variances</div>
+                    </div>
+                  </div>
+                  <ArrowRight className="h-5 w-5 text-slate-300 group-hover:text-emerald-500 transition-colors" />
+                </button>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  onClick={() => { setStep("admin"); setError(""); }}
+                  className="w-full flex items-center justify-center gap-2 py-3 text-sm text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  Admin Setup
+                </button>
+              </div>
+
               {error && (
-                <div className="text-destructive text-center font-medium bg-destructive/10 p-3 rounded-lg">
+                <div className="text-red-600 text-center text-sm font-medium bg-red-50 border border-red-100 p-3 rounded-lg">
                   {error}
                 </div>
               )}
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
 
-        {/* Step 3: Credentials (team/supervisor selection + PIN) */}
-        {step === "credentials" && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
+          {/* Step 2: Event picker */}
+          {step === "event" && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3">
+                <button
                   onClick={handleBack}
-                  className="touch-target"
+                  className="h-9 w-9 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-white transition-colors"
                 >
-                  <ArrowLeft className="h-5 w-5" />
-                </Button>
+                  <ArrowLeft className="h-4 w-4 text-slate-600" />
+                </button>
                 <div>
-                  <CardTitle className="text-xl">
+                  <h2 className="text-2xl font-semibold text-slate-900">Select Event</h2>
+                  <p className="text-slate-500 text-sm">Choose the stocktake event</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {events.map((event) => (
+                  <button
+                    key={event.id}
+                    onClick={() => handleEventSelect(event.id)}
+                    className="w-full group text-left p-4 bg-white border border-slate-200 rounded-xl hover:border-blue-300 hover:shadow-md hover:shadow-blue-500/5 transition-all"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="font-semibold text-slate-900">{event.name}</div>
+                        {event.location && (
+                          <div className="flex items-center gap-1.5 text-sm text-slate-500 mt-1">
+                            <MapPin className="h-3.5 w-3.5" />
+                            {event.location}
+                          </div>
+                        )}
+                        <div className="text-xs text-slate-400 mt-1.5">
+                          {loginType === "team"
+                            ? `${event.teamCount} team${event.teamCount !== 1 ? "s" : ""}`
+                            : `${event.supervisorCount} supervisor${event.supervisorCount !== 1 ? "s" : ""}`}
+                        </div>
+                      </div>
+                      <Badge variant="outline" className={statusColors[event.status] || ""}>
+                        {event.status}
+                      </Badge>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {error && (
+                <div className="text-red-600 text-center text-sm font-medium bg-red-50 border border-red-100 p-3 rounded-lg">
+                  {error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 3: Credentials */}
+          {step === "credentials" && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleBack}
+                  className="h-9 w-9 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4 text-slate-600" />
+                </button>
+                <div>
+                  <h2 className="text-2xl font-semibold text-slate-900">
                     {loginType === "team" ? "Team Login" : "Supervisor Login"}
-                  </CardTitle>
+                  </h2>
                   {selectedEventId && events.length > 0 && (
-                    <p className="text-sm text-muted-foreground mt-0.5">
+                    <p className="text-slate-500 text-sm">
                       {events.find((e) => e.id === selectedEventId)?.name}
                     </p>
                   )}
                 </div>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label className="text-base">
-                  {loginType === "team" ? "Select Team" : "Select Name"}
-                </Label>
-                <Select value={selectedId} onValueChange={setSelectedId}>
-                  <SelectTrigger className="h-14 text-lg">
-                    <SelectValue
-                      placeholder={
-                        loginType === "team"
-                          ? "Choose your team..."
-                          : "Choose your name..."
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {listItems.map((item) => (
-                      <SelectItem
-                        key={item.id}
-                        value={String(item.id)}
-                        className="text-lg py-3"
-                      >
-                        {item.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="pin" className="text-base">
-                  Enter PIN
-                </Label>
-                <Input
-                  id="pin"
-                  type="password"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={6}
-                  value={pin}
-                  onChange={(e) =>
-                    setPin(e.target.value.replace(/\D/g, ""))
-                  }
-                  placeholder="Enter your PIN"
-                  className="h-14 text-2xl text-center tracking-[0.5em]"
-                  onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                />
-              </div>
-
-              {error && (
-                <div className="text-destructive text-center font-medium bg-destructive/10 p-3 rounded-lg">
-                  {error}
+              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-slate-700">
+                    {loginType === "team" ? "Select Team" : "Select Name"}
+                  </Label>
+                  <Select value={selectedId} onValueChange={setSelectedId}>
+                    <SelectTrigger className="h-12 text-base bg-slate-50 border-slate-200">
+                      <SelectValue
+                        placeholder={
+                          loginType === "team"
+                            ? "Choose your team..."
+                            : "Choose your name..."
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {listItems.map((item) => (
+                        <SelectItem
+                          key={item.id}
+                          value={String(item.id)}
+                          className="text-base py-3"
+                        >
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
 
-              <Button
-                onClick={handleLogin}
-                disabled={submitting}
-                className="w-full h-14 text-lg"
-                size="lg"
-              >
-                {submitting ? "Logging in..." : "Login"}
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+                <div className="space-y-2">
+                  <Label htmlFor="pin" className="text-sm font-medium text-slate-700">
+                    Enter PIN
+                  </Label>
+                  <Input
+                    id="pin"
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    value={pin}
+                    onChange={(e) =>
+                      setPin(e.target.value.replace(/\D/g, ""))
+                    }
+                    placeholder="****"
+                    className="h-12 text-2xl text-center tracking-[0.5em] bg-slate-50 border-slate-200"
+                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                  />
+                </div>
 
-        {/* Admin login */}
-        {step === "admin" && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
+                {error && (
+                  <div className="text-red-600 text-center text-sm font-medium bg-red-50 border border-red-100 p-3 rounded-lg">
+                    {error}
+                  </div>
+                )}
+
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={resetForm}
-                  className="touch-target"
+                  onClick={handleLogin}
+                  disabled={submitting}
+                  className="w-full h-12 text-base font-medium"
+                  size="lg"
                 >
-                  <ArrowLeft className="h-5 w-5" />
+                  {submitting ? "Signing in..." : "Sign In"}
                 </Button>
-                <CardTitle className="text-xl">Admin Login</CardTitle>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label htmlFor="admin-password" className="text-base">
-                  Admin Password
-                </Label>
-                <Input
-                  id="admin-password"
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  className="h-14 text-lg"
-                  onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                />
-              </div>
+            </div>
+          )}
 
-              {error && (
-                <div className="text-destructive text-center font-medium bg-destructive/10 p-3 rounded-lg">
-                  {error}
+          {/* Admin login */}
+          {step === "admin" && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={resetForm}
+                  className="h-9 w-9 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4 text-slate-600" />
+                </button>
+                <div>
+                  <h2 className="text-2xl font-semibold text-slate-900">Admin Login</h2>
+                  <p className="text-slate-500 text-sm">System administration access</p>
                 </div>
-              )}
+              </div>
 
-              <Button
-                onClick={handleLogin}
-                disabled={submitting}
-                className="w-full h-14 text-lg"
-                size="lg"
-              >
-                {submitting ? "Logging in..." : "Login"}
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+                <div className="space-y-2">
+                  <Label htmlFor="admin-password" className="text-sm font-medium text-slate-700">
+                    Admin Password
+                  </Label>
+                  <Input
+                    id="admin-password"
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="Enter admin password"
+                    className="h-12 text-base bg-slate-50 border-slate-200"
+                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                  />
+                </div>
+
+                {error && (
+                  <div className="text-red-600 text-center text-sm font-medium bg-red-50 border border-red-100 p-3 rounded-lg">
+                    {error}
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleLogin}
+                  disabled={submitting}
+                  className="w-full h-12 text-base font-medium"
+                  size="lg"
+                >
+                  {submitting ? "Signing in..." : "Sign In"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

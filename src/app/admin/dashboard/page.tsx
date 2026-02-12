@@ -27,6 +27,11 @@ interface EventSummary {
   matchedItems: number;
   varianceItems: number;
   varianceValue: number;
+  overCount: number;
+  overValue: number;
+  underCount: number;
+  underValue: number;
+  netVarianceValue: number;
   progressPercent: number;
   teamCount: number;
   supervisorCount: number;
@@ -131,8 +136,8 @@ export default function AdminDashboard() {
                 className="h-3 mb-4"
               />
 
-              {/* 4-col stats grid */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center mb-4">
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-4 text-center mb-4">
                 <div>
                   <div className="text-xl font-bold text-green-600">
                     {event.matchedItems}
@@ -160,16 +165,31 @@ export default function AdminDashboard() {
                     Pending
                   </div>
                 </div>
-                <div>
-                  <div className="text-xl font-bold text-red-600">
-                    R
-                    {event.varianceValue.toLocaleString(undefined, {
-                      maximumFractionDigits: 0,
-                    })}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Variance Value
-                  </div>
+              </div>
+
+              {/* Variance breakdown strip */}
+              <div className="flex items-center justify-between gap-3 px-3 py-2 bg-muted/40 rounded-lg mb-4 text-sm">
+                <div className="flex items-center gap-1">
+                  <span className="text-amber-600 font-semibold">
+                    R{event.overValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    ({event.overCount}) over
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-red-600 font-semibold">
+                    R{event.underValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    ({event.underCount}) under
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className={`font-semibold ${event.netVarianceValue >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    {event.netVarianceValue >= 0 ? "" : "-"}R{Math.abs(event.netVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                  <span className="text-muted-foreground text-xs">net</span>
                 </div>
               </div>
 

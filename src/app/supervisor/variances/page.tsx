@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,8 +23,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck } from "lucide-react";
+import { Search, ClipboardCheck, ChevronRight, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
+import { groupSerializedVariances, type DisplayRow, type SerializedGroupRow } from "@/lib/variance-grouping";
 
 interface VarianceItem {
   countId: number;
@@ -49,7 +50,8 @@ interface VarianceItem {
   verificationQty?: number | null;
   verificationVariance?: number | null;
   verificationCountedAt?: string | null;
-  // Serial discrepancy fields
+  // Serial fields
+  isSerialized?: boolean | number | null;
   isUnknownSerial?: boolean;
   serialNumber?: string;
 }
@@ -65,6 +67,11 @@ export default function VariancesPage() {
   const [activeVariances, setActiveVariances] = useState<VarianceItem[]>([]);
   const [resolvedVariances, setResolvedVariances] = useState<VarianceItem[]>([]);
   const [activeTotalValue, setActiveTotalValue] = useState(0);
+  const [overCount, setOverCount] = useState(0);
+  const [underCount, setUnderCount] = useState(0);
+  const [overValue, setOverValue] = useState(0);
+  const [underValue, setUnderValue] = useState(0);
+  const [netVarianceValue, setNetVarianceValue] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<"contains" | "starts" | "exact" | "bin">("contains");
@@ -96,6 +103,11 @@ export default function VariancesPage() {
         const data = await activeRes.json();
         setActiveVariances(data.variances || []);
         setActiveTotalValue(data.totalVarianceValue || 0);
+        setOverCount(data.overCount || 0);
+        setUnderCount(data.underCount || 0);
+        setOverValue(data.overValue || 0);
+        setUnderValue(data.underValue || 0);
+        setNetVarianceValue(data.netVarianceValue || 0);
       }
 
       if (resolvedRes.ok) {
@@ -465,13 +477,23 @@ export default function VariancesPage() {
             </Badge>
           )}
         </div>
-        <Badge variant="destructive" className="text-sm">
-          R
-          {activeTotalValue.toLocaleString(undefined, {
-            maximumFractionDigits: 0,
-          })}{" "}
-          total
-        </Badge>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+            {overCount} over R{overValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </Badge>
+          <span className="text-muted-foreground text-xs">·</span>
+          <Badge className="bg-red-100 text-red-800 border-red-300 text-xs">
+            {underCount} under R{underValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </Badge>
+          <span className="text-muted-foreground text-xs">·</span>
+          <Badge className={`text-xs ${netVarianceValue >= 0 ? "bg-green-100 text-green-800 border-green-300" : "bg-red-100 text-red-800 border-red-300"}`}>
+            Net: {netVarianceValue >= 0 ? "" : "-"}R{Math.abs(netVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </Badge>
+          <span className="text-muted-foreground text-xs">·</span>
+          <Badge variant="destructive" className="text-xs">
+            R{activeTotalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} total
+          </Badge>
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -862,6 +884,41 @@ function VarianceTable({
   ) => void;
   isSaving?: boolean;
 }) {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const displayRows = useMemo(
+    () => groupSerializedVariances(items),
+    [items]
+  );
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleGroupCheckbox = (group: SerializedGroupRow<VarianceItem>) => {
+    if (!onToggleSelect) return;
+    const allSelected = group.countIds.every((id) => selectedCountIds?.has(id));
+    for (const id of group.countIds) {
+      const item = group.items.find((i) => i.countId === id);
+      if (item && canSelect?.(item)) {
+        if (allSelected) {
+          // Deselect all
+          if (selectedCountIds?.has(id)) onToggleSelect(id);
+        } else {
+          // Select all
+          if (!selectedCountIds?.has(id)) onToggleSelect(id);
+        }
+      }
+    }
+  };
+
+  const colSpan = (showCheckbox ? 1 : 0) + 9 + (showEditButton ? 1 : 0);
+
   return (
     <Card>
       <CardContent className="p-0">
@@ -887,174 +944,128 @@ function VarianceTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.length === 0 ? (
+              {displayRows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={showEditButton ? 11 : 10}
+                    colSpan={colSpan}
                     className="text-center py-8 text-muted-foreground"
                   >
                     {emptyMessage}
                   </TableCell>
                 </TableRow>
               ) : (
-                items.map((v) => {
-                  const isSelectable = canSelect ? canSelect(v) : false;
-                  const isSelected = selectedCountIds?.has(v.countId) ?? false;
-                  const hasVerification = !!v.verificationId;
-                  const isVerificationCompleted =
-                    v.verificationStatus === "completed";
-                  const isVerificationAccepted =
-                    v.verificationStatus === "accepted";
-                  const isVerificationPending =
-                    v.verificationStatus === "pending";
+                displayRows.map((row) => {
+                  if (row.type === "single") {
+                    return renderSingleRow(row.item, {
+                      showEditButton,
+                      showCheckbox,
+                      onEdit,
+                      selectedCountIds,
+                      onToggleSelect,
+                      canSelect,
+                      onAccept,
+                      isSaving,
+                    });
+                  }
 
-                  const rowBg = isSelected
-                    ? "bg-blue-50"
-                    : v.isUnknownSerial
-                      ? "bg-amber-50/50"
-                      : isVerificationCompleted
-                        ? "bg-purple-50/50"
-                        : isVerificationPending
-                          ? "bg-blue-50/50"
-                          : "";
+                  // Serialized group
+                  const groupKey = `${row.itemCode}::${row.binNumber || ""}`;
+                  const isExpanded = expandedGroups.has(groupKey);
+                  const selectableInGroup = row.items.filter((i) => canSelect?.(i));
+                  const allGroupSelected =
+                    selectableInGroup.length > 0 &&
+                    selectableInGroup.every((i) => selectedCountIds?.has(i.countId));
 
                   return (
-                    <TableRow
-                      key={v.countId}
-                      className={rowBg}
-                    >
-                      {showCheckbox && (
-                        <TableCell>
-                          {isSelectable && (
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => onToggleSelect?.(v.countId)}
-                              className="h-4 w-4 rounded border-gray-300"
-                            />
-                          )}
-                        </TableCell>
-                      )}
-                      <TableCell className="font-mono text-sm">
-                        <div>{v.itemCode}</div>
-                        {v.isUnknownSerial && v.serialNumber && (
-                          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px] mt-0.5 font-mono">
-                            S/N: {v.serialNumber}
-                          </Badge>
+                    <React.Fragment key={groupKey}>
+                      {/* Group header row */}
+                      <TableRow
+                        className="bg-purple-50/60 hover:bg-purple-100/60 cursor-pointer"
+                        onClick={() => toggleGroup(groupKey)}
+                      >
+                        {showCheckbox && (
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            {selectableInGroup.length > 0 && (
+                              <input
+                                type="checkbox"
+                                checked={allGroupSelected}
+                                onChange={() => toggleGroupCheckbox(row)}
+                                className="h-4 w-4 rounded border-gray-300"
+                              />
+                            )}
+                          </TableCell>
                         )}
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
-                        {v.description}
-                      </TableCell>
-                      <TableCell className="text-sm">{v.binNumber}</TableCell>
-                      <TableCell className="text-right">{v.onHand}</TableCell>
-                      <TableCell className="text-right font-semibold">
-                        {v.countedQty}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {showEditButton ? (
-                          <Badge
-                            variant={
-                              Math.abs(v.variance) > 10
-                                ? "destructive"
-                                : "outline"
-                            }
-                            className={
-                              Math.abs(v.variance) <= 10
-                                ? "border-amber-400 text-amber-700"
-                                : ""
-                            }
-                          >
-                            {v.variance > 0 ? "+" : ""}
-                            {v.variance}
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-green-100 text-green-800 border-green-300">
-                            {v.variance > 0 ? "+" : ""}
-                            {v.variance} Resolved
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right hidden md:table-cell text-sm">
-                        R
-                        {Math.abs(v.varianceValue).toLocaleString(undefined, {
-                          maximumFractionDigits: 0,
-                        })}
-                      </TableCell>
-                      <TableCell className="text-sm">{v.teamName}</TableCell>
-                      <TableCell className="text-sm">
-                        {v.isUnknownSerial && (
-                          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
-                            Unknown Serial
-                          </Badge>
-                        )}
-                        {!v.isUnknownSerial && !hasVerification && (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                        {!v.isUnknownSerial && isVerificationPending && (
-                          <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
-                            Pending — {v.verificationTeamName}
-                          </Badge>
-                        )}
-                        {!v.isUnknownSerial && isVerificationCompleted && (
-                          <div className="space-y-1.5">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
-                                Verified: {v.verificationQty}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                by {v.verificationTeamName}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-muted-foreground">
-                              Original: {v.countedQty} → Verified: {v.verificationQty}
-                            </div>
-                            <div className="flex gap-1.5">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs px-2.5"
-                                onClick={() =>
-                                  onAccept?.("accept_original", v)
-                                }
-                                disabled={isSaving}
-                              >
-                                Keep Original
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="h-7 text-xs px-2.5 bg-green-600 hover:bg-green-700 text-white"
-                                onClick={() =>
-                                  onAccept?.("accept_verification", v)
-                                }
-                                disabled={isSaving}
-                              >
-                                Accept Verified
-                              </Button>
-                            </div>
+                        <TableCell className="font-mono text-sm">
+                          <div className="flex items-center gap-1.5">
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4 text-purple-600 flex-shrink-0" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-purple-600 flex-shrink-0" />
+                            )}
+                            <span>{row.itemCode}</span>
+                            <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-[10px]">
+                              {row.items.length} serials
+                            </Badge>
                           </div>
-                        )}
-                        {!v.isUnknownSerial && isVerificationAccepted && (
-                          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
-                            Verification Resolved
-                          </Badge>
-                        )}
-                      </TableCell>
-                      {showEditButton && (
-                        <TableCell>
-                          {!v.isUnknownSerial && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() => onEdit?.(v)}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
+                          {row.description}
+                        </TableCell>
+                        <TableCell className="text-sm">{row.binNumber}</TableCell>
+                        <TableCell className="text-right">{row.totalOnHand}</TableCell>
+                        <TableCell className="text-right font-semibold">{row.totalCounted}</TableCell>
+                        <TableCell className="text-right">
+                          {showEditButton ? (
+                            <Badge
+                              variant={Math.abs(row.totalVariance) > 10 ? "destructive" : "outline"}
+                              className={Math.abs(row.totalVariance) <= 10 ? "border-amber-400 text-amber-700" : ""}
                             >
-                              Edit
-                            </Button>
+                              {row.totalVariance > 0 ? "+" : ""}{row.totalVariance}
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-green-100 text-green-800 border-green-300">
+                              {row.totalVariance > 0 ? "+" : ""}{row.totalVariance} Resolved
+                            </Badge>
                           )}
                         </TableCell>
-                      )}
-                    </TableRow>
+                        <TableCell className="text-right hidden md:table-cell text-sm">
+                          R{Math.abs(row.totalVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </TableCell>
+                        <TableCell className="text-sm">{row.teamName}</TableCell>
+                        <TableCell className="text-sm">
+                          <div className="flex gap-1 flex-wrap">
+                            {row.foundCount > 0 && (
+                              <Badge className="bg-green-100 text-green-800 border-green-300 text-[10px]">
+                                {row.foundCount} found
+                              </Badge>
+                            )}
+                            {row.notFoundCount > 0 && (
+                              <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]">
+                                {row.notFoundCount} not found
+                              </Badge>
+                            )}
+                            {row.unknownSerialCount > 0 && (
+                              <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">
+                                {row.unknownSerialCount} unknown
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        {showEditButton && <TableCell></TableCell>}
+                      </TableRow>
+
+                      {/* Expanded sub-rows */}
+                      {isExpanded && row.items.map((v) => renderSubRow(v, {
+                        showEditButton,
+                        showCheckbox,
+                        onEdit,
+                        selectedCountIds,
+                        onToggleSelect,
+                        canSelect,
+                        onAccept,
+                        isSaving,
+                      }))}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -1063,5 +1074,284 @@ function VarianceTable({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// Render helpers for variance rows
+interface RowProps {
+  showEditButton: boolean;
+  showCheckbox: boolean;
+  onEdit?: (item: VarianceItem) => void;
+  selectedCountIds?: Set<number>;
+  onToggleSelect?: (countId: number) => void;
+  canSelect?: (item: VarianceItem) => boolean;
+  onAccept?: (action: "accept_original" | "accept_verification", item: VarianceItem) => void;
+  isSaving?: boolean;
+}
+
+function renderSingleRow(v: VarianceItem, props: RowProps) {
+  const { showEditButton, showCheckbox, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, isSaving } = props;
+  const isSelectable = canSelect ? canSelect(v) : false;
+  const isSelected = selectedCountIds?.has(v.countId) ?? false;
+  const hasVerification = !!v.verificationId;
+  const isVerificationCompleted = v.verificationStatus === "completed";
+  const isVerificationAccepted = v.verificationStatus === "accepted";
+  const isVerificationPending = v.verificationStatus === "pending";
+
+  const rowBg = isSelected
+    ? "bg-blue-50"
+    : v.isUnknownSerial
+      ? "bg-amber-50/50"
+      : isVerificationCompleted
+        ? "bg-purple-50/50"
+        : isVerificationPending
+          ? "bg-blue-50/50"
+          : "";
+
+  return (
+    <TableRow key={v.countId} className={rowBg}>
+      {showCheckbox && (
+        <TableCell>
+          {isSelectable && (
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect?.(v.countId)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+          )}
+        </TableCell>
+      )}
+      <TableCell className="font-mono text-sm">
+        <div>{v.itemCode}</div>
+        {v.serialNumber && (
+          <Badge className={`${v.isUnknownSerial ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-purple-100 text-purple-800 border-purple-300"} text-[10px] mt-0.5 font-mono`}>
+            S/N: {v.serialNumber}
+          </Badge>
+        )}
+      </TableCell>
+      <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
+        {v.description}
+      </TableCell>
+      <TableCell className="text-sm">{v.binNumber}</TableCell>
+      <TableCell className="text-right">{v.onHand}</TableCell>
+      <TableCell className="text-right font-semibold">{v.countedQty}</TableCell>
+      <TableCell className="text-right">
+        {showEditButton ? (
+          <Badge
+            variant={Math.abs(v.variance) > 10 ? "destructive" : "outline"}
+            className={Math.abs(v.variance) <= 10 ? "border-amber-400 text-amber-700" : ""}
+          >
+            {v.variance > 0 ? "+" : ""}{v.variance}
+          </Badge>
+        ) : (
+          <Badge className="bg-green-100 text-green-800 border-green-300">
+            {v.variance > 0 ? "+" : ""}{v.variance} Resolved
+          </Badge>
+        )}
+      </TableCell>
+      <TableCell className="text-right hidden md:table-cell text-sm">
+        R{Math.abs(v.varianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+      </TableCell>
+      <TableCell className="text-sm">{v.teamName}</TableCell>
+      <TableCell className="text-sm">
+        {v.isUnknownSerial && (
+          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+            Unknown Serial
+          </Badge>
+        )}
+        {!v.isUnknownSerial && !hasVerification && (
+          <span className="text-muted-foreground">—</span>
+        )}
+        {!v.isUnknownSerial && isVerificationPending && (
+          <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
+            Pending — {v.verificationTeamName}
+          </Badge>
+        )}
+        {!v.isUnknownSerial && isVerificationCompleted && (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
+                Verified: {v.verificationQty}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                by {v.verificationTeamName}
+              </span>
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              Original: {v.countedQty} → Verified: {v.verificationQty}
+            </div>
+            <div className="flex gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs px-2.5"
+                onClick={() => onAccept?.("accept_original", v)}
+                disabled={isSaving}
+              >
+                Keep Original
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 text-xs px-2.5 bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => onAccept?.("accept_verification", v)}
+                disabled={isSaving}
+              >
+                Accept Verified
+              </Button>
+            </div>
+          </div>
+        )}
+        {!v.isUnknownSerial && isVerificationAccepted && (
+          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+            Verification Resolved
+          </Badge>
+        )}
+      </TableCell>
+      {showEditButton && (
+        <TableCell>
+          {!v.isUnknownSerial && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => onEdit?.(v)}
+            >
+              Edit
+            </Button>
+          )}
+        </TableCell>
+      )}
+    </TableRow>
+  );
+}
+
+function renderSubRow(v: VarianceItem, props: RowProps) {
+  const { showEditButton, showCheckbox, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, isSaving } = props;
+  const isSelectable = canSelect ? canSelect(v) : false;
+  const isSelected = selectedCountIds?.has(v.countId) ?? false;
+  const hasVerification = !!v.verificationId;
+  const isVerificationCompleted = v.verificationStatus === "completed";
+  const isVerificationAccepted = v.verificationStatus === "accepted";
+  const isVerificationPending = v.verificationStatus === "pending";
+  const isUnknown = v.isUnknownSerial;
+  const found = v.countedQty > 0;
+
+  return (
+    <TableRow
+      key={v.countId}
+      className={`${isSelected ? "bg-blue-50" : isUnknown ? "bg-amber-50/30" : "bg-purple-50/20"}`}
+    >
+      {showCheckbox && (
+        <TableCell>
+          {isSelectable && (
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect?.(v.countId)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+          )}
+        </TableCell>
+      )}
+      <TableCell className="font-mono text-sm pl-10">
+        {v.serialNumber ? (
+          <Badge className={`${isUnknown ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-purple-100 text-purple-800 border-purple-300"} text-[10px] font-mono`}>
+            S/N: {v.serialNumber}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">No S/N</span>
+        )}
+      </TableCell>
+      <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate text-muted-foreground">
+        {isUnknown ? "Unknown serial" : found ? "Found" : "Not found"}
+      </TableCell>
+      <TableCell className="text-sm"></TableCell>
+      <TableCell className="text-right">{v.onHand}</TableCell>
+      <TableCell className="text-right font-semibold">{v.countedQty}</TableCell>
+      <TableCell className="text-right">
+        {showEditButton ? (
+          <Badge
+            variant={Math.abs(v.variance) > 10 ? "destructive" : "outline"}
+            className={Math.abs(v.variance) <= 10 ? "border-amber-400 text-amber-700" : ""}
+          >
+            {v.variance > 0 ? "+" : ""}{v.variance}
+          </Badge>
+        ) : (
+          <Badge className="bg-green-100 text-green-800 border-green-300">
+            {v.variance > 0 ? "+" : ""}{v.variance} Resolved
+          </Badge>
+        )}
+      </TableCell>
+      <TableCell className="text-right hidden md:table-cell text-sm">
+        R{Math.abs(v.varianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+      </TableCell>
+      <TableCell className="text-sm"></TableCell>
+      <TableCell className="text-sm">
+        {isUnknown && (
+          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+            Unknown Serial
+          </Badge>
+        )}
+        {!isUnknown && !hasVerification && (
+          <span className="text-muted-foreground">—</span>
+        )}
+        {!isUnknown && isVerificationPending && (
+          <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
+            Pending — {v.verificationTeamName}
+          </Badge>
+        )}
+        {!isUnknown && isVerificationCompleted && (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
+                Verified: {v.verificationQty}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                by {v.verificationTeamName}
+              </span>
+            </div>
+            <div className="flex gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs px-2.5"
+                onClick={() => onAccept?.("accept_original", v)}
+                disabled={isSaving}
+              >
+                Keep Original
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 text-xs px-2.5 bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => onAccept?.("accept_verification", v)}
+                disabled={isSaving}
+              >
+                Accept Verified
+              </Button>
+            </div>
+          </div>
+        )}
+        {!isUnknown && isVerificationAccepted && (
+          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+            Verification Resolved
+          </Badge>
+        )}
+      </TableCell>
+      {showEditButton && (
+        <TableCell>
+          {!isUnknown && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => onEdit?.(v)}
+            >
+              Edit
+            </Button>
+          )}
+        </TableCell>
+      )}
+    </TableRow>
   );
 }

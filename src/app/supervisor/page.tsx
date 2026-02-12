@@ -20,6 +20,11 @@ interface OverallStats {
   matched: number;
   withVariance: number;
   varianceValue: number;
+  overCount: number;
+  overValue: number;
+  underCount: number;
+  underValue: number;
+  netVarianceValue: number;
   pending: number;
   progressPercent: number;
   openQueries: number;
@@ -99,7 +104,7 @@ export default function SupervisorDashboard() {
             <div className="text-muted-foreground">Overall Progress</div>
           </div>
           <Progress value={overall.progressPercent} className="h-4 mb-4" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+          <div className="grid grid-cols-3 gap-4 text-center">
             <div>
               <div className="text-xl font-bold text-green-600">
                 {overall.matched}
@@ -115,7 +120,7 @@ export default function SupervisorDashboard() {
               </div>
               <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
                 <AlertTriangle className="h-3 w-3" />
-                Variance
+                Variances
               </div>
             </div>
             <div>
@@ -127,13 +132,31 @@ export default function SupervisorDashboard() {
                 Pending
               </div>
             </div>
-            <div>
-              <div className="text-xl font-bold text-red-600">
-                R{overall.varianceValue.toLocaleString(undefined, {maximumFractionDigits: 0})}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Variance Value
-              </div>
+          </div>
+
+          {/* Variance breakdown strip */}
+          <div className="flex items-center justify-between gap-3 px-3 py-2 mt-4 bg-muted/40 rounded-lg text-sm">
+            <div className="flex items-center gap-1">
+              <span className="text-amber-600 font-semibold">
+                R{overall.overValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+              <span className="text-muted-foreground text-xs">
+                ({overall.overCount}) over
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-red-600 font-semibold">
+                R{overall.underValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+              <span className="text-muted-foreground text-xs">
+                ({overall.underCount}) under
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className={`font-semibold ${overall.netVarianceValue >= 0 ? "text-green-600" : "text-red-600"}`}>
+                {overall.netVarianceValue >= 0 ? "" : "-"}R{Math.abs(overall.netVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+              <span className="text-muted-foreground text-xs">net</span>
             </div>
           </div>
         </CardContent>

@@ -28,6 +28,8 @@ export async function GET(request: NextRequest) {
     comment: counts.comment,
     checkStatus: counts.checkStatus,
     countedAt: counts.countedAt,
+    serialNumber: items.serialNumber,
+    isSerialized: items.isSerialized,
   };
 
   const whereClause = isResolved
@@ -196,12 +198,25 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const totalVarianceValue = enrichedVariances.reduce(
-    (sum, v) => sum + Math.abs((v as { varianceValue?: number }).varianceValue || 0),
-    0
+  const { totalVarianceValue, overCount, underCount, overValue, underValue, netVarianceValue } = enrichedVariances.reduce<{ totalVarianceValue: number; overCount: number; underCount: number; overValue: number; underValue: number; netVarianceValue: number }>(
+    (acc, v) => {
+      const variance = (v as { variance?: number }).variance || 0;
+      const vv = (v as { varianceValue?: number }).varianceValue || 0;
+      acc.totalVarianceValue += Math.abs(vv);
+      if (variance > 0) {
+        acc.overCount++;
+        acc.overValue += Math.abs(vv);
+      } else if (variance < 0) {
+        acc.underCount++;
+        acc.underValue += Math.abs(vv);
+      }
+      acc.netVarianceValue += vv;
+      return acc;
+    },
+    { totalVarianceValue: 0, overCount: 0, underCount: 0, overValue: 0, underValue: 0, netVarianceValue: 0 }
   );
 
-  return NextResponse.json({ variances: enrichedVariances, totalVarianceValue });
+  return NextResponse.json({ variances: enrichedVariances, totalVarianceValue, overCount, underCount, overValue, underValue, netVarianceValue });
 }
 
 export async function PATCH(request: NextRequest) {

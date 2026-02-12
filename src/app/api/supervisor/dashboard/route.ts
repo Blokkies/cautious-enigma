@@ -54,6 +54,24 @@ export async function GET(request: NextRequest) {
     .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)))
     .get();
 
+  const overStats = db
+    .select({
+      count: sql<number>`count(*)`,
+      total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+    })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`))
+    .get();
+
+  const underStats = db
+    .select({
+      count: sql<number>`count(*)`,
+      total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+    })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`))
+    .get();
+
   const openQueries = db
     .select({ count: sql<number>`count(*)` })
     .from(queries)
@@ -163,6 +181,11 @@ export async function GET(request: NextRequest) {
       matched: totalMatched?.count || 0,
       withVariance: totalVariance?.count || 0,
       varianceValue: varianceValue?.total || 0,
+      overCount: overStats?.count || 0,
+      overValue: overStats?.total || 0,
+      underCount: underStats?.count || 0,
+      underValue: underStats?.total || 0,
+      netVarianceValue: (overStats?.total || 0) - (underStats?.total || 0),
       pending: total - counted,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
       openQueries: openQueries?.count || 0,

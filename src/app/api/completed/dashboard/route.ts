@@ -67,6 +67,30 @@ export async function GET(request: NextRequest) {
     .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)))
     .get();
 
+  const overStats = db
+    .select({
+      count: sql<number>`count(*)`,
+      total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+    })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`))
+    .get();
+
+  const underStats = db
+    .select({
+      count: sql<number>`count(*)`,
+      total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+    })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`))
+    .get();
+
+  const summaryOverCount = overStats?.count || 0;
+  const summaryOverValue = overStats?.total || 0;
+  const summaryUnderCount = underStats?.count || 0;
+  const summaryUnderValue = underStats?.total || 0;
+  const summaryNetVarianceValue = summaryOverValue - summaryUnderValue;
+
   const totalStockValue = db
     .select({ total: sql<number>`COALESCE(sum(total_value), 0)` })
     .from(items)
@@ -125,6 +149,38 @@ export async function GET(request: NextRequest) {
       )
       .get();
 
+    const teamOverStats = db
+      .select({
+        count: sql<number>`count(*)`,
+        total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+      })
+      .from(counts)
+      .where(
+        and(
+          eq(counts.eventId, eventId),
+          eq(counts.teamId, team.id),
+          eq(counts.isMatch, false),
+          sql`variance > 0`
+        )
+      )
+      .get();
+
+    const teamUnderStats = db
+      .select({
+        count: sql<number>`count(*)`,
+        total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+      })
+      .from(counts)
+      .where(
+        and(
+          eq(counts.eventId, eventId),
+          eq(counts.teamId, team.id),
+          eq(counts.isMatch, false),
+          sql`variance < 0`
+        )
+      )
+      .get();
+
     const total = teamTotal?.count || 0;
     const counted = teamCounted?.count || 0;
 
@@ -139,6 +195,10 @@ export async function GET(request: NextRequest) {
       matched: teamMatched?.count || 0,
       variances: teamVariances?.count || 0,
       varianceValue: teamVarianceValue?.total || 0,
+      overCount: teamOverStats?.count || 0,
+      overValue: teamOverStats?.total || 0,
+      underCount: teamUnderStats?.count || 0,
+      underValue: teamUnderStats?.total || 0,
       completionPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
     };
   });
@@ -154,6 +214,8 @@ export async function GET(request: NextRequest) {
       variance: counts.variance,
       varianceValue: counts.varianceValue,
       teamName: teams.name,
+      serialNumber: items.serialNumber,
+      isSerialized: items.isSerialized,
     })
     .from(counts)
     .innerJoin(items, eq(counts.itemId, items.id))
@@ -186,6 +248,11 @@ export async function GET(request: NextRequest) {
       matchPercent: counted > 0 ? Math.round((matched / counted) * 100) : 0,
       variances,
       totalVarianceValue: totalVarianceValue?.total || 0,
+      overCount: summaryOverCount,
+      overValue: summaryOverValue,
+      underCount: summaryUnderCount,
+      underValue: summaryUnderValue,
+      netVarianceValue: summaryNetVarianceValue,
       totalStockValue: totalStockValue?.total || 0,
       variancePercent:
         (totalStockValue?.total || 0) > 0

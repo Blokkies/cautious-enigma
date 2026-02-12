@@ -63,6 +63,30 @@ export async function GET(request: NextRequest) {
         .where(and(eq(counts.eventId, event.id), eq(counts.isMatch, false)))
         .get()?.total || 0;
 
+    const overStats = db
+      .select({
+        count: sql<number>`count(*)`,
+        total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+      })
+      .from(counts)
+      .where(and(eq(counts.eventId, event.id), eq(counts.isMatch, false), sql`variance > 0`))
+      .get();
+
+    const underStats = db
+      .select({
+        count: sql<number>`count(*)`,
+        total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
+      })
+      .from(counts)
+      .where(and(eq(counts.eventId, event.id), eq(counts.isMatch, false), sql`variance < 0`))
+      .get();
+
+    const overCount = overStats?.count || 0;
+    const overValue = overStats?.total || 0;
+    const underCount = underStats?.count || 0;
+    const underValue = underStats?.total || 0;
+    const netVarianceValue = overValue - underValue;
+
     const teamCount =
       db
         .select({ count: sql<number>`count(*)` })
@@ -124,6 +148,11 @@ export async function GET(request: NextRequest) {
       matchedItems,
       varianceItems,
       varianceValue,
+      overCount,
+      overValue,
+      underCount,
+      underValue,
+      netVarianceValue,
       progressPercent,
       teamCount,
       supervisorCount,

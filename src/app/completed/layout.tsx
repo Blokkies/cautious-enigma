@@ -27,7 +27,7 @@ export default function CompletedLayout({
               variant="ghost"
               size="sm"
               onClick={() => {
-                if (user?.type === "admin") router.push("/admin/setup");
+                if (user?.type === "admin") router.push("/admin/dashboard");
                 else if (user?.type === "supervisor") router.push("/supervisor");
                 else router.back();
               }}
@@ -36,7 +36,7 @@ export default function CompletedLayout({
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <span className="font-semibold text-primary">
-              Stocktake Complete
+              Stocktake Summary
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -44,7 +44,7 @@ export default function CompletedLayout({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => router.push("/supervisor/export")}
+                onClick={() => router.push(user?.type === "admin" ? "/admin/export" : "/supervisor/export")}
                 className="gap-1"
               >
                 <Download className="h-4 w-4" />

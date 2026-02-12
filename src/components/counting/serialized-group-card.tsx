@@ -6,9 +6,41 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageSquare, ScanBarcode, X, Check } from "lucide-react";
+import { MessageSquare, ScanBarcode, X, Check, RotateCcw, ChevronDown, ChevronUp, Search } from "lucide-react";
 import { SuccessFlash } from "./success-flash";
 import { getStockStatusStyle, type QueueEntry } from "./item-card";
+
+const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+interface SavedProgress {
+  toggles: Record<number, "found" | "not-found">;
+  unknownSerials: string[];
+  savedAt: number;
+}
+
+function loadSavedProgress(
+  storageKey: string,
+  currentItemIds: Set<number>
+): SavedProgress | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as SavedProgress;
+    // Check expiry
+    if (Date.now() - data.savedAt > EXPIRY_MS) {
+      localStorage.removeItem(storageKey);
+      return null;
+    }
+    // Validate that stored IDs match current items
+    const storedIdKeys = Object.keys(data.toggles);
+    if (storedIdKeys.length !== currentItemIds.size) return null;
+    const mismatch = storedIdKeys.some((k) => !currentItemIds.has(Number(k)));
+    if (mismatch) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
 
 type SerializedGroup = QueueEntry & { type: "serialized-group" };
 
@@ -38,8 +70,22 @@ export function SerializedGroupCard({
   comment,
   onCommentChange,
 }: SerializedGroupCardProps) {
-  // Default all toggles to "not-found" — user marks items as Found when physically located
+  const storageKey = `serial-progress-${entry.items[0]?.id}`;
+  const currentItemIds = React.useMemo(
+    () => new Set(entry.items.map((i) => i.id)),
+    [entry.items]
+  );
+
+  // Load saved progress on mount (lazy initializer — runs once)
+  const saved = React.useMemo(
+    () => loadSavedProgress(storageKey, currentItemIds),
+    [storageKey, currentItemIds]
+  );
+
+  const [restoredProgress, setRestoredProgress] = useState(!!saved);
+
   const [toggles, setToggles] = useState<Record<number, "found" | "not-found">>(() => {
+    if (saved) return saved.toggles;
     const initial: Record<number, "found" | "not-found"> = {};
     for (const item of entry.items) {
       initial[item.id] = "not-found";
@@ -49,9 +95,13 @@ export function SerializedGroupCard({
 
   const [showComment, setShowComment] = useState(false);
   const [scanInput, setScanInput] = useState("");
-  const [unknownSerials, setUnknownSerials] = useState<string[]>([]);
+  const [unknownSerials, setUnknownSerials] = useState<string[]>(
+    () => saved?.unknownSerials ?? []
+  );
   const [highlightedItemId, setHighlightedItemId] = useState<number | null>(null);
   const [scanMessage, setScanMessage] = useState<{ text: string; type: "success" | "duplicate" } | null>(null);
+  const [showList, setShowList] = useState(false);
+  const [filterText, setFilterText] = useState("");
   const scanInputRef = useRef<HTMLInputElement>(null);
 
 
@@ -60,6 +110,14 @@ export function SerializedGroupCard({
   const allFound = notFoundCount === 0;
   const allNotFound = foundCount === 0;
 
+  const filteredItems = React.useMemo(() => {
+    if (!filterText.trim()) return entry.items;
+    const q = filterText.trim().toLowerCase();
+    return entry.items.filter(
+      (item) => item.serialNumber?.toLowerCase().includes(q)
+    );
+  }, [entry.items, filterText]);
+
   // Auto-focus scanner input on mount
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -67,6 +125,28 @@ export function SerializedGroupCard({
     }, 100);
     return () => clearTimeout(timer);
   }, []);
+
+  // Auto-dismiss "progress restored" indicator after 3s
+  useEffect(() => {
+    if (!restoredProgress) return;
+    const timer = setTimeout(() => setRestoredProgress(false), 3000);
+    return () => clearTimeout(timer);
+  }, [restoredProgress]);
+
+  // Auto-save toggles + unknown serials to localStorage on change
+  useEffect(() => {
+    const hasProgress =
+      Object.values(toggles).some((v) => v === "found") ||
+      unknownSerials.length > 0;
+    if (hasProgress) {
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ toggles, unknownSerials, savedAt: Date.now() })
+      );
+    } else {
+      localStorage.removeItem(storageKey);
+    }
+  }, [toggles, unknownSerials, storageKey]);
 
   // Clear highlight + scan message after animation
   useEffect(() => {
@@ -122,6 +202,7 @@ export function SerializedGroupCard({
   }
 
   function handleSubmit() {
+    localStorage.removeItem(storageKey);
     const results: SerialGroupResult[] = entry.items.map((item) => ({
       itemId: item.id,
       qty: toggles[item.id] === "found" ? 1 : 0,
@@ -135,17 +216,31 @@ export function SerializedGroupCard({
         <SuccessFlash onComplete={onFlashComplete} />
       )}
       <CardContent className="p-4 space-y-4">
-        {/* Header: item code */}
+        {/* Bin number — prominent on card */}
+        {entry.items[0]?.binNumber && (
+          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-2">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
+            <span className="font-mono font-bold text-base">{entry.items[0].binNumber}</span>
+          </div>
+        )}
+
+        {/* Item Code — labeled */}
         <div className="space-y-1">
+          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Item Code</div>
           <div className="font-mono font-bold text-xl tracking-tight">
             {entry.itemCode}
           </div>
-          {entry.description && (
-            <div className="text-sm text-muted-foreground leading-snug">
+        </div>
+
+        {/* Description — labeled */}
+        {entry.description && (
+          <div className="space-y-0.5">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Description</div>
+            <div className="text-sm leading-snug">
               {entry.description}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Metadata badges */}
         <div className="flex flex-wrap items-center gap-1.5">
@@ -232,28 +327,113 @@ export function SerializedGroupCard({
           </div>
         )}
 
-        {/* Serial number list with Found/Not Found toggles */}
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-muted-foreground mb-2">
-            Mark each serial as Found or Not Found:
-          </div>
-          <div className="space-y-1.5">
-            {entry.items.map((item) => (
-              <SerialRow
-                key={item.id}
-                item={item}
-                status={toggles[item.id]}
-                onToggle={() => toggleItem(item.id)}
-                isHighlighted={highlightedItemId === item.id}
-              />
-            ))}
-          </div>
+        {/* Collapsible serial number list */}
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setShowList((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors"
+          >
+            <span className="text-sm font-medium">
+              {showList ? "Hide" : "Show"} serial list
+            </span>
+            <div className="flex items-center gap-2">
+              {foundCount > 0 && (
+                <span className="text-xs text-green-700 bg-green-100 px-1.5 py-0.5 rounded">
+                  {foundCount} found
+                </span>
+              )}
+              {notFoundCount > 0 && (
+                <span className="text-xs text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
+                  {notFoundCount} remaining
+                </span>
+              )}
+              {showList ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </div>
+          </button>
+
+          {showList && (
+            <div className="space-y-2">
+              {/* Filter input */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={filterText}
+                  onChange={(e) => setFilterText(e.target.value)}
+                  placeholder="Filter serials..."
+                  className="pl-9 h-8 text-sm"
+                />
+              </div>
+
+              <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
+                {filteredItems.length === 0 ? (
+                  <div className="text-xs text-muted-foreground text-center py-3">
+                    No serials match &ldquo;{filterText}&rdquo;
+                  </div>
+                ) : (
+                  filteredItems.map((item) => (
+                    <SerialRow
+                      key={item.id}
+                      item={item}
+                      status={toggles[item.id]}
+                      onToggle={() => toggleItem(item.id)}
+                      isHighlighted={highlightedItemId === item.id}
+                    />
+                  ))
+                )}
+              </div>
+              {filterText && filteredItems.length < entry.items.length && (
+                <div className="text-xs text-muted-foreground text-center">
+                  Showing {filteredItems.length} of {entry.items.length} serials
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Summary + Submit button */}
         <div className="text-center text-sm text-muted-foreground">
           {foundCount} found · {notFoundCount} not found
         </div>
+        {restoredProgress && (
+          <div className="flex items-center justify-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-1.5">
+            <RotateCcw className="h-3 w-3" />
+            Progress restored from previous session
+          </div>
+        )}
+        {/* Skip + Add note — above submit so they're visible */}
+        <div className="flex items-center justify-between border-t pt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={onSkip}
+          >
+            Skip
+          </Button>
+
+          <button
+            type="button"
+            onClick={() => setShowComment((v) => !v)}
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            {showComment ? "Hide note" : "Add note"}
+          </button>
+        </div>
+
+        {/* Comment textarea */}
+        {showComment && (
+          <Textarea
+            value={comment}
+            onChange={(e) => onCommentChange(e.target.value)}
+            placeholder="Add a note about this group..."
+            className="text-sm"
+            rows={2}
+          />
+        )}
+
+        {/* Submit button */}
         {allFound ? (
           <Button
             onClick={handleSubmit}
@@ -284,38 +464,6 @@ export function SerializedGroupCard({
         <div className="text-xs text-muted-foreground text-center">
           Esc = go back
         </div>
-
-        {/* Skip + Add note */}
-        <div className="flex items-center justify-between">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs text-muted-foreground"
-            onClick={onSkip}
-          >
-            Skip this group
-          </Button>
-
-          <button
-            type="button"
-            onClick={() => setShowComment((v) => !v)}
-            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-          >
-            <MessageSquare className="h-3 w-3" />
-            {showComment ? "Hide note" : "Add note"}
-          </button>
-        </div>
-
-        {/* Comment textarea */}
-        {showComment && (
-          <Textarea
-            value={comment}
-            onChange={(e) => onCommentChange(e.target.value)}
-            placeholder="Add a note about this group..."
-            className="text-sm"
-            rows={2}
-          />
-        )}
       </CardContent>
     </Card>
   );

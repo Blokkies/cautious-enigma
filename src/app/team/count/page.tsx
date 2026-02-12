@@ -237,7 +237,7 @@ export default function CountingPage() {
   const currentItem = currentEntry?.type === "single" ? currentEntry.item : null;
 
   const upcomingEntries = useMemo(
-    () => countingQueue.slice(currentIndex + 1),
+    () => countingQueue.filter((_, i) => i !== currentIndex),
     [countingQueue, currentIndex]
   );
 
@@ -1617,7 +1617,7 @@ export default function CountingPage() {
   return (
     <div className="flex flex-col h-[calc(100vh-7.5rem)]">
       {/* Sticky header */}
-      <div className="sticky top-14 z-40 bg-white border-b px-4 py-3">
+      <div className="sticky top-14 z-40 bg-white border-b px-4 py-3 space-y-2">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
@@ -1627,17 +1627,19 @@ export default function CountingPage() {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <span className="font-mono font-semibold text-sm">{binLabel}</span>
-          <span className="text-sm text-muted-foreground">
-            {scopedStats.pending} remaining
-          </span>
-          <div className="flex-1">
-            <Progress value={scopedStats.percent} className="h-2" />
+          <div className="flex items-center gap-2 bg-slate-100 rounded-md px-2.5 py-1">
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
+            <span className="font-mono font-bold text-base">{binLabel}</span>
           </div>
-          <span className="text-sm font-semibold min-w-[3rem] text-right">
+          <div className="flex-1" />
+          <span className="text-sm text-muted-foreground">
+            {scopedStats.pending} left
+          </span>
+          <span className="text-sm font-semibold">
             {scopedStats.percent}%
           </span>
         </div>
+        <Progress value={scopedStats.percent} className="h-2" />
       </div>
 
       {/* Main content */}
@@ -1646,6 +1648,7 @@ export default function CountingPage() {
         <div className="max-w-lg mx-auto">
           {currentEntry.type === "serialized-group" ? (
             <SerializedGroupCard
+              key={currentEntry.items[0]?.id}
               entry={currentEntry}
               onSubmitAll={submitSerializedGroup}
               onSkip={skipItem}

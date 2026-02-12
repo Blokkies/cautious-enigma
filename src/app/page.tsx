@@ -52,7 +52,7 @@ export default function LoginPage() {
     if (!loading && user) {
       if (user.type === "team") router.push("/team");
       else if (user.type === "supervisor") router.push("/supervisor");
-      else if (user.type === "admin") router.push("/admin/setup");
+      else if (user.type === "admin") router.push("/admin/dashboard");
     }
   }, [user, loading, router]);
 

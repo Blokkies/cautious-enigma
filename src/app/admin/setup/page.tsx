@@ -1088,7 +1088,7 @@ export default function AdminSetup() {
                           Readiness
                         </Button>
                       </Link>
-                      <Link href={`/completed?eventId=${event.id}`}>
+                      <Link href={`/admin/summary?eventId=${event.id}`}>
                         <Button variant="outline" size="sm" className="gap-1.5">
                           <ClipboardCheck className="h-3.5 w-3.5" />
                           Summary

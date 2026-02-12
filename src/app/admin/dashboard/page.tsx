@@ -90,7 +90,7 @@ export default function AdminDashboard() {
           <Card
             key={event.id}
             className="cursor-pointer hover:shadow-md transition-shadow"
-            onClick={() => router.push(`/completed?eventId=${event.id}`)}
+            onClick={() => router.push(`/admin/summary?eventId=${event.id}`)}
           >
             <CardContent className="pt-6">
               {/* Header: name + location + status badge */}

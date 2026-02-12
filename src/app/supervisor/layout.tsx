@@ -24,7 +24,7 @@ const navItems = [
   { href: "/supervisor/serial-review", icon: ScanBarcode, label: "Serials", badgeKey: "serials" as const },
   { href: "/supervisor/breakdowns", icon: Package, label: "Breakdowns", badgeKey: "breakdowns" as const },
   { href: "/supervisor/export", icon: Download, label: "Export", badgeKey: null },
-  { href: "/completed", icon: ClipboardCheck, label: "Summary", badgeKey: null },
+  { href: "/supervisor/summary", icon: ClipboardCheck, label: "Summary", badgeKey: null },
 ];
 
 function BadgeCount({ count }: { count: number }) {

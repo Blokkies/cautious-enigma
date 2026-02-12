@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/admin/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/admin/setup", icon: Settings, label: "Events" },
-  { href: "/completed", icon: ClipboardCheck, label: "Summary" },
+  { href: "/admin/summary", icon: ClipboardCheck, label: "Summary" },
   { href: "/admin/settings", icon: UserCog, label: "Settings" },
 ];
 
@@ -57,9 +57,9 @@ export default function AdminLayout({
           {navItems.map(({ href, icon: Icon, label }) => {
             const isActive =
               href === "/admin/setup"
-                ? pathname.startsWith("/admin") &&
-                  !pathname.startsWith("/admin/settings") &&
-                  !pathname.startsWith("/admin/dashboard")
+                ? ["/admin/setup", "/admin/import", "/admin/teams", "/admin/activate"].some(
+                    (p) => pathname.startsWith(p)
+                  )
                 : pathname === href || pathname.startsWith(href);
             return (
               <Link

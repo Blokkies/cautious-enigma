@@ -444,7 +444,7 @@ export default function CountingPage() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry]);
+  }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry, cancelRecount]);
 
   // ---------- Core functions ----------
   const handleCount = useCallback(

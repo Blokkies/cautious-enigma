@@ -431,7 +431,10 @@ export default function CountingPage() {
         }
         if (pageState === "recounting") {
           e.preventDefault();
-          cancelRecount();
+          setRecountItem(null);
+          setQtyValue("");
+          setComment("");
+          setPageState("reviewing");
           return;
         }
         if (pageState === "reviewing") {
@@ -444,7 +447,7 @@ export default function CountingPage() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry, cancelRecount]);
+  }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry]);
 
   // ---------- Core functions ----------
   const handleCount = useCallback(

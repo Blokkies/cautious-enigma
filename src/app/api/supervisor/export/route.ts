@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams, serialDiscrepancies } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 import { exportToExcel } from "@/lib/excel";
 
@@ -77,6 +77,9 @@ async function buildDiscrepancyVariances(eventId: number): Promise<Record<string
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
     .where(eq(serialDiscrepancies.eventId, eventId));
 
+  // Look up source item metadata for each unique itemCode
+  const refMap = await buildRefMap(eventId, discRows.map((d) => d.itemCode));
+
   const rows: Record<string, unknown>[] = [];
   for (const disc of discRows) {
     // Skip fully dismissed discrepancies (resolved + dismissed + no approved serials)
@@ -85,20 +88,22 @@ async function buildDiscrepancyVariances(eventId: number): Promise<Record<string
       if (approved.length === 0) continue;
     }
 
+    const ref = refMap[disc.itemCode];
+
     // Open unknowns
     const unknowns = JSON.parse(disc.unknownSerials) as string[];
     for (const serial of unknowns) {
       rows.push({
-        "Item Internal ID": null,
+        "Item Internal ID": ref?.internalId ?? null,
         "Item Code": disc.itemCode,
         "Description": disc.description,
         "Brand": null,
         "Category": null,
         "Bin Number": disc.binNumber,
         "Bin Internal ID": disc.binInternalId,
-        "Warehouse": null,
-        "Division": null,
-        "Stock Status": "Unknown Serial",
+        "Warehouse": ref?.warehouse ?? null,
+        "Division": ref?.division ?? null,
+        "Stock Status": ref?.stockStatus ?? null,
         "Serial Number": serial,
         "On Hand": 0,
         "Avg Cost": null,
@@ -115,16 +120,16 @@ async function buildDiscrepancyVariances(eventId: number): Promise<Record<string
     const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
     for (const serial of approved) {
       rows.push({
-        "Item Internal ID": null,
+        "Item Internal ID": ref?.internalId ?? null,
         "Item Code": disc.itemCode,
         "Description": disc.description,
         "Brand": null,
         "Category": null,
         "Bin Number": disc.binNumber,
         "Bin Internal ID": disc.binInternalId,
-        "Warehouse": null,
-        "Division": null,
-        "Stock Status": "Approved Unknown Serial",
+        "Warehouse": ref?.warehouse ?? null,
+        "Division": ref?.division ?? null,
+        "Stock Status": ref?.stockStatus ?? null,
         "Serial Number": serial,
         "On Hand": 0,
         "Avg Cost": null,
@@ -138,6 +143,31 @@ async function buildDiscrepancyVariances(eventId: number): Promise<Record<string
     }
   }
   return rows;
+}
+
+// Look up source item metadata (internalId, warehouse, division, stockStatus) by itemCode
+async function buildRefMap(eventId: number, itemCodes: string[]) {
+  const unique = Array.from(new Set(itemCodes));
+  const refMap: Record<string, { internalId: string | null; warehouse: string | null; division: string | null; stockStatus: string | null }> = {};
+  if (unique.length === 0) return refMap;
+
+  const refItems = await db
+    .select({
+      itemCode: items.itemCode,
+      internalId: items.internalId,
+      warehouse: items.warehouse,
+      division: items.division,
+      stockStatus: items.stockStatus,
+    })
+    .from(items)
+    .where(and(eq(items.eventId, eventId), inArray(items.itemCode, unique)));
+
+  for (const ref of refItems) {
+    if (!refMap[ref.itemCode]) {
+      refMap[ref.itemCode] = ref;
+    }
+  }
+  return refMap;
 }
 
 export async function GET(request: NextRequest) {
@@ -230,6 +260,9 @@ export async function GET(request: NextRequest) {
       .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
       .where(eq(serialDiscrepancies.eventId, eventId));
 
+    // Look up source item metadata for unknown serial rows
+    const fullRefMap = await buildRefMap(eventId, discRows.map((d) => d.itemCode));
+
     const unknownRows: Record<string, unknown>[] = [];
     for (const disc of discRows) {
       // Skip fully dismissed discrepancies (resolved + dismissed + no approved serials)
@@ -238,20 +271,22 @@ export async function GET(request: NextRequest) {
         if (approved.length === 0) continue;
       }
 
+      const ref = fullRefMap[disc.itemCode];
+
       // Open unknowns — included as "Unknown Serial"
       const unknowns = JSON.parse(disc.unknownSerials) as string[];
       for (const serial of unknowns) {
         unknownRows.push({
-          "Item Internal ID": null,
+          "Item Internal ID": ref?.internalId ?? null,
           "Item Code": disc.itemCode,
           "Description": disc.description,
           "Brand": null,
           "Category": null,
           "Bin Number": disc.binNumber,
           "Bin Internal ID": disc.binInternalId,
-          "Warehouse": null,
-          "Division": null,
-          "Stock Status": "Unknown Serial",
+          "Warehouse": ref?.warehouse ?? null,
+          "Division": ref?.division ?? null,
+          "Stock Status": ref?.stockStatus ?? null,
           "Serial Number": serial,
           "On Hand": 0,
           "Avg Cost": null,
@@ -270,16 +305,16 @@ export async function GET(request: NextRequest) {
       const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
       for (const serial of approved) {
         unknownRows.push({
-          "Item Internal ID": null,
+          "Item Internal ID": ref?.internalId ?? null,
           "Item Code": disc.itemCode,
           "Description": disc.description,
           "Brand": null,
           "Category": null,
           "Bin Number": disc.binNumber,
           "Bin Internal ID": disc.binInternalId,
-          "Warehouse": null,
-          "Division": null,
-          "Stock Status": "Approved Unknown Serial",
+          "Warehouse": ref?.warehouse ?? null,
+          "Division": ref?.division ?? null,
+          "Stock Status": ref?.stockStatus ?? null,
           "Serial Number": serial,
           "On Hand": 0,
           "Avg Cost": null,

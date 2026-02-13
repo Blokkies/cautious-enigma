@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon } from "lucide-react";
+import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
 import { groupSerializedVariances, type SerializedGroupRow } from "@/lib/variance-grouping";
@@ -106,6 +106,11 @@ export default function VariancesPage() {
   const [thresholdValue, setThresholdValue] = useState("");
   const [serialFilter, setSerialFilter] = useState(searchParams.get("filter") === "serials");
 
+  // Edit serial dialog state
+  const [editingSerialItem, setEditingSerialItem] = useState<VarianceItem | null>(null);
+  const [editSerialValue, setEditSerialValue] = useState("");
+  const editSerialInputRef = useRef<HTMLInputElement>(null);
+
   const loadVariances = useCallback(async () => {
     try {
       const [activeRes, acceptedRes, resolvedRes] = await Promise.all([
@@ -159,6 +164,13 @@ export default function VariancesPage() {
       setTimeout(() => editInputRef.current?.select(), 50);
     }
   }, [editingItem]);
+
+  // Focus serial edit input when dialog opens
+  useEffect(() => {
+    if (editingSerialItem && editSerialInputRef.current) {
+      setTimeout(() => editSerialInputRef.current?.select(), 50);
+    }
+  }, [editingSerialItem]);
 
   const openEditDialog = (v: VarianceItem) => {
     setEditingItem(v);
@@ -569,6 +581,57 @@ export default function VariancesPage() {
     }
   };
 
+  // Edit an unknown serial number
+  const openEditSerialDialog = (v: VarianceItem) => {
+    setEditingSerialItem(v);
+    setEditSerialValue(v.serialNumber || "");
+  };
+
+  const closeEditSerialDialog = () => {
+    setEditingSerialItem(null);
+    setEditSerialValue("");
+  };
+
+  const saveSerialEdit = async () => {
+    if (!editingSerialItem) return;
+    const trimmed = editSerialValue.trim();
+    if (!trimmed) {
+      toast.error("Serial number cannot be empty");
+      return;
+    }
+    if (trimmed === editingSerialItem.serialNumber) {
+      closeEditSerialDialog();
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "edit_unknown_serial",
+          countId: editingSerialItem.countId,
+          newSerial: trimmed,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to update serial");
+        return;
+      }
+
+      toast.success(`Serial updated to ${trimmed}`);
+      loadVariances();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSaving(false);
+      closeEditSerialDialog();
+    }
+  };
+
   const filterItems = (items: VarianceItem[]) => {
     if (!search) return items;
     const q = search.toLowerCase();
@@ -828,6 +891,7 @@ export default function VariancesPage() {
             onAcceptVariance={handleAcceptVariance}
             onApproveUnknownSerial={handleApproveUnknownSerial}
             onDismissUnknownSerial={handleDismissUnknownSerial}
+            onEditUnknownSerial={openEditSerialDialog}
             isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
@@ -1008,6 +1072,76 @@ export default function VariancesPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Edit Serial Dialog */}
+      <Dialog
+        open={editingSerialItem !== null}
+        onOpenChange={(open) => {
+          if (!open) closeEditSerialDialog();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Edit Serial Number
+            </DialogTitle>
+            <DialogDescription>
+              Correct the serial number for {editingSerialItem?.itemCode} if it was entered incorrectly.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingSerialItem && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">Item: </span>
+                  <span className="font-medium">{editingSerialItem.itemCode}</span>
+                  {editingSerialItem.description && (
+                    <span className="text-muted-foreground"> — {editingSerialItem.description}</span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Bin: </span>
+                  <span>{editingSerialItem.binNumber || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Team: </span>
+                  <span>{editingSerialItem.teamName}</span>
+                </div>
+                <div className="col-span-2">
+                  <span className="text-muted-foreground">Current: </span>
+                  <span className="font-mono font-medium">{editingSerialItem.serialNumber}</span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-serial">New Serial Number</Label>
+                <Input
+                  id="edit-serial"
+                  ref={editSerialInputRef}
+                  value={editSerialValue}
+                  onChange={(e) => setEditSerialValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveSerialEdit();
+                  }}
+                  placeholder="Enter corrected serial number"
+                  autoFocus
+                  className="font-mono"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeEditSerialDialog}>
+              Cancel
+            </Button>
+            <Button onClick={saveSerialEdit} disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Assign Verification Dialog */}
       <Dialog
         open={showAssignDialog}
@@ -1122,6 +1256,7 @@ function VarianceTable({
   onReopenVariance,
   onApproveUnknownSerial,
   onDismissUnknownSerial,
+  onEditUnknownSerial,
   isSaving,
 }: {
   items: VarianceItem[];
@@ -1143,6 +1278,7 @@ function VarianceTable({
   onReopenVariance?: (item: VarianceItem) => void;
   onApproveUnknownSerial?: (item: VarianceItem) => void;
   onDismissUnknownSerial?: (item: VarianceItem) => void;
+  onEditUnknownSerial?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -1231,6 +1367,7 @@ function VarianceTable({
                       onReopenVariance,
                       onApproveUnknownSerial,
                       onDismissUnknownSerial,
+                      onEditUnknownSerial,
                       isSaving,
                     });
                   }
@@ -1338,6 +1475,7 @@ function VarianceTable({
                         onReopenVariance,
                         onApproveUnknownSerial,
                         onDismissUnknownSerial,
+                        onEditUnknownSerial,
                         isSaving,
                       }))}
                     </React.Fragment>
@@ -1367,11 +1505,12 @@ interface RowProps {
   onReopenVariance?: (item: VarianceItem) => void;
   onApproveUnknownSerial?: (item: VarianceItem) => void;
   onDismissUnknownSerial?: (item: VarianceItem) => void;
+  onEditUnknownSerial?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }
 
 function renderSingleRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1443,6 +1582,16 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
             </Badge>
             {onApproveUnknownSerial && (
               <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
+                  onClick={() => onEditUnknownSerial?.(v)}
+                  disabled={isSaving}
+                  title="Edit serial number"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1565,7 +1714,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
 }
 
 function renderSubRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1633,6 +1782,16 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
             </Badge>
             {onApproveUnknownSerial && (
               <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
+                  onClick={() => onEditUnknownSerial?.(v)}
+                  disabled={isSaving}
+                  title="Edit serial number"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"

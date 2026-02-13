@@ -167,9 +167,15 @@ export async function GET(request: NextRequest) {
       const unknowns: string[] = JSON.parse(disc.unknownSerials);
       if (unknowns.length === 0) continue;
 
-      // Look up avgCost from any item with this itemCode in the event
+      // Look up source item metadata for this itemCode
       const [refItem] = await db
-        .select({ avgCost: items.avgCost })
+        .select({
+          avgCost: items.avgCost,
+          internalId: items.internalId,
+          warehouse: items.warehouse,
+          division: items.division,
+          stockStatus: items.stockStatus,
+        })
         .from(items)
         .where(
           and(
@@ -200,6 +206,10 @@ export async function GET(request: NextRequest) {
           serialNumber: unknowns[i],
           discrepancyId: disc.id,
           serialIndex: i,
+          internalId: refItem?.internalId ?? null,
+          warehouse: refItem?.warehouse ?? null,
+          division: refItem?.division ?? null,
+          stockStatus: refItem?.stockStatus ?? null,
         });
       }
     }
@@ -230,7 +240,13 @@ export async function GET(request: NextRequest) {
       if (approved.length === 0) continue;
 
       const [refItem] = await db
-        .select({ avgCost: items.avgCost })
+        .select({
+          avgCost: items.avgCost,
+          internalId: items.internalId,
+          warehouse: items.warehouse,
+          division: items.division,
+          stockStatus: items.stockStatus,
+        })
         .from(items)
         .where(
           and(
@@ -262,6 +278,10 @@ export async function GET(request: NextRequest) {
           serialNumber: approved[i],
           discrepancyId: disc.id,
           serialIndex: i,
+          internalId: refItem?.internalId ?? null,
+          warehouse: refItem?.warehouse ?? null,
+          division: refItem?.division ?? null,
+          stockStatus: refItem?.stockStatus ?? null,
         });
       }
     }
@@ -384,6 +404,64 @@ export async function PATCH(request: NextRequest) {
         });
 
       return NextResponse.json({ success: true, action });
+    }
+
+    // Handle edit unknown serial action
+    if (action === "edit_unknown_serial") {
+      const { newSerial } = body;
+      if (countId === undefined || !newSerial || typeof newSerial !== "string") {
+        return NextResponse.json({ error: "countId and newSerial are required" }, { status: 400 });
+      }
+
+      const trimmed = newSerial.trim();
+      if (trimmed.length === 0) {
+        return NextResponse.json({ error: "Serial number cannot be empty" }, { status: 400 });
+      }
+
+      const absId = Math.abs(countId);
+      const discrepancyId = Math.floor(absId / 1000);
+      const serialIndex = absId % 1000;
+
+      const [disc] = await db
+        .select()
+        .from(serialDiscrepancies)
+        .where(
+          and(
+            eq(serialDiscrepancies.id, discrepancyId),
+            eq(serialDiscrepancies.eventId, user.eventId)
+          )
+        );
+
+      if (!disc) {
+        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      }
+
+      const unknowns: string[] = JSON.parse(disc.unknownSerials);
+
+      if (serialIndex >= unknowns.length) {
+        return NextResponse.json({ error: "Serial index out of range" }, { status: 400 });
+      }
+
+      const oldSerial = unknowns[serialIndex];
+      unknowns[serialIndex] = trimmed;
+
+      await db.update(serialDiscrepancies)
+        .set({ unknownSerials: JSON.stringify(unknowns) })
+        .where(eq(serialDiscrepancies.id, discrepancyId));
+
+      await db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "serial_edit_unknown",
+          tableName: "serial_discrepancies",
+          recordId: discrepancyId,
+          oldValue: JSON.stringify({ serial: oldSerial, index: serialIndex }),
+          newValue: JSON.stringify({ serial: trimmed, index: serialIndex }),
+        });
+
+      return NextResponse.json({ success: true, action, oldSerial, newSerial: trimmed });
     }
 
     // Handle approve/dismiss unknown serial actions

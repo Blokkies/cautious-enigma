@@ -426,10 +426,7 @@ export default function AdminSetup() {
       const data = await res.json();
       if (res.ok && data.success) {
         setImportSummary(data.summary);
-        // Auto-select all warehouses found in the import
-        if (data.summary.warehouses?.length > 0) {
-          setSelectedWarehouses(new Set(data.summary.warehouses));
-        }
+        setSelectedWarehouses(new Set());
         toast.success(`Imported ${data.summary.totalItems} items`);
         markComplete("import");
       } else {
@@ -728,9 +725,25 @@ export default function AdminSetup() {
 
                 {importSummary && importSummary.warehouses && importSummary.warehouses.length > 1 && (
                   <div className="border rounded-lg p-4 space-y-3">
-                    <div className="flex items-center gap-2 font-medium text-sm">
-                      <Map className="h-4 w-4" />
-                      Warehouse Selection
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-medium text-sm">
+                        <Map className="h-4 w-4" />
+                        Warehouse Selection
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const allSelected = importSummary!.warehouses!.every((w) => selectedWarehouses.has(w));
+                          if (allSelected) {
+                            setSelectedWarehouses(new Set());
+                          } else {
+                            setSelectedWarehouses(new Set(importSummary!.warehouses!));
+                          }
+                        }}
+                      >
+                        {importSummary!.warehouses!.every((w) => selectedWarehouses.has(w)) ? "Deselect All" : "Select All"}
+                      </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
                       Only items from selected warehouses will be included in this event.

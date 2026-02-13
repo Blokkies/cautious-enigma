@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { itemCode, description, binNumber, unknownSerials } = await request.json();
+    const { itemCode, description, binNumber, binInternalId, unknownSerials } = await request.json();
 
     if (!itemCode) {
       return NextResponse.json(
@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
         itemCode,
         description: description || null,
         binNumber: binNumber || null,
+        binInternalId: binInternalId || null,
         unknownSerials: JSON.stringify(unknownSerials),
         status: "open",
       })

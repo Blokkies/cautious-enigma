@@ -219,6 +219,14 @@ CREATE INDEX IF NOT EXISTS idx_serial_disc_status ON serial_discrepancies(status
 CREATE INDEX IF NOT EXISTS idx_serial_disc_item_code ON serial_discrepancies(item_code);
 `;
 
+const alterStatements = `
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS resolution_type TEXT;
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS approved_serials TEXT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_items_event_serial ON items(event_id, serial_number);
+`;
+
 async function migrate() {
   console.log("Running PostgreSQL migration...");
 
@@ -229,6 +237,16 @@ async function migrate() {
     .filter((s) => s.length > 0);
 
   for (const stmt of statements) {
+    await sql.unsafe(stmt + ";");
+  }
+
+  // Execute ALTER statements for schema evolution
+  const alters = alterStatements
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  for (const stmt of alters) {
     await sql.unsafe(stmt + ";");
   }
 

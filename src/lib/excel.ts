@@ -7,6 +7,7 @@ export interface ImportedItem {
   brand: string;
   category: string;
   binNumber: string;
+  binInternalId: string;
   warehouse: string;
   division: string;
   onHand: number;
@@ -18,7 +19,10 @@ export interface ImportedItem {
 
 // Column name mapping - maps various NetSuite export column names to our fields
 const COLUMN_MAP: Record<string, keyof ImportedItem> = {
-  // Internal ID (NetSuite)
+  // Item Internal ID (NetSuite) — NOT bin internal ID
+  "item internal id": "internalId",
+  "item_internal_id": "internalId",
+  "item  internal id": "internalId",
   "internal id": "internalId",
   "internal_id": "internalId",
   "internalid": "internalId",
@@ -60,6 +64,18 @@ const COLUMN_MAP: Record<string, keyof ImportedItem> = {
   "bin_number": "binNumber",
   "location": "binNumber",
   "bin location": "binNumber",
+
+  // Bin Internal ID (NetSuite)
+  "bin internal id": "binInternalId",
+  "bin_internal_id": "binInternalId",
+  "bininternalid": "binInternalId",
+  "bin location  internal id": "binInternalId",
+  "bin location internal id": "binInternalId",
+  "bin number  internal id": "binInternalId",
+  "bin number internal id": "binInternalId",
+  "bin  internal id": "binInternalId",
+  "location internal id": "binInternalId",
+  "location_internal_id": "binInternalId",
 
   // Warehouse
   "warehouse": "warehouse",
@@ -175,6 +191,7 @@ export function parseExcel(buffer: ArrayBuffer): {
       brand: "",
       category: "",
       binNumber: "",
+      binInternalId: "",
       warehouse: "",
       division: "",
       onHand: 0,

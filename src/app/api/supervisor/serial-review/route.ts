@@ -273,12 +273,13 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Default: resolve
-    const { resolution } = body;
+    const { resolution, resolutionType: bodyResolutionType } = body;
 
     await db.update(serialDiscrepancies)
       .set({
         status: "resolved",
         resolution: resolution || null,
+        resolutionType: bodyResolutionType || "approved",
         resolvedBy: user.id,
         resolvedAt: new Date().toISOString(),
       })

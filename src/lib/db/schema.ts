@@ -60,6 +60,7 @@ export const items = pgTable("items", {
   brand: text("brand"),
   category: text("category"),
   binNumber: text("bin_number"),
+  binInternalId: text("bin_internal_id"),
   warehouse: text("warehouse"),
   division: text("division"),
   onHand: doublePrecision("on_hand").default(0),
@@ -263,11 +264,14 @@ export const serialDiscrepancies = pgTable("serial_discrepancies", {
   itemCode: text("item_code").notNull(),
   description: text("description"),
   binNumber: text("bin_number"),
+  binInternalId: text("bin_internal_id"),
   unknownSerials: text("unknown_serials").notNull(),
   status: text("status")
     .notNull()
     .default("open"),
   resolution: text("resolution"),
+  resolutionType: text("resolution_type"),
+  approvedSerials: text("approved_serials"),
   resolvedBy: integer("resolved_by").references(() => supervisors.id),
   resolvedAt: text("resolved_at"),
   createdAt: text("created_at")

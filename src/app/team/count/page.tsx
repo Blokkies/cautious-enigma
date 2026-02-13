@@ -573,6 +573,7 @@ export default function CountingPage() {
                 itemCode: currentEntry.itemCode,
                 description: currentEntry.description || null,
                 binNumber: selectedBin === "No Bin" ? null : selectedBin,
+                binInternalId: currentEntry.items[0]?.binInternalId || null,
                 unknownSerials,
               }),
             });
@@ -997,6 +998,7 @@ export default function CountingPage() {
       description: currentVerificationItem.description,
       brand: currentVerificationItem.brand,
       binNumber: currentVerificationItem.binNumber,
+      binInternalId: null,
       onHand: currentVerificationItem.onHand,
       avgCost: currentVerificationItem.avgCost,
       stockStatus: currentVerificationItem.stockStatus,
@@ -1081,6 +1083,7 @@ export default function CountingPage() {
                           description: vi.description,
                           brand: vi.brand,
                           binNumber: vi.binNumber,
+                          binInternalId: null,
                           onHand: vi.onHand,
                           avgCost: vi.avgCost,
                           stockStatus: vi.stockStatus,

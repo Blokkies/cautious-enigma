@@ -14,6 +14,132 @@ function latestCountJoin(eventId: number) {
   );
 }
 
+// Build variance rows from items/counts table
+// serialized: true = serialized only, false = non-serialized only, null = both
+// direction: "up" = variance > 0, "down" = variance < 0, "both" = all variances
+async function buildItemVariances(
+  eventId: number,
+  serialized: boolean | null,
+  direction: "up" | "down" | "both"
+): Promise<Record<string, unknown>[]> {
+  return db
+    .select({
+      "Item Internal ID": items.internalId,
+      "Item Code": items.itemCode,
+      "Description": items.description,
+      "Brand": items.brand,
+      "Category": items.category,
+      "Bin Number": items.binNumber,
+      "Bin Internal ID": items.binInternalId,
+      "Warehouse": items.warehouse,
+      "Division": items.division,
+      "Stock Status": items.stockStatus,
+      "Serial Number": items.serialNumber,
+      "On Hand": items.onHand,
+      "Avg Cost": items.avgCost,
+      "Counted Qty": counts.countedQty,
+      "Variance": counts.variance,
+      "Variance Value": counts.varianceValue,
+      "Team": teams.name,
+      "Comment": counts.comment,
+      "Counted At": counts.countedAt,
+    })
+    .from(items)
+    .innerJoin(counts, and(latestCountJoin(eventId), eq(counts.isMatch, false)))
+    .leftJoin(teams, eq(items.teamId, teams.id))
+    .where(and(
+      eq(items.eventId, eventId),
+      serialized !== null ? eq(items.isSerialized, serialized) : undefined,
+      direction === "up"
+        ? sql`${counts.variance} > 0`
+        : direction === "down"
+          ? sql`${counts.variance} < 0`
+          : undefined,
+    ))
+    .orderBy(sql`abs(${counts.varianceValue}) DESC`);
+}
+
+// Build unknown/approved serial rows from discrepancies (serialized variances UP)
+async function buildDiscrepancyVariances(eventId: number): Promise<Record<string, unknown>[]> {
+  const discRows = await db
+    .select({
+      itemCode: serialDiscrepancies.itemCode,
+      description: serialDiscrepancies.description,
+      binNumber: serialDiscrepancies.binNumber,
+      binInternalId: serialDiscrepancies.binInternalId,
+      unknownSerials: serialDiscrepancies.unknownSerials,
+      approvedSerials: serialDiscrepancies.approvedSerials,
+      status: serialDiscrepancies.status,
+      resolutionType: serialDiscrepancies.resolutionType,
+      teamName: teams.name,
+    })
+    .from(serialDiscrepancies)
+    .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
+    .where(eq(serialDiscrepancies.eventId, eventId));
+
+  const rows: Record<string, unknown>[] = [];
+  for (const disc of discRows) {
+    // Skip fully dismissed discrepancies (resolved + dismissed + no approved serials)
+    if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
+      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+      if (approved.length === 0) continue;
+    }
+
+    // Open unknowns
+    const unknowns = JSON.parse(disc.unknownSerials) as string[];
+    for (const serial of unknowns) {
+      rows.push({
+        "Item Internal ID": null,
+        "Item Code": disc.itemCode,
+        "Description": disc.description,
+        "Brand": null,
+        "Category": null,
+        "Bin Number": disc.binNumber,
+        "Bin Internal ID": disc.binInternalId,
+        "Warehouse": null,
+        "Division": null,
+        "Stock Status": "Unknown Serial",
+        "Serial Number": serial,
+        "On Hand": 0,
+        "Avg Cost": null,
+        "Counted Qty": 1,
+        "Variance": 1,
+        "Variance Value": null,
+        "Team": disc.teamName,
+        "Comment": "Unknown serial reported during count",
+        "Counted At": null,
+      });
+    }
+
+    // Approved serials
+    const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+    for (const serial of approved) {
+      rows.push({
+        "Item Internal ID": null,
+        "Item Code": disc.itemCode,
+        "Description": disc.description,
+        "Brand": null,
+        "Category": null,
+        "Bin Number": disc.binNumber,
+        "Bin Internal ID": disc.binInternalId,
+        "Warehouse": null,
+        "Division": null,
+        "Stock Status": "Approved Unknown Serial",
+        "Serial Number": serial,
+        "On Hand": 0,
+        "Avg Cost": null,
+        "Counted Qty": 1,
+        "Variance": 1,
+        "Variance Value": null,
+        "Team": disc.teamName,
+        "Comment": "Approved unknown serial",
+        "Counted At": null,
+      });
+    }
+  }
+  return rows;
+}
+
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || (user.type !== "supervisor" && user.type !== "admin")) {
@@ -40,41 +166,32 @@ export async function GET(request: NextRequest) {
 
   if (type === "serials") {
     data = await buildSerialExport(eventId);
-  } else if (type === "variances") {
-    data = await db
-      .select({
-        "Item Code": items.itemCode,
-        "Description": items.description,
-        "Brand": items.brand,
-        "Category": items.category,
-        "Bin Number": items.binNumber,
-        "Warehouse": items.warehouse,
-        "Division": items.division,
-        "Stock Status": items.stockStatus,
-        "Serial Number": items.serialNumber,
-        "On Hand": items.onHand,
-        "Avg Cost": items.avgCost,
-        "Counted Qty": counts.countedQty,
-        "Variance": counts.variance,
-        "Variance Value": counts.varianceValue,
-        "Team": teams.name,
-        "Comment": counts.comment,
-        "Counted At": counts.countedAt,
-      })
-      .from(items)
-      .innerJoin(counts, and(latestCountJoin(eventId), eq(counts.isMatch, false)))
-      .leftJoin(teams, eq(items.teamId, teams.id))
-      .where(eq(items.eventId, eventId))
-      .orderBy(sql`abs(${counts.varianceValue}) DESC`);
+  } else if (type === "variances_nonserialized_up") {
+    data = await buildItemVariances(eventId, false, "up");
+  } else if (type === "variances_nonserialized_down") {
+    data = await buildItemVariances(eventId, false, "down");
+  } else if (type === "variances_serialized_up") {
+    data = await buildDiscrepancyVariances(eventId);
+  } else if (type === "variances_serialized_down") {
+    data = await buildItemVariances(eventId, true, "down");
+  } else if (type === "variances_all" || type === "variances") {
+    // All variances: non-serialized (both directions) + serialized down + unknown serials up
+    const [itemVariances, discrepancyVariances] = await Promise.all([
+      buildItemVariances(eventId, null, "both"),
+      buildDiscrepancyVariances(eventId),
+    ]);
+    data = [...itemVariances, ...discrepancyVariances];
   } else {
-    // Full export - all items with their latest count
+    // Full / master export - all items with their latest count
     const itemRows = await db
       .select({
+        "Item Internal ID": items.internalId,
         "Item Code": items.itemCode,
         "Description": items.description,
         "Brand": items.brand,
         "Category": items.category,
         "Bin Number": items.binNumber,
+        "Bin Internal ID": items.binInternalId,
         "Warehouse": items.warehouse,
         "Division": items.division,
         "Stock Status": items.stockStatus,
@@ -96,13 +213,17 @@ export async function GET(request: NextRequest) {
       .where(eq(items.eventId, eventId))
       .orderBy(items.binNumber, items.itemCode);
 
-    // Append unknown serials from discrepancies
+    // Append unknown + approved serials from discrepancies (exclude fully dismissed)
     const discRows = await db
       .select({
         itemCode: serialDiscrepancies.itemCode,
         description: serialDiscrepancies.description,
         binNumber: serialDiscrepancies.binNumber,
+        binInternalId: serialDiscrepancies.binInternalId,
         unknownSerials: serialDiscrepancies.unknownSerials,
+        approvedSerials: serialDiscrepancies.approvedSerials,
+        status: serialDiscrepancies.status,
+        resolutionType: serialDiscrepancies.resolutionType,
         teamName: teams.name,
       })
       .from(serialDiscrepancies)
@@ -111,14 +232,23 @@ export async function GET(request: NextRequest) {
 
     const unknownRows: Record<string, unknown>[] = [];
     for (const disc of discRows) {
-      const serials = JSON.parse(disc.unknownSerials) as string[];
-      for (const serial of serials) {
+      // Skip fully dismissed discrepancies (resolved + dismissed + no approved serials)
+      if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
+        const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+        if (approved.length === 0) continue;
+      }
+
+      // Open unknowns — included as "Unknown Serial"
+      const unknowns = JSON.parse(disc.unknownSerials) as string[];
+      for (const serial of unknowns) {
         unknownRows.push({
+          "Item Internal ID": null,
           "Item Code": disc.itemCode,
           "Description": disc.description,
           "Brand": null,
           "Category": null,
           "Bin Number": disc.binNumber,
+          "Bin Internal ID": disc.binInternalId,
           "Warehouse": null,
           "Division": null,
           "Stock Status": "Unknown Serial",
@@ -135,10 +265,51 @@ export async function GET(request: NextRequest) {
           "Counted At": null,
         });
       }
+
+      // Approved serials — included as "Approved Unknown Serial"
+      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+      for (const serial of approved) {
+        unknownRows.push({
+          "Item Internal ID": null,
+          "Item Code": disc.itemCode,
+          "Description": disc.description,
+          "Brand": null,
+          "Category": null,
+          "Bin Number": disc.binNumber,
+          "Bin Internal ID": disc.binInternalId,
+          "Warehouse": null,
+          "Division": null,
+          "Stock Status": "Approved Unknown Serial",
+          "Serial Number": serial,
+          "On Hand": 0,
+          "Avg Cost": null,
+          "Total Value": null,
+          "Counted Qty": 1,
+          "Variance": 1,
+          "Variance Value": null,
+          "Is Match": false,
+          "Team": disc.teamName,
+          "Comment": "Approved unknown serial",
+          "Counted At": null,
+        });
+      }
     }
 
     data = [...itemRows, ...unknownRows];
   }
+
+  // Filename mapping
+  const filenameBase: Record<string, string> = {
+    full: "stocktake_master_export",
+    variances_nonserialized_up: "stocktake_nonserialized_variances_up",
+    variances_nonserialized_down: "stocktake_nonserialized_variances_down",
+    variances_serialized_up: "stocktake_serialized_variances_up",
+    variances_serialized_down: "stocktake_serialized_variances_down",
+    variances_all: "stocktake_all_variances",
+    variances: "stocktake_all_variances",
+    serials: "stocktake_serials",
+  };
+  const base = filenameBase[type] || filenameBase.full;
 
   if (format === "csv") {
     if (data.length === 0) {
@@ -164,17 +335,10 @@ export async function GET(request: NextRequest) {
     ];
 
     const csv = csvRows.join("\n");
-    const filenames: Record<string, string> = {
-      variances: "stocktake_variances.csv",
-      serials: "stocktake_serials.csv",
-      full: "stocktake_full_export.csv",
-    };
-    const filename = filenames[type] || filenames.full;
-
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": `attachment; filename="${base}.csv"`,
       },
     });
   }
@@ -182,18 +346,11 @@ export async function GET(request: NextRequest) {
   // Excel format
   const buffer = exportToExcel(data);
 
-  const filenames: Record<string, string> = {
-    variances: "stocktake_variances.xlsx",
-    serials: "stocktake_serials.xlsx",
-    full: "stocktake_full_export.xlsx",
-  };
-  const filename = filenames[type] || filenames.full;
-
   return new NextResponse(buffer as unknown as BodyInit, {
     headers: {
       "Content-Type":
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Disposition": `attachment; filename="${base}.xlsx"`,
     },
   });
 }
@@ -205,6 +362,7 @@ async function buildSerialExport(eventId: number): Promise<Record<string, unknow
       itemCode: items.itemCode,
       description: items.description,
       binNumber: items.binNumber,
+      binInternalId: items.binInternalId,
       serialNumber: items.serialNumber,
       onHand: items.onHand,
       countedQty: counts.countedQty,
@@ -222,8 +380,11 @@ async function buildSerialExport(eventId: number): Promise<Record<string, unknow
       itemCode: serialDiscrepancies.itemCode,
       description: serialDiscrepancies.description,
       binNumber: serialDiscrepancies.binNumber,
+      binInternalId: serialDiscrepancies.binInternalId,
       unknownSerials: serialDiscrepancies.unknownSerials,
+      approvedSerials: serialDiscrepancies.approvedSerials,
       status: serialDiscrepancies.status,
+      resolutionType: serialDiscrepancies.resolutionType,
       resolution: serialDiscrepancies.resolution,
       teamName: teams.name,
     })
@@ -248,19 +409,27 @@ async function buildSerialExport(eventId: number): Promise<Record<string, unknow
       "Item Code": row.itemCode,
       "Description": row.description,
       "Bin Number": row.binNumber,
+      "Bin Internal ID": row.binInternalId,
       "Serial Number": row.serialNumber,
       "Source": "Expected",
       "Status": status,
       "On Hand": row.onHand,
       "Counted Qty": row.countedQty,
       "Team": row.teamName,
-      "Discrepancy Status": "—",
+      "Discrepancy Status": "\u2014",
       "Resolution": "",
     });
   }
 
-  // Add unknown serial rows from discrepancies
+  // Add unknown + approved serial rows from discrepancies (exclude dismissed)
   for (const disc of discrepancyRows) {
+    // Skip fully dismissed discrepancies
+    if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
+      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+      if (approved.length === 0) continue;
+    }
+
+    // Open unknowns
     const unknowns = JSON.parse(disc.unknownSerials) as string[];
     const discStatus = disc.status === "resolved" ? "Resolved" : "Open";
 
@@ -269,6 +438,7 @@ async function buildSerialExport(eventId: number): Promise<Record<string, unknow
         "Item Code": disc.itemCode,
         "Description": disc.description,
         "Bin Number": disc.binNumber,
+        "Bin Internal ID": disc.binInternalId,
         "Serial Number": serial,
         "Source": "Unknown",
         "Status": "Reported",
@@ -277,6 +447,25 @@ async function buildSerialExport(eventId: number): Promise<Record<string, unknow
         "Team": disc.teamName,
         "Discrepancy Status": discStatus,
         "Resolution": disc.resolution || "",
+      });
+    }
+
+    // Approved serials
+    const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+    for (const serial of approved) {
+      rows.push({
+        "Item Code": disc.itemCode,
+        "Description": disc.description,
+        "Bin Number": disc.binNumber,
+        "Bin Internal ID": disc.binInternalId,
+        "Serial Number": serial,
+        "Source": "Unknown",
+        "Status": "Approved",
+        "On Hand": "",
+        "Counted Qty": 1,
+        "Team": disc.teamName,
+        "Discrepancy Status": "Resolved",
+        "Resolution": "Approved by supervisor",
       });
     }
   }

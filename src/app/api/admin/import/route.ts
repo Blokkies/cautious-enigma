@@ -68,6 +68,7 @@ export async function POST(request: NextRequest) {
             brand: item.brand || null,
             category: item.category || null,
             binNumber: item.binNumber || null,
+            binInternalId: item.binInternalId || null,
             warehouse: item.warehouse || null,
             division: item.division || null,
             onHand: item.onHand || 0,

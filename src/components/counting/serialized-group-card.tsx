@@ -99,9 +99,10 @@ export function SerializedGroupCard({
     () => saved?.unknownSerials ?? []
   );
   const [highlightedItemId, setHighlightedItemId] = useState<number | null>(null);
-  const [scanMessage, setScanMessage] = useState<{ text: string; type: "success" | "duplicate" } | null>(null);
+  const [scanMessage, setScanMessage] = useState<{ text: string; type: "success" | "duplicate" | "cross-bin" | "unknown" } | null>(null);
   const [showList, setShowList] = useState(false);
   const [filterText, setFilterText] = useState("");
+  const [showConfirm, setShowConfirm] = useState(false);
   const scanInputRef = useRef<HTMLInputElement>(null);
 
 
@@ -148,13 +149,14 @@ export function SerializedGroupCard({
     }
   }, [toggles, unknownSerials, storageKey]);
 
-  // Clear highlight + scan message after animation
+  // Clear highlight + scan message after animation (4s for cross-bin/unknown, 1.5s otherwise)
   useEffect(() => {
     if (highlightedItemId === null && scanMessage === null) return;
+    const duration = scanMessage?.type === "cross-bin" || scanMessage?.type === "unknown" ? 4000 : 1500;
     const timer = setTimeout(() => {
       setHighlightedItemId(null);
       setScanMessage(null);
-    }, 1500);
+    }, duration);
     return () => clearTimeout(timer);
   }, [highlightedItemId, scanMessage]);
 
@@ -165,9 +167,12 @@ export function SerializedGroupCard({
     }));
   }
 
-  const handleScan = useCallback(() => {
+  const handleScan = useCallback(async () => {
     const scanned = scanInput.trim();
     if (!scanned) return;
+
+    // Clear input immediately so scanner can continue
+    setScanInput("");
 
     // Case-insensitive match against group's serial numbers
     const matchedItem = entry.items.find(
@@ -185,15 +190,39 @@ export function SerializedGroupCard({
         setScanMessage({ text: `${matchedItem.serialNumber} — matched!`, type: "success" });
       }
     } else {
-      // Add to unknown serials (dedup)
+      // Not in this group — check if it belongs to another bin
+      try {
+        const res = await fetch(`/api/team/serial-lookup?serial=${encodeURIComponent(scanned)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.found) {
+            setScanMessage({
+              text: `${scanned} — Expected in Bin ${data.binNumber}`,
+              type: "cross-bin",
+            });
+          } else {
+            setScanMessage({
+              text: `${scanned} — Unknown serial`,
+              type: "unknown",
+            });
+          }
+        }
+      } catch {
+        // Offline — just show as unknown
+        setScanMessage({
+          text: `${scanned} — Unknown serial`,
+          type: "unknown",
+        });
+      }
+
+      // Add to unknown serials (dedup) either way
       setUnknownSerials((prev) => {
         if (prev.some((s) => s.toLowerCase() === scanned.toLowerCase())) return prev;
         return [...prev, scanned];
       });
     }
 
-    // Clear input and re-focus
-    setScanInput("");
+    // Re-focus
     setTimeout(() => scanInputRef.current?.focus(), 50);
   }, [scanInput, entry.items, toggles]);
 
@@ -201,7 +230,16 @@ export function SerializedGroupCard({
     setUnknownSerials((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function handleSubmit() {
+  function handleSubmitClick() {
+    if (notFoundCount > 0 && !showConfirm) {
+      setShowConfirm(true);
+      return;
+    }
+    doSubmit();
+  }
+
+  function doSubmit() {
+    setShowConfirm(false);
     localStorage.removeItem(storageKey);
     const results: SerialGroupResult[] = entry.items.map((item) => ({
       itemId: item.id,
@@ -262,6 +300,11 @@ export function SerializedGroupCard({
           </Badge>
         </div>
 
+        {/* Scanner instructions */}
+        <div className="text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5">
+          Scan found serials, then submit. Unscanned = Not Found
+        </div>
+
         {/* Scanner input */}
         <div className="flex gap-2">
           <div className="relative flex-1">
@@ -295,9 +338,13 @@ export function SerializedGroupCard({
           <div className={`text-xs font-medium px-3 py-1.5 rounded-md ${
             scanMessage.type === "success"
               ? "text-green-800 bg-green-100 border border-green-200"
-              : "text-amber-800 bg-amber-100 border border-amber-200"
+              : scanMessage.type === "cross-bin"
+                ? "text-amber-800 bg-amber-100 border border-amber-200"
+                : scanMessage.type === "unknown"
+                  ? "text-red-800 bg-red-100 border border-red-200"
+                  : "text-amber-800 bg-amber-100 border border-amber-200"
           }`}>
-            {scanMessage.type === "success" ? "\u2713" : "\u2022"} {scanMessage.text}
+            {scanMessage.type === "success" ? "\u2713" : scanMessage.type === "unknown" ? "\u2717" : "\u2022"} {scanMessage.text}
           </div>
         )}
 
@@ -345,7 +392,7 @@ export function SerializedGroupCard({
               )}
               {notFoundCount > 0 && (
                 <span className="text-xs text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
-                  {notFoundCount} remaining
+                  {notFoundCount} not found
                 </span>
               )}
               {showList ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -433,10 +480,36 @@ export function SerializedGroupCard({
           />
         )}
 
+        {/* Confirmation banner */}
+        {showConfirm && notFoundCount > 0 && (
+          <div className="rounded-lg border border-red-300 bg-red-50 p-3 space-y-2">
+            <div className="text-sm font-medium text-red-800">
+              {notFoundCount} serial{notFoundCount !== 1 ? "s" : ""} will be marked as Not Found
+            </div>
+            <div className="flex gap-2">
+              <Button
+                onClick={doSubmit}
+                size="sm"
+                className="bg-red-600 hover:bg-red-700 text-white"
+                disabled={isSubmitting}
+              >
+                Confirm Submit
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowConfirm(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Submit button */}
         {allFound ? (
           <Button
-            onClick={handleSubmit}
+            onClick={handleSubmitClick}
             className="w-full h-14 text-lg font-bold text-white bg-green-600 hover:bg-green-700"
             disabled={isSubmitting}
           >
@@ -444,7 +517,7 @@ export function SerializedGroupCard({
           </Button>
         ) : allNotFound ? (
           <Button
-            onClick={handleSubmit}
+            onClick={handleSubmitClick}
             className="w-full h-14 text-lg font-bold text-white bg-red-600 hover:bg-red-700"
             disabled={isSubmitting}
           >
@@ -452,7 +525,7 @@ export function SerializedGroupCard({
           </Button>
         ) : (
           <Button
-            onClick={handleSubmit}
+            onClick={handleSubmitClick}
             className="w-full h-14 text-lg font-bold text-white bg-amber-500 hover:bg-amber-600"
             disabled={isSubmitting}
           >
@@ -487,11 +560,11 @@ function SerialRow({
         isHighlighted
           ? "border-green-400 bg-green-100 animate-pulse"
           : status === "found"
-            ? "border-green-200 bg-green-50/50"
-            : "border-red-200 bg-red-50/50"
+            ? "border-green-200 bg-green-50"
+            : "border-muted bg-muted/30 opacity-60"
       }`}
     >
-      <span className="font-mono text-sm flex-1 min-w-0 truncate text-purple-700">
+      <span className={`font-mono text-sm flex-1 min-w-0 truncate ${status === "found" ? "text-green-800 font-semibold" : "text-muted-foreground"}`}>
         S/N: {item.serialNumber || "—"}
       </span>
 

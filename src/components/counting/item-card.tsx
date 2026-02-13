@@ -15,6 +15,7 @@ export interface CountItem {
   description: string | null;
   brand: string | null;
   binNumber: string | null;
+  binInternalId: string | null;
   onHand: number | null;
   avgCost: number | null;
   stockStatus: string | null;

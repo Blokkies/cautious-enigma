@@ -23,8 +23,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw } from "lucide-react";
+import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useSearchParams } from "next/navigation";
 import { groupSerializedVariances, type SerializedGroupRow } from "@/lib/variance-grouping";
 
 interface VarianceItem {
@@ -53,7 +54,10 @@ interface VarianceItem {
   // Serial fields
   isSerialized?: boolean | number | null;
   isUnknownSerial?: boolean;
+  isApprovedSerial?: boolean;
   serialNumber?: string;
+  discrepancyId?: number;
+  serialIndex?: number;
 }
 
 interface Team {
@@ -64,6 +68,7 @@ interface Team {
 }
 
 export default function VariancesPage() {
+  const searchParams = useSearchParams();
   const [activeVariances, setActiveVariances] = useState<VarianceItem[]>([]);
   const [acceptedVariances, setAcceptedVariances] = useState<VarianceItem[]>([]);
   const [resolvedVariances, setResolvedVariances] = useState<VarianceItem[]>([]);
@@ -99,6 +104,7 @@ export default function VariancesPage() {
   const [selectedTeamIds, setSelectedTeamIds] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
   const [thresholdValue, setThresholdValue] = useState("");
+  const [serialFilter, setSerialFilter] = useState(searchParams.get("filter") === "serials");
 
   const loadVariances = useCallback(async () => {
     try {
@@ -513,6 +519,56 @@ export default function VariancesPage() {
     }
   };
 
+  // Approve an unknown serial (moves to accepted)
+  const handleApproveUnknownSerial = async (v: VarianceItem) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve_unknown_serial", countId: v.countId }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to approve serial");
+        return;
+      }
+
+      toast.success(`Serial ${v.serialNumber} approved`);
+      loadVariances();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Dismiss an unknown serial (removes from active)
+  const handleDismissUnknownSerial = async (v: VarianceItem) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dismiss_unknown_serial", countId: v.countId }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to dismiss serial");
+        return;
+      }
+
+      toast.success(`Serial ${v.serialNumber} dismissed`);
+      loadVariances();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const filterItems = (items: VarianceItem[]) => {
     if (!search) return items;
     const q = search.toLowerCase();
@@ -549,8 +605,13 @@ export default function VariancesPage() {
     );
   };
 
-  const filteredActive = filterItems(activeVariances);
-  const filteredAccepted = filterItems(acceptedVariances);
+  const applySerialFilter = (items: VarianceItem[]) => {
+    if (!serialFilter) return items;
+    return items.filter((v) => v.isUnknownSerial || v.isApprovedSerial);
+  };
+
+  const filteredActive = applySerialFilter(filterItems(activeVariances));
+  const filteredAccepted = applySerialFilter(filterItems(acceptedVariances));
   const filteredResolved = filterItems(resolvedVariances);
 
   // Summary counts for header badges
@@ -562,6 +623,9 @@ export default function VariancesPage() {
   ).length;
   const unassignedCount = activeVariances.filter(
     (v) => !v.verificationId || v.verificationStatus === "accepted"
+  ).length;
+  const unknownSerialCount = activeVariances.filter(
+    (v) => v.isUnknownSerial
   ).length;
 
   if (loading) {
@@ -630,7 +694,7 @@ export default function VariancesPage() {
             className="pl-9"
           />
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-xs text-muted-foreground mr-1">Mode:</span>
           {([
             { key: "contains" as const, label: "Contains" },
@@ -650,6 +714,24 @@ export default function VariancesPage() {
               {m.label}
             </button>
           ))}
+          <div className="h-4 w-px bg-border mx-1" />
+          <button
+            onClick={() => setSerialFilter((v) => !v)}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors inline-flex items-center gap-1 ${
+              serialFilter
+                ? "bg-amber-500 text-white"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            Serials
+            {unknownSerialCount > 0 && (
+              <span className={`inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold ${
+                serialFilter ? "bg-white/30 text-white" : "bg-amber-100 text-amber-800"
+              }`}>
+                {unknownSerialCount}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -733,7 +815,7 @@ export default function VariancesPage() {
           <VarianceTable
             items={filteredActive}
             emptyMessage={
-              search ? "No matching variances" : "No variances recorded"
+              search ? "No matching variances" : serialFilter ? "No unknown serials" : "No variances recorded"
             }
             showEditButton
             showCheckbox
@@ -744,6 +826,8 @@ export default function VariancesPage() {
             canSelect={canSelect}
             onAccept={handleAccept}
             onAcceptVariance={handleAcceptVariance}
+            onApproveUnknownSerial={handleApproveUnknownSerial}
+            onDismissUnknownSerial={handleDismissUnknownSerial}
             isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
@@ -758,7 +842,7 @@ export default function VariancesPage() {
             emptyMessage={
               search
                 ? "No matching accepted variances"
-                : "No accepted variances yet"
+                : serialFilter ? "No approved serials" : "No accepted variances yet"
             }
             showEditButton
             showCheckbox={false}
@@ -1036,6 +1120,8 @@ function VarianceTable({
   onAccept,
   onAcceptVariance,
   onReopenVariance,
+  onApproveUnknownSerial,
+  onDismissUnknownSerial,
   isSaving,
 }: {
   items: VarianceItem[];
@@ -1055,6 +1141,8 @@ function VarianceTable({
   ) => void;
   onAcceptVariance?: (item: VarianceItem) => void;
   onReopenVariance?: (item: VarianceItem) => void;
+  onApproveUnknownSerial?: (item: VarianceItem) => void;
+  onDismissUnknownSerial?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -1141,6 +1229,8 @@ function VarianceTable({
                       onAccept,
                       onAcceptVariance,
                       onReopenVariance,
+                      onApproveUnknownSerial,
+                      onDismissUnknownSerial,
                       isSaving,
                     });
                   }
@@ -1246,6 +1336,8 @@ function VarianceTable({
                         onAccept,
                         onAcceptVariance,
                         onReopenVariance,
+                        onApproveUnknownSerial,
+                        onDismissUnknownSerial,
                         isSaving,
                       }))}
                     </React.Fragment>
@@ -1273,11 +1365,13 @@ interface RowProps {
   onAccept?: (action: "accept_original" | "accept_verification", item: VarianceItem) => void;
   onAcceptVariance?: (item: VarianceItem) => void;
   onReopenVariance?: (item: VarianceItem) => void;
+  onApproveUnknownSerial?: (item: VarianceItem) => void;
+  onDismissUnknownSerial?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }
 
 function renderSingleRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1342,20 +1436,51 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
       </TableCell>
       <TableCell className="text-sm">{v.teamName}</TableCell>
       <TableCell className="text-sm">
-        {v.isUnknownSerial && (
-          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
-            Unknown Serial
+        {v.isUnknownSerial && !v.isApprovedSerial && (
+          <div className="flex items-center gap-1">
+            <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+              Unknown Serial
+            </Badge>
+            {onApproveUnknownSerial && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
+                  onClick={() => onApproveUnknownSerial(v)}
+                  disabled={isSaving}
+                  title="Approve serial"
+                >
+                  <Check className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
+                  onClick={() => onDismissUnknownSerial?.(v)}
+                  disabled={isSaving}
+                  title="Dismiss serial"
+                >
+                  <XIcon className="h-3 w-3" />
+                </Button>
+              </>
+            )}
+          </div>
+        )}
+        {v.isApprovedSerial && (
+          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+            Approved Serial
           </Badge>
         )}
-        {!v.isUnknownSerial && !hasVerification && (
+        {!v.isUnknownSerial && !v.isApprovedSerial && !hasVerification && (
           <span className="text-muted-foreground">—</span>
         )}
-        {!v.isUnknownSerial && isVerificationPending && (
+        {!v.isUnknownSerial && !v.isApprovedSerial && isVerificationPending && (
           <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
             Pending — {v.verificationTeamName}
           </Badge>
         )}
-        {!v.isUnknownSerial && isVerificationCompleted && (
+        {!v.isUnknownSerial && !v.isApprovedSerial && isVerificationCompleted && (
           <div className="space-y-1.5">
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
@@ -1389,7 +1514,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
             </div>
           </div>
         )}
-        {!v.isUnknownSerial && isVerificationAccepted && (
+        {!v.isUnknownSerial && !v.isApprovedSerial && isVerificationAccepted && (
           <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
             Verification Resolved
           </Badge>
@@ -1397,7 +1522,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
       </TableCell>
       {showEditButton && (
         <TableCell>
-          {!v.isUnknownSerial && (
+          {!v.isUnknownSerial && !v.isApprovedSerial && (
             <div className="flex items-center gap-1">
               {showAcceptButton && (
                 <Button
@@ -1440,7 +1565,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
 }
 
 function renderSubRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1501,20 +1626,51 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
       </TableCell>
       <TableCell className="text-sm"></TableCell>
       <TableCell className="text-sm">
-        {isUnknown && (
-          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
-            Unknown Serial
+        {isUnknown && !v.isApprovedSerial && (
+          <div className="flex items-center gap-1">
+            <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+              Unknown Serial
+            </Badge>
+            {onApproveUnknownSerial && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
+                  onClick={() => onApproveUnknownSerial(v)}
+                  disabled={isSaving}
+                  title="Approve serial"
+                >
+                  <Check className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
+                  onClick={() => onDismissUnknownSerial?.(v)}
+                  disabled={isSaving}
+                  title="Dismiss serial"
+                >
+                  <XIcon className="h-3 w-3" />
+                </Button>
+              </>
+            )}
+          </div>
+        )}
+        {v.isApprovedSerial && (
+          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+            Approved Serial
           </Badge>
         )}
-        {!isUnknown && !hasVerification && (
+        {!isUnknown && !v.isApprovedSerial && !hasVerification && (
           <span className="text-muted-foreground">—</span>
         )}
-        {!isUnknown && isVerificationPending && (
+        {!isUnknown && !v.isApprovedSerial && isVerificationPending && (
           <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
             Pending — {v.verificationTeamName}
           </Badge>
         )}
-        {!isUnknown && isVerificationCompleted && (
+        {!isUnknown && !v.isApprovedSerial && isVerificationCompleted && (
           <div className="space-y-1.5">
             <div className="flex items-center gap-1.5 flex-wrap">
               <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs whitespace-nowrap">
@@ -1545,7 +1701,7 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
             </div>
           </div>
         )}
-        {!isUnknown && isVerificationAccepted && (
+        {!isUnknown && !v.isApprovedSerial && isVerificationAccepted && (
           <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
             Verification Resolved
           </Badge>
@@ -1553,7 +1709,7 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
       </TableCell>
       {showEditButton && (
         <TableCell>
-          {!isUnknown && (
+          {!isUnknown && !v.isApprovedSerial && (
             <div className="flex items-center gap-1">
               {showAcceptButton && (
                 <Button

@@ -198,6 +198,70 @@ export async function GET(request: NextRequest) {
           countedAt: null,
           isUnknownSerial: true,
           serialNumber: unknowns[i],
+          discrepancyId: disc.id,
+          serialIndex: i,
+        });
+      }
+    }
+  }
+
+  // For the accepted tab, include approved serials from resolved discrepancies as synthetic rows.
+  if (tab === "accepted") {
+    const approvedDiscrepancies = await db
+      .select({
+        id: serialDiscrepancies.id,
+        itemCode: serialDiscrepancies.itemCode,
+        description: serialDiscrepancies.description,
+        binNumber: serialDiscrepancies.binNumber,
+        approvedSerials: serialDiscrepancies.approvedSerials,
+        teamName: teams.name,
+      })
+      .from(serialDiscrepancies)
+      .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
+      .where(
+        and(
+          eq(serialDiscrepancies.eventId, user.eventId),
+          sql`${serialDiscrepancies.approvedSerials} IS NOT NULL AND ${serialDiscrepancies.approvedSerials} != '[]'`
+        )
+      );
+
+    for (const disc of approvedDiscrepancies) {
+      const approved: string[] = JSON.parse(disc.approvedSerials!);
+      if (approved.length === 0) continue;
+
+      const [refItem] = await db
+        .select({ avgCost: items.avgCost })
+        .from(items)
+        .where(
+          and(
+            eq(items.eventId, user.eventId),
+            eq(items.itemCode, disc.itemCode)
+          )
+        );
+      const avgCost = refItem?.avgCost ?? 0;
+
+      for (let i = 0; i < approved.length; i++) {
+        const varianceValue = 1 * avgCost;
+        enrichedVariances.push({
+          countId: -(disc.id * 1000 + 500 + i), // synthetic negative ID (offset to avoid collision)
+          itemCode: disc.itemCode,
+          description: disc.description,
+          brand: null,
+          binNumber: disc.binNumber,
+          onHand: 0,
+          avgCost,
+          countedQty: 1,
+          variance: 1,
+          varianceValue,
+          teamName: disc.teamName,
+          comment: null,
+          checkStatus: "accepted",
+          countedAt: null,
+          isUnknownSerial: true,
+          isApprovedSerial: true,
+          serialNumber: approved[i],
+          discrepancyId: disc.id,
+          serialIndex: i,
         });
       }
     }
@@ -317,6 +381,90 @@ export async function PATCH(request: NextRequest) {
           tableName: "verification_assignments",
           recordId: verificationId,
           newValue: JSON.stringify({ action, countId: va.countId }),
+        });
+
+      return NextResponse.json({ success: true, action });
+    }
+
+    // Handle approve/dismiss unknown serial actions
+    if (action === "approve_unknown_serial" || action === "dismiss_unknown_serial") {
+      if (countId === undefined) {
+        return NextResponse.json({ error: "countId is required" }, { status: 400 });
+      }
+
+      // Extract discrepancy ID and serial index from synthetic countId
+      const absId = Math.abs(countId);
+      const discrepancyId = Math.floor(absId / 1000);
+      const serialIndex = absId % 1000;
+
+      // Fetch the discrepancy
+      const [disc] = await db
+        .select()
+        .from(serialDiscrepancies)
+        .where(
+          and(
+            eq(serialDiscrepancies.id, discrepancyId),
+            eq(serialDiscrepancies.eventId, user.eventId)
+          )
+        );
+
+      if (!disc) {
+        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      }
+
+      const unknowns: string[] = JSON.parse(disc.unknownSerials);
+      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+
+      if (serialIndex >= unknowns.length) {
+        return NextResponse.json({ error: "Serial index out of range" }, { status: 400 });
+      }
+
+      const serial = unknowns[serialIndex];
+      const newUnknowns = unknowns.filter((_, i) => i !== serialIndex);
+
+      if (action === "approve_unknown_serial") {
+        approved.push(serial);
+        const updates: Record<string, unknown> = {
+          unknownSerials: JSON.stringify(newUnknowns),
+          approvedSerials: JSON.stringify(approved),
+        };
+        // If no unknowns left, mark resolved+approved
+        if (newUnknowns.length === 0) {
+          updates.status = "resolved";
+          updates.resolutionType = "approved";
+          updates.resolvedBy = user.id;
+          updates.resolvedAt = new Date().toISOString();
+        }
+        await db.update(serialDiscrepancies)
+          .set(updates)
+          .where(eq(serialDiscrepancies.id, discrepancyId));
+      } else {
+        // dismiss — just remove from unknowns
+        const updates: Record<string, unknown> = {
+          unknownSerials: JSON.stringify(newUnknowns),
+        };
+        // If no unknowns left and no approved, mark resolved+dismissed
+        if (newUnknowns.length === 0) {
+          updates.status = "resolved";
+          updates.resolutionType = approved.length > 0 ? "approved" : "dismissed";
+          updates.resolvedBy = user.id;
+          updates.resolvedAt = new Date().toISOString();
+        }
+        await db.update(serialDiscrepancies)
+          .set(updates)
+          .where(eq(serialDiscrepancies.id, discrepancyId));
+      }
+
+      // Audit log
+      await db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: action === "approve_unknown_serial" ? "serial_approve_unknown" : "serial_dismiss_unknown",
+          tableName: "serial_discrepancies",
+          recordId: discrepancyId,
+          newValue: JSON.stringify({ serial, action }),
         });
 
       return NextResponse.json({ success: true, action });

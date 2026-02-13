@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -22,31 +22,35 @@ export async function GET(request: NextRequest) {
     if (latest) eventId = latest.id;
   }
 
+  const warehouses = await getEventWarehouses(eventId);
+
   // Overall stats (only assigned items count toward completion)
   const [totalItems] = await db
     .select({ count: sql<number>`count(*)` })
     .from(items)
-    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)));
+    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses)));
+
+  const cwf = countsWarehouseFilter(eventId, warehouses);
 
   const [totalCounted] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(eq(counts.eventId, eventId));
+    .where(and(eq(counts.eventId, eventId), cwf));
 
   const [totalMatched] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, true)));
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, true), cwf));
 
   const [totalVariance] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)));
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), cwf));
 
   const [varianceValue] = await db
     .select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false)));
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), cwf));
 
   const [overStats] = await db
     .select({
@@ -54,7 +58,7 @@ export async function GET(request: NextRequest) {
       total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`));
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`, cwf));
 
   const [underStats] = await db
     .select({
@@ -62,7 +66,7 @@ export async function GET(request: NextRequest) {
       total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`));
+    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`, cwf));
 
   const [openQueries] = await db
     .select({ count: sql<number>`count(*)` })
@@ -96,12 +100,12 @@ export async function GET(request: NextRequest) {
     const [teamTotal] = await db
       .select({ count: sql<number>`count(*)` })
       .from(items)
-      .where(and(eq(items.eventId, eventId), eq(items.teamId, team.id)));
+      .where(and(eq(items.eventId, eventId), eq(items.teamId, team.id), warehouseFilter(warehouses)));
 
     const [teamCounted] = await db
       .select({ count: sql<number>`count(*)` })
       .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id)));
+      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), cwf));
 
     const [teamVariances] = await db
       .select({ count: sql<number>`count(*)` })
@@ -110,14 +114,15 @@ export async function GET(request: NextRequest) {
         and(
           eq(counts.eventId, eventId),
           eq(counts.teamId, team.id),
-          eq(counts.isMatch, false)
+          eq(counts.isMatch, false),
+          cwf,
         )
       );
 
     const [lastCount] = await db
       .select({ countedAt: counts.countedAt })
       .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id)))
+      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), cwf))
       .orderBy(sql`counted_at DESC`)
       .limit(1);
 
@@ -151,7 +156,7 @@ export async function GET(request: NextRequest) {
     .from(counts)
     .innerJoin(teams, eq(counts.teamId, teams.id))
     .innerJoin(items, eq(counts.itemId, items.id))
-    .where(eq(counts.eventId, eventId))
+    .where(and(eq(counts.eventId, eventId), warehouseFilter(warehouses)))
     .orderBy(sql`counted_at DESC`)
     .limit(20);
 

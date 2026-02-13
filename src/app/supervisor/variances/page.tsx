@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -23,10 +24,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil } from "lucide-react";
+import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
 import { groupSerializedVariances, type SerializedGroupRow } from "@/lib/variance-grouping";
+import { getStockStatusStyle } from "@/components/counting/item-card";
 
 interface VarianceItem {
   countId: number;
@@ -58,6 +60,7 @@ interface VarianceItem {
   serialNumber?: string;
   discrepancyId?: number;
   serialIndex?: number;
+  stockStatus?: string | null;
 }
 
 interface Team {
@@ -94,6 +97,7 @@ export default function VariancesPage() {
   const [editingItem, setEditingItem] = useState<VarianceItem | null>(null);
   const [editQty, setEditQty] = useState("");
   const [editReason, setEditReason] = useState("");
+  const [editShowComment, setEditShowComment] = useState(false);
   const [saving, setSaving] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -182,6 +186,7 @@ export default function VariancesPage() {
     setEditingItem(null);
     setEditQty("");
     setEditReason("");
+    setEditShowComment(false);
   };
 
   const saveEdit = async () => {
@@ -938,137 +943,187 @@ export default function VariancesPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Edit Dialog */}
+      {/* Edit Dialog — matches team counting interface */}
       <Dialog
         open={editingItem !== null}
         onOpenChange={(open) => {
           if (!open) closeEditDialog();
         }}
       >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              Edit Count — {editingItem?.itemCode}
-            </DialogTitle>
-            <DialogDescription>
-              Adjust the counted quantity for this item.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="sm:max-w-md p-0 gap-0 overflow-hidden">
+          {editingItem && (() => {
+            const isSerialized = editingItem.isSerialized === true || editingItem.isSerialized === 1;
+            const onHand = editingItem.onHand ?? 0;
+            const isMatchValue = editQty === String(onHand);
+            const newVariance = editQty ? parseFloat(editQty) - onHand : null;
 
-          {editingItem && (
-            <div className="space-y-4">
-              {/* Read-only info */}
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                {editingItem.description && (
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground">Description: </span>
-                    <span>{editingItem.description}</span>
+            return (
+              <div className="space-y-4 p-4">
+                {/* Bin number — prominent */}
+                {editingItem.binNumber && (
+                  <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-2">
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
+                    <span className="font-mono font-bold text-base">{editingItem.binNumber}</span>
                   </div>
                 )}
-                <div>
-                  <span className="text-muted-foreground">Bin: </span>
-                  <span>{editingItem.binNumber || "—"}</span>
+
+                {/* Item Code */}
+                <div className="space-y-1">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Item Code</div>
+                  <div className="font-mono font-bold text-xl tracking-tight">
+                    {editingItem.itemCode}
+                  </div>
                 </div>
-                <div>
-                  <span className="text-muted-foreground">Team: </span>
-                  <span>{editingItem.teamName}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">On Hand: </span>
-                  <span className="font-semibold">
-                    {editingItem.onHand ?? 0}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Counted: </span>
-                  <span className="font-semibold">
-                    {editingItem.countedQty}
-                  </span>
-                </div>
-                <div className="col-span-2">
-                  <span className="text-muted-foreground">
-                    Current Variance:{" "}
-                  </span>
-                  <Badge
-                    variant={
-                      Math.abs(editingItem.variance) > 10
-                        ? "destructive"
-                        : "outline"
-                    }
-                    className={
-                      Math.abs(editingItem.variance) <= 10
-                        ? "border-amber-400 text-amber-700"
-                        : ""
-                    }
-                  >
-                    {editingItem.variance > 0 ? "+" : ""}
-                    {editingItem.variance}
+
+                {/* Description */}
+                {editingItem.description && (
+                  <div className="space-y-0.5">
+                    <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Description</div>
+                    <div className="text-sm leading-snug">
+                      {editingItem.description}
+                    </div>
+                  </div>
+                )}
+
+                {/* Metadata badges */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {editingItem.brand && (
+                    <Badge variant="secondary" className="text-xs">
+                      {editingItem.brand}
+                    </Badge>
+                  )}
+                  {editingItem.stockStatus && (
+                    <Badge className={`text-xs ${getStockStatusStyle(editingItem.stockStatus)}`}>
+                      {editingItem.stockStatus}
+                    </Badge>
+                  )}
+                  {isSerialized && (
+                    <Badge className="text-xs bg-purple-100 text-purple-800 border-purple-300">
+                      Serialized
+                    </Badge>
+                  )}
+                  <Badge variant="outline" className="text-xs">
+                    Team: {editingItem.teamName}
                   </Badge>
                 </div>
-              </div>
 
-              {/* Editable fields */}
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-qty">New Counted Qty</Label>
-                  {editingItem.isSerialized ? (
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant={editQty === "0" ? "default" : "outline"}
-                        className={`flex-1 ${editQty === "0" ? "bg-red-600 hover:bg-red-700" : ""}`}
-                        onClick={() => setEditQty("0")}
-                      >
-                        0 — Not Found
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={editQty === "1" ? "default" : "outline"}
-                        className={`flex-1 ${editQty === "1" ? "bg-green-600 hover:bg-green-700" : ""}`}
-                        onClick={() => setEditQty("1")}
-                      >
-                        1 — Found
-                      </Button>
-                    </div>
-                  ) : (
-                    <Input
-                      id="edit-qty"
-                      ref={editInputRef}
-                      type="number"
-                      inputMode="decimal"
-                      value={editQty}
-                      onChange={(e) => setEditQty(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveEdit();
-                      }}
-                      autoFocus
-                    />
-                  )}
+                {/* Serial number */}
+                {isSerialized && editingItem.serialNumber && (
+                  <div className="text-xs font-mono text-purple-700 bg-purple-50 px-2 py-1 rounded">
+                    S/N: {editingItem.serialNumber}
+                  </div>
+                )}
+
+                {/* On Hand quantity */}
+                <div className="text-center py-2 bg-muted/30 rounded-lg">
+                  <div className="text-xs font-medium text-muted-foreground mb-1">On Hand</div>
+                  <div className="text-3xl font-bold">{onHand}</div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-reason">Reason (optional)</Label>
+
+                {/* Quantity input — same style as team counting */}
+                {isSerialized ? (
+                  <div className="flex gap-3">
+                    <Button
+                      type="button"
+                      variant={editQty === "0" ? "default" : "outline"}
+                      className={`flex-1 h-16 text-lg font-bold ${editQty === "0" ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+                      onClick={() => setEditQty("0")}
+                    >
+                      0 — Not Found
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={editQty === "1" ? "default" : "outline"}
+                      className={`flex-1 h-16 text-lg font-bold ${editQty === "1" ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
+                      onClick={() => setEditQty("1")}
+                    >
+                      1 — Found
+                    </Button>
+                  </div>
+                ) : (
                   <Input
-                    id="edit-reason"
+                    ref={editInputRef}
+                    type="number"
+                    inputMode="decimal"
+                    value={editQty}
+                    onChange={(e) => setEditQty(e.target.value)}
+                    placeholder="Enter quantity"
+                    className="h-20 text-4xl text-center font-semibold"
+                    disabled={saving}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        saveEdit();
+                      }
+                    }}
+                    autoFocus
+                  />
+                )}
+
+                {/* Variance preview */}
+                {newVariance !== null && newVariance !== 0 && (
+                  <div className="text-center text-sm">
+                    <span className="text-muted-foreground">Variance: </span>
+                    <Badge
+                      variant={Math.abs(newVariance) > 10 ? "destructive" : "outline"}
+                      className={Math.abs(newVariance) <= 10 ? "border-amber-400 text-amber-700" : ""}
+                    >
+                      {newVariance > 0 ? "+" : ""}{newVariance}
+                    </Badge>
+                  </div>
+                )}
+
+                {/* Add note toggle + reason */}
+                <div className="border-t pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditShowComment((v) => !v)}
+                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    {editShowComment ? "Hide note" : "Add note"}
+                  </button>
+                </div>
+
+                {editShowComment && (
+                  <Textarea
                     value={editReason}
                     onChange={(e) => setEditReason(e.target.value)}
                     placeholder="e.g. Recounted by supervisor"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") saveEdit();
-                    }}
+                    className="text-sm"
+                    rows={2}
                   />
-                </div>
-              </div>
-            </div>
-          )}
+                )}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={closeEditDialog}>
-              Cancel
-            </Button>
-            <Button onClick={saveEdit} disabled={saving}>
-              {saving ? "Saving..." : "Save"}
-            </Button>
-          </DialogFooter>
+                {/* Submit / Cancel */}
+                {isMatchValue ? (
+                  <Button
+                    onClick={saveEdit}
+                    className="w-full h-14 text-lg font-bold text-white bg-green-600 hover:bg-green-700"
+                    disabled={saving}
+                  >
+                    {saving ? "Saving..." : "MATCH"}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={saveEdit}
+                    className="w-full h-14 text-lg font-bold text-white bg-amber-500 hover:bg-amber-600"
+                    disabled={!editQty || saving}
+                  >
+                    {saving ? "Saving..." : "Save Variance"}
+                  </Button>
+                )}
+
+                <Button
+                  variant="outline"
+                  onClick={closeEditDialog}
+                  className="w-full"
+                >
+                  Cancel
+                </Button>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

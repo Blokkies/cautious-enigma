@@ -26,7 +26,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
 
-type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "verification-counting";
+type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting";
 
 interface VerificationItem {
   verificationId: number;
@@ -89,9 +89,6 @@ export default function CountingPage() {
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<"contains" | "starts" | "exact" | "bin">("contains");
   const [recountItem, setRecountItem] = useState<CountItem | null>(null);
-  const [recountQty, setRecountQty] = useState("");
-  const [recountComment, setRecountComment] = useState("");
-  const recountInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Bin tabs
@@ -391,7 +388,7 @@ export default function CountingPage() {
 
   // ---------- Auto-focus + select (single items only) ----------
   useEffect(() => {
-    if (pageState !== "counting" || currentItemId == null) return;
+    if ((pageState !== "counting" && pageState !== "recounting") || (pageState === "counting" && currentItemId == null) || (pageState === "recounting" && !recountItem)) return;
     const timer = setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
@@ -399,7 +396,7 @@ export default function CountingPage() {
       }
     }, 50);
     return () => clearTimeout(timer);
-  }, [currentItemId, pageState]);
+  }, [currentItemId, recountItem?.id, pageState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- Keyboard handler ----------
   useEffect(() => {
@@ -432,15 +429,14 @@ export default function CountingPage() {
           }
           return;
         }
+        if (pageState === "recounting") {
+          e.preventDefault();
+          cancelRecount();
+          return;
+        }
         if (pageState === "reviewing") {
           e.preventDefault();
-          if (recountItem) {
-            setRecountItem(null);
-            setRecountQty("");
-            setRecountComment("");
-          } else {
-            goBackToBinSelection();
-          }
+          goBackToBinSelection();
           return;
         }
       }
@@ -618,8 +614,6 @@ export default function CountingPage() {
       setSearch("");
       setQueueSearch("");
       setRecountItem(null);
-      setRecountQty("");
-      setRecountComment("");
 
       // Save to sessionStorage for resume
       try {
@@ -652,8 +646,6 @@ export default function CountingPage() {
     setShowBinComplete(false);
     setCurrentIndex(0);
     setRecountItem(null);
-    setRecountQty("");
-    setRecountComment("");
   }
 
   // ---------- Verification counting ----------
@@ -788,32 +780,38 @@ export default function CountingPage() {
     try { sessionStorage.removeItem(sessionKey); } catch { /* ignore */ }
   }, []);
 
-  // ---------- Recount submit ----------
-  const submitRecount = useCallback(async () => {
+  // ---------- Recount via full ActiveItemCard ----------
+  const startRecount = useCallback((item: CountItem) => {
+    setRecountItem(item);
+    setQtyValue(item.countedQty != null ? String(item.countedQty) : String(item.onHand ?? 0));
+    setComment("");
+    setShowFlash(false);
+    setPageState("recounting");
+  }, []);
+
+  const submitRecount = useCallback(() => {
     if (!recountItem || isSubmitting) return;
-    const qty = parseFloat(recountQty);
+    const qty = parseFloat(qtyValue);
     if (isNaN(qty) || qty < 0) {
       toast.error("Please enter a valid quantity");
       return;
     }
     setIsSubmitting(true);
-    await handleCount(recountItem.id, qty, recountComment || undefined);
-    setRecountItem(null);
-    setRecountQty("");
-    setRecountComment("");
-    setIsSubmitting(false);
-  }, [recountItem, recountQty, recountComment, isSubmitting, handleCount]);
+    handleCount(recountItem.id, qty, comment || undefined).finally(() => {
+      setIsSubmitting(false);
+      setRecountItem(null);
+      setQtyValue("");
+      setComment("");
+      setPageState("reviewing");
+    });
+  }, [recountItem, qtyValue, comment, isSubmitting, handleCount]);
 
-  // Auto-focus recount input
-  useEffect(() => {
-    if (recountItem && recountInputRef.current) {
-      const timer = setTimeout(() => {
-        recountInputRef.current?.focus();
-        recountInputRef.current?.select();
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [recountItem]);
+  const cancelRecount = useCallback(() => {
+    setRecountItem(null);
+    setQtyValue("");
+    setComment("");
+    setPageState("reviewing");
+  }, []);
 
   // ---------- Aisle toggle helper ----------
   const toggleAisle = useCallback((prefix: string) => {
@@ -1463,6 +1461,54 @@ export default function CountingPage() {
     );
   }
 
+  // ---------- Recounting (uses same ActiveItemCard as initial count) ----------
+  if (pageState === "recounting" && recountItem) {
+    const binLabel = selectedBin === "all" ? "All Bins" : selectedBin || "Items";
+
+    return (
+      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
+        {/* Sticky header */}
+        <div className="sticky top-14 z-40 bg-white border-b px-4 py-3 space-y-2">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={cancelRecount}
+              className="px-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="flex items-center gap-2 bg-slate-100 rounded-md px-2.5 py-1">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
+              <span className="font-mono font-bold text-base">{binLabel}</span>
+            </div>
+            <div className="flex-1" />
+            <Badge variant="outline" className="text-xs">Recount</Badge>
+          </div>
+        </div>
+
+        {/* Main content — same ActiveItemCard as initial counting */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="max-w-lg mx-auto">
+            <ActiveItemCard
+              item={recountItem}
+              qtyValue={qtyValue}
+              onQtyChange={setQtyValue}
+              onSubmit={submitRecount}
+              onSkip={cancelRecount}
+              comment={comment}
+              onCommentChange={setComment}
+              inputRef={inputRef}
+              isSubmitting={isSubmitting}
+              showSuccessFlash={false}
+              onFlashComplete={() => {}}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- Reviewing ----------
   if (pageState === "reviewing") {
     const binLabel =
@@ -1538,143 +1584,27 @@ export default function CountingPage() {
                 {groupedReviewItems.map((row, rowIdx) => {
                   if (row.type === "serialized-group") {
                     return (
-                      <div key={`group-${row.itemCode}-${rowIdx}`}>
-                        <CountedSerialGroupRow
-                          row={row as ReviewDisplayRow & { type: "serialized-group" }}
-                          onRecount={(id) => {
-                            const target = items.find((i) => i.id === id);
-                            if (target) {
-                              setRecountItem(target);
-                              setRecountQty(
-                                target.countedQty != null
-                                  ? String(target.countedQty)
-                                  : ""
-                              );
-                              setRecountComment("");
-                            }
-                          }}
-                        />
-                        {/* Inline recount form for any serial in this group */}
-                        {row.items?.some((gi) => recountItem?.id === gi.id) && recountItem && (
-                          <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-200 space-y-2">
-                            <div className="text-sm font-medium">
-                              Recount: {recountItem.itemCode} (S/N: {recountItem.serialNumber || "—"})
-                            </div>
-                            <div className="flex gap-2">
-                              <Input
-                                ref={recountInputRef}
-                                type="number"
-                                inputMode="decimal"
-                                value={recountQty}
-                                onChange={(e) => setRecountQty(e.target.value)}
-                                placeholder="New qty"
-                                className="h-10 text-base flex-1"
-                                disabled={isSubmitting}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    submitRecount();
-                                  } else if (e.key === "Escape") {
-                                    e.preventDefault();
-                                    setRecountItem(null);
-                                    setRecountQty("");
-                                    setRecountComment("");
-                                  }
-                                }}
-                              />
-                              <Button
-                                className="h-10"
-                                disabled={!recountQty || isSubmitting}
-                                onClick={submitRecount}
-                              >
-                                Save
-                              </Button>
-                              <Button
-                                variant="outline"
-                                className="h-10"
-                                onClick={() => {
-                                  setRecountItem(null);
-                                  setRecountQty("");
-                                  setRecountComment("");
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                      <CountedSerialGroupRow
+                        key={`group-${row.itemCode}-${rowIdx}`}
+                        row={row as ReviewDisplayRow & { type: "serialized-group" }}
+                        onRecount={(id) => {
+                          const target = items.find((i) => i.id === id);
+                          if (target) startRecount(target);
+                        }}
+                      />
                     );
                   }
 
                   const item = row.item!;
                   return (
-                    <div key={item.id}>
-                      <CountedItemRow
-                        item={item}
-                        onRecount={(id) => {
-                          const target = items.find((i) => i.id === id);
-                          if (target) {
-                            setRecountItem(target);
-                            setRecountQty(
-                              target.countedQty != null
-                                ? String(target.countedQty)
-                                : ""
-                            );
-                            setRecountComment("");
-                          }
-                        }}
-                      />
-                      {/* Inline recount form */}
-                      {recountItem?.id === item.id && (
-                        <div className="px-4 py-3 bg-blue-50/50 border-b border-blue-200 space-y-2">
-                          <div className="text-sm font-medium">
-                            Recount: {item.itemCode}
-                          </div>
-                          <div className="flex gap-2">
-                            <Input
-                              ref={recountInputRef}
-                              type="number"
-                              inputMode="decimal"
-                              value={recountQty}
-                              onChange={(e) => setRecountQty(e.target.value)}
-                              placeholder="New qty"
-                              className="h-10 text-base flex-1"
-                              disabled={isSubmitting}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  submitRecount();
-                                } else if (e.key === "Escape") {
-                                  e.preventDefault();
-                                  setRecountItem(null);
-                                  setRecountQty("");
-                                  setRecountComment("");
-                                }
-                              }}
-                            />
-                            <Button
-                              className="h-10"
-                              disabled={!recountQty || isSubmitting}
-                              onClick={submitRecount}
-                            >
-                              Save
-                            </Button>
-                            <Button
-                              variant="outline"
-                              className="h-10"
-                              onClick={() => {
-                                setRecountItem(null);
-                                setRecountQty("");
-                                setRecountComment("");
-                              }}
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <CountedItemRow
+                      key={item.id}
+                      item={item}
+                      onRecount={(id) => {
+                        const target = items.find((i) => i.id === id);
+                        if (target) startRecount(target);
+                      }}
+                    />
                   );
                 })}
               </CardContent>

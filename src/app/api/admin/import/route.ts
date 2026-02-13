@@ -102,6 +102,22 @@ export async function POST(request: NextRequest) {
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
+    // Auto-populate event warehouses from distinct warehouse values in imported items
+    const warehouseRows = await db
+      .select({ warehouse: items.warehouse })
+      .from(items)
+      .where(eq(items.eventId, Number(eventId)))
+      .groupBy(items.warehouse);
+
+    const warehouses = warehouseRows
+      .map((r) => r.warehouse)
+      .filter((w): w is string => !!w && w.trim().length > 0)
+      .sort();
+
+    await db.update(stocktakeEvents)
+      .set({ warehouses: JSON.stringify(warehouses) })
+      .where(eq(stocktakeEvents.id, Number(eventId)));
+
     return NextResponse.json({
       success: true,
       summary: {
@@ -109,6 +125,7 @@ export async function POST(request: NextRequest) {
         uniqueBins: uniqueBins?.count || 0,
         uniqueBrands: uniqueBrands?.count || 0,
         totalValue: totalValue?.total || 0,
+        warehouses,
         mappedFields: parsed.mappedFields,
         unmappedHeaders: parsed.unmappedHeaders,
         rawRowCount: parsed.rowCount,

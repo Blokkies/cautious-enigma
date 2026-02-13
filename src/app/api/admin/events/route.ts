@@ -80,18 +80,12 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const { id, status } = await request.json();
+    const body = await request.json();
+    const { id, status, warehouses } = body;
 
-    if (!id || !status) {
+    if (!id) {
       return NextResponse.json(
-        { error: "Missing id or status" },
-        { status: 400 }
-      );
-    }
-
-    if (!VALID_STATUSES.includes(status)) {
-      return NextResponse.json(
-        { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}` },
+        { error: "Missing id" },
         { status: 400 }
       );
     }
@@ -108,13 +102,29 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (status) {
+      if (!VALID_STATUSES.includes(status)) {
+        return NextResponse.json(
+          { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}` },
+          { status: 400 }
+        );
+      }
+      updates.status = status;
+    }
+
+    if (warehouses !== undefined) {
+      updates.warehouses = Array.isArray(warehouses) ? JSON.stringify(warehouses) : null;
+    }
+
     await db.update(stocktakeEvents)
-      .set({ status, updatedAt: new Date().toISOString() })
+      .set(updates)
       .where(eq(stocktakeEvents.id, Number(id)));
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Update event status error:", error);
+    console.error("Update event error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

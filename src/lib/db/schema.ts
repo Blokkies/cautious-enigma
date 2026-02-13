@@ -17,6 +17,7 @@ export const stocktakeEvents = pgTable("stocktake_events", {
   updatedAt: text("updated_at")
     .notNull()
     .default(sql`now()`),
+  warehouses: text("warehouses"), // JSON array of selected warehouse names, null = all
 });
 
 // ─── Teams ──────────────────────────────────────────────────────────────────

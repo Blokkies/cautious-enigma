@@ -53,6 +53,7 @@ interface ImportSummary {
   uniqueBins: number;
   uniqueBrands: number;
   totalValue: number;
+  warehouses?: string[];
 }
 
 interface TeamInfo {
@@ -173,6 +174,7 @@ export default function AdminSetup() {
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(
     null
   );
+  const [selectedWarehouses, setSelectedWarehouses] = useState<Set<string>>(new Set());
 
   // Step 3: Teams
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([]);
@@ -424,6 +426,10 @@ export default function AdminSetup() {
       const data = await res.json();
       if (res.ok && data.success) {
         setImportSummary(data.summary);
+        // Auto-select all warehouses found in the import
+        if (data.summary.warehouses?.length > 0) {
+          setSelectedWarehouses(new Set(data.summary.warehouses));
+        }
         toast.success(`Imported ${data.summary.totalItems} items`);
         markComplete("import");
       } else {
@@ -720,6 +726,46 @@ export default function AdminSetup() {
                   </div>
                 )}
 
+                {importSummary && importSummary.warehouses && importSummary.warehouses.length > 1 && (
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-center gap-2 font-medium text-sm">
+                      <Map className="h-4 w-4" />
+                      Warehouse Selection
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Only items from selected warehouses will be included in this event.
+                    </p>
+                    <div className="space-y-2">
+                      {importSummary.warehouses.map((wh) => (
+                        <label
+                          key={wh}
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedWarehouses.has(wh)}
+                            onChange={() => {
+                              setSelectedWarehouses((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(wh)) next.delete(wh);
+                                else next.add(wh);
+                                return next;
+                              });
+                            }}
+                            className="h-4 w-4 rounded border-gray-300"
+                          />
+                          <span className="text-sm">{wh}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {selectedWarehouses.size === 0 && (
+                      <p className="text-xs text-amber-600 font-medium">
+                        Select at least one warehouse to continue.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex justify-between pt-2">
                   <Button
                     variant="outline"
@@ -742,10 +788,22 @@ export default function AdminSetup() {
                     )}
                     {importSummary && (
                       <Button
-                        onClick={() => {
+                        onClick={async () => {
+                          // Save warehouse selection if multiple warehouses exist
+                          if (importSummary.warehouses && importSummary.warehouses.length > 1 && wizardEventId) {
+                            await fetch("/api/admin/events", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                id: wizardEventId,
+                                warehouses: Array.from(selectedWarehouses),
+                              }),
+                            });
+                          }
                           markComplete("import");
                           goToStep("teams");
                         }}
+                        disabled={importSummary.warehouses && importSummary.warehouses.length > 1 && selectedWarehouses.size === 0}
                         className="gap-1"
                       >
                         Continue

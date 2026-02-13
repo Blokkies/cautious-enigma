@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 import { exportToExcel } from "@/lib/excel";
 
 // Correlated subquery: pick the latest count (highest id) per item for this event.
@@ -20,7 +20,8 @@ function latestCountJoin(eventId: number) {
 async function buildItemVariances(
   eventId: number,
   serialized: boolean | null,
-  direction: "up" | "down" | "both"
+  direction: "up" | "down" | "both",
+  warehouses: string[] | null,
 ): Promise<Record<string, unknown>[]> {
   return db
     .select({
@@ -49,6 +50,7 @@ async function buildItemVariances(
     .leftJoin(teams, eq(items.teamId, teams.id))
     .where(and(
       eq(items.eventId, eventId),
+      warehouseFilter(warehouses),
       serialized !== null ? eq(items.isSerialized, serialized) : undefined,
       direction === "up"
         ? sql`${counts.variance} > 0`
@@ -60,7 +62,7 @@ async function buildItemVariances(
 }
 
 // Build unknown/approved serial rows from discrepancies (serialized variances UP)
-async function buildDiscrepancyVariances(eventId: number): Promise<Record<string, unknown>[]> {
+async function buildDiscrepancyVariances(eventId: number, warehouses: string[] | null): Promise<Record<string, unknown>[]> {
   const discRows = await db
     .select({
       itemCode: serialDiscrepancies.itemCode,
@@ -89,6 +91,9 @@ async function buildDiscrepancyVariances(eventId: number): Promise<Record<string
     }
 
     const ref = refMap[disc.itemCode];
+
+    // Skip if source item's warehouse is not in the event's selected warehouses
+    if (warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse)) continue;
 
     // Open unknowns
     const unknowns = JSON.parse(disc.unknownSerials) as string[];
@@ -192,23 +197,24 @@ export async function GET(request: NextRequest) {
     if (latest) eventId = latest.id;
   }
 
+  const warehouses = await getEventWarehouses(eventId);
   let data: Record<string, unknown>[];
 
   if (type === "serials") {
-    data = await buildSerialExport(eventId);
+    data = await buildSerialExport(eventId, warehouses);
   } else if (type === "variances_nonserialized_up") {
-    data = await buildItemVariances(eventId, false, "up");
+    data = await buildItemVariances(eventId, false, "up", warehouses);
   } else if (type === "variances_nonserialized_down") {
-    data = await buildItemVariances(eventId, false, "down");
+    data = await buildItemVariances(eventId, false, "down", warehouses);
   } else if (type === "variances_serialized_up") {
-    data = await buildDiscrepancyVariances(eventId);
+    data = await buildDiscrepancyVariances(eventId, warehouses);
   } else if (type === "variances_serialized_down") {
-    data = await buildItemVariances(eventId, true, "down");
+    data = await buildItemVariances(eventId, true, "down", warehouses);
   } else if (type === "variances_all" || type === "variances") {
     // All variances: non-serialized (both directions) + serialized down + unknown serials up
     const [itemVariances, discrepancyVariances] = await Promise.all([
-      buildItemVariances(eventId, null, "both"),
-      buildDiscrepancyVariances(eventId),
+      buildItemVariances(eventId, null, "both", warehouses),
+      buildDiscrepancyVariances(eventId, warehouses),
     ]);
     data = [...itemVariances, ...discrepancyVariances];
   } else {
@@ -240,7 +246,7 @@ export async function GET(request: NextRequest) {
       .from(items)
       .leftJoin(counts, latestCountJoin(eventId))
       .leftJoin(teams, eq(items.teamId, teams.id))
-      .where(eq(items.eventId, eventId))
+      .where(and(eq(items.eventId, eventId), warehouseFilter(warehouses)))
       .orderBy(items.binNumber, items.itemCode);
 
     // Append unknown + approved serials from discrepancies (exclude fully dismissed)
@@ -272,6 +278,9 @@ export async function GET(request: NextRequest) {
       }
 
       const ref = fullRefMap[disc.itemCode];
+
+      // Skip if source item's warehouse is not in selected warehouses
+      if (warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse)) continue;
 
       // Open unknowns — included as "Unknown Serial"
       const unknowns = JSON.parse(disc.unknownSerials) as string[];
@@ -390,7 +399,7 @@ export async function GET(request: NextRequest) {
   });
 }
 
-async function buildSerialExport(eventId: number): Promise<Record<string, unknown>[]> {
+async function buildSerialExport(eventId: number, warehouses: string[] | null): Promise<Record<string, unknown>[]> {
   // Get all expected serialized items with their latest count and team
   const expectedRows = await db
     .select({
@@ -406,7 +415,7 @@ async function buildSerialExport(eventId: number): Promise<Record<string, unknow
     .from(items)
     .leftJoin(counts, latestCountJoin(eventId))
     .leftJoin(teams, eq(items.teamId, teams.id))
-    .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true)))
+    .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true), warehouseFilter(warehouses)))
     .orderBy(items.itemCode, items.binNumber, items.serialNumber);
 
   // Get all serial discrepancies for unknown serials

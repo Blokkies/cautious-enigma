@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -15,6 +15,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "serial parameter required" }, { status: 400 });
   }
 
+  const warehouses = await getEventWarehouses(user.eventId);
+
   const [match] = await db
     .select({
       binNumber: items.binNumber,
@@ -24,7 +26,8 @@ export async function GET(request: NextRequest) {
     .where(
       and(
         eq(items.eventId, user.eventId),
-        sql`lower(${items.serialNumber}) = ${serial.toLowerCase()}`
+        sql`lower(${items.serialNumber}) = ${serial.toLowerCase()}`,
+        warehouseFilter(warehouses),
       )
     )
     .limit(1);

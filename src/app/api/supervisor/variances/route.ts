@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
   }
 
   const tab = request.nextUrl.searchParams.get("tab");
+  const warehouses = await getEventWarehouses(user.eventId);
 
   const selectShape = {
     countId: counts.id,
@@ -58,7 +59,8 @@ export async function GET(request: NextRequest) {
     .where(
       and(
         whereClause,
-        eq(counts.countType, "initial")
+        eq(counts.countType, "initial"),
+        warehouseFilter(warehouses),
       )
     )
     .orderBy(sql`abs(variance_value) DESC`);
@@ -185,6 +187,9 @@ export async function GET(request: NextRequest) {
         );
       const avgCost = refItem?.avgCost ?? 0;
 
+      // Skip if source item's warehouse is not in selected warehouses
+      if (warehouses && warehouses.length > 0 && refItem?.warehouse && !warehouses.includes(refItem.warehouse)) continue;
+
       for (let i = 0; i < unknowns.length; i++) {
         const varianceValue = 1 * avgCost;
         enrichedVariances.push({
@@ -255,6 +260,9 @@ export async function GET(request: NextRequest) {
           )
         );
       const avgCost = refItem?.avgCost ?? 0;
+
+      // Skip if source item's warehouse is not in selected warehouses
+      if (warehouses && warehouses.length > 0 && refItem?.warehouse && !warehouses.includes(refItem.warehouse)) continue;
 
       for (let i = 0; i < approved.length; i++) {
         const varianceValue = 1 * avgCost;

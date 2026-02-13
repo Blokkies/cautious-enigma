@@ -224,6 +224,7 @@ ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS resolution_type TEXT;
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS approved_serials TEXT;
 ALTER TABLE items ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
+ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS warehouses TEXT;
 CREATE INDEX IF NOT EXISTS idx_items_event_serial ON items(event_id, serial_number);
 `;
 

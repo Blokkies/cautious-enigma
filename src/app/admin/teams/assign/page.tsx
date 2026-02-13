@@ -120,9 +120,8 @@ export default function AssignPage() {
   const [expandedTeams, setExpandedTeams] = useState<Set<number>>(new Set());
 
   // Filters
-  const [warehouseFilter, setWarehouseFilter] = useState<string>("");
   const [brandFilter, setBrandFilter] = useState<string>("");
-  const [filterOptions, setFilterOptions] = useState<{ warehouses: string[]; brands: string[] }>({ warehouses: [], brands: [] });
+  const [filterOptions, setFilterOptions] = useState<{ brands: string[] }>({ brands: [] });
 
   // Bin items expansion
   const [expandedBins, setExpandedBins] = useState<Set<string>>(new Set());
@@ -158,7 +157,6 @@ export default function AssignPage() {
     if (!eventId) return;
     try {
       const params = new URLSearchParams({ eventId });
-      if (warehouseFilter) params.set("warehouse", warehouseFilter);
       if (brandFilter) params.set("brand", brandFilter);
       const res = await fetch(`/api/admin/assign?${params}`);
       if (res.ok) {
@@ -173,7 +171,7 @@ export default function AssignPage() {
     } finally {
       setLoading(false);
     }
-  }, [eventId, warehouseFilter, brandFilter]);
+  }, [eventId, brandFilter]);
 
   useEffect(() => {
     loadEvents();
@@ -286,10 +284,8 @@ export default function AssignPage() {
     setSelectedBins(new Set());
   };
 
-  const handleFilterChange = (type: "warehouse" | "brand", value: string) => {
-    const val = value === "__all__" ? "" : value;
-    if (type === "warehouse") setWarehouseFilter(val);
-    else setBrandFilter(val);
+  const handleBrandFilterChange = (value: string) => {
+    setBrandFilter(value === "__all__" ? "" : value);
     setSelectedBins(new Set());
     setBinItemsCache({});
     setExpandedBins(new Set());
@@ -854,21 +850,10 @@ export default function AssignPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {/* Filters */}
-          <div className="flex gap-2">
-            <Select value={warehouseFilter || "__all__"} onValueChange={(v) => handleFilterChange("warehouse", v)}>
-              <SelectTrigger className="flex-1">
-                <SelectValue placeholder="All Warehouses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All Warehouses</SelectItem>
-                {filterOptions.warehouses.map((w) => (
-                  <SelectItem key={w} value={w}>{w}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={brandFilter || "__all__"} onValueChange={(v) => handleFilterChange("brand", v)}>
-              <SelectTrigger className="flex-1">
+          {/* Brand Filter */}
+          {filterOptions.brands.length > 1 && (
+            <Select value={brandFilter || "__all__"} onValueChange={handleBrandFilterChange}>
+              <SelectTrigger>
                 <SelectValue placeholder="All Brands" />
               </SelectTrigger>
               <SelectContent>
@@ -878,7 +863,7 @@ export default function AssignPage() {
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          )}
 
           {/* Search + Sort + Select All */}
           <div className="flex gap-2">

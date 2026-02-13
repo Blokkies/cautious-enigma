@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, teams } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
+import { getEventWarehouses } from "@/lib/api-auth";
 
 // GET: Get assignment overview - unassigned bins and per-team bin breakdown
 export async function GET(request: NextRequest) {
@@ -23,17 +24,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ binItems });
   }
 
-  // Warehouse and brand filters
-  const warehouse = request.nextUrl.searchParams.get("warehouse");
+  // Event-level warehouse scoping + brand filter
+  const eventWarehouses = await getEventWarehouses(eid);
   const brand = request.nextUrl.searchParams.get("brand");
 
-  // Build unassigned bins query with optional filters
-  let unassignedBinsQuery = sql`SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
-     FROM items WHERE event_id = ${eid} AND team_id IS NULL AND bin_number IS NOT NULL`;
+  // Build warehouse SQL fragment
+  const whFragment = eventWarehouses
+    ? sql` AND warehouse IN (${sql.raw(eventWarehouses.map(w => `'${w.replace(/'/g, "''")}'`).join(","))})`
+    : sql``;
 
-  if (warehouse) {
-    unassignedBinsQuery = sql`${unassignedBinsQuery} AND warehouse = ${warehouse}`;
-  }
+  // Build unassigned bins query
+  let unassignedBinsQuery = sql`SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
+     FROM items WHERE event_id = ${eid} AND team_id IS NULL AND bin_number IS NOT NULL${whFragment}`;
+
   if (brand) {
     unassignedBinsQuery = sql`${unassignedBinsQuery} AND brand = ${brand}`;
   }
@@ -47,29 +50,15 @@ export async function GET(request: NextRequest) {
     total_value: Number(b.total_value),
   }));
 
-  // Filter options - cross-filtered from unassigned items
-  let warehouseFilterQuery = sql`SELECT DISTINCT warehouse FROM items WHERE event_id = ${eid} AND team_id IS NULL AND warehouse IS NOT NULL AND warehouse != ''`;
-  if (brand) {
-    warehouseFilterQuery = sql`${warehouseFilterQuery} AND brand = ${brand}`;
-  }
-  warehouseFilterQuery = sql`${warehouseFilterQuery} ORDER BY warehouse`;
-
-  let brandFilterQuery = sql`SELECT DISTINCT brand FROM items WHERE event_id = ${eid} AND team_id IS NULL AND brand IS NOT NULL AND brand != ''`;
-  if (warehouse) {
-    brandFilterQuery = sql`${brandFilterQuery} AND warehouse = ${warehouse}`;
-  }
+  // Brand filter options (scoped to event warehouses)
+  let brandFilterQuery = sql`SELECT DISTINCT brand FROM items WHERE event_id = ${eid} AND team_id IS NULL AND brand IS NOT NULL AND brand != ''${whFragment}`;
   brandFilterQuery = sql`${brandFilterQuery} ORDER BY brand`;
 
-  const warehousesResult = await db.execute(warehouseFilterQuery) as { warehouse: string }[];
   const brandsResult = await db.execute(brandFilterQuery) as { brand: string }[];
-  const warehouses = warehousesResult.map(r => r.warehouse);
   const brands = brandsResult.map(r => r.brand);
 
-  // Summary stats - respect filters
-  let statsQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid}`;
-  if (warehouse) {
-    statsQuery = sql`${statsQuery} AND warehouse = ${warehouse}`;
-  }
+  // Summary stats - scoped to event warehouses + brand filter
+  let statsQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid}${whFragment}`;
   if (brand) {
     statsQuery = sql`${statsQuery} AND brand = ${brand}`;
   }
@@ -77,10 +66,7 @@ export async function GET(request: NextRequest) {
   const totalItemsResult = await db.execute(statsQuery);
   const totalItems = Number((totalItemsResult[0] as Record<string, unknown>)?.count ?? 0);
 
-  let assignedQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid} AND team_id IS NOT NULL`;
-  if (warehouse) {
-    assignedQuery = sql`${assignedQuery} AND warehouse = ${warehouse}`;
-  }
+  let assignedQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid} AND team_id IS NOT NULL${whFragment}`;
   if (brand) {
     assignedQuery = sql`${assignedQuery} AND brand = ${brand}`;
   }
@@ -88,10 +74,7 @@ export async function GET(request: NextRequest) {
   const assignedItemsResult = await db.execute(assignedQuery);
   const assignedItems = Number((assignedItemsResult[0] as Record<string, unknown>)?.count ?? 0);
 
-  let unassignedQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid} AND team_id IS NULL`;
-  if (warehouse) {
-    unassignedQuery = sql`${unassignedQuery} AND warehouse = ${warehouse}`;
-  }
+  let unassignedQuery = sql`SELECT count(*) as count FROM items WHERE event_id = ${eid} AND team_id IS NULL${whFragment}`;
   if (brand) {
     unassignedQuery = sql`${unassignedQuery} AND brand = ${brand}`;
   }
@@ -105,11 +88,8 @@ export async function GET(request: NextRequest) {
   const teamDetails = await Promise.all(
     teamList.map(async (team) => {
       let teamBinsQuery = sql`SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
-         FROM items WHERE event_id = ${eid} AND team_id = ${team.id} AND bin_number IS NOT NULL`;
+         FROM items WHERE event_id = ${eid} AND team_id = ${team.id} AND bin_number IS NOT NULL${whFragment}`;
 
-      if (warehouse) {
-        teamBinsQuery = sql`${teamBinsQuery} AND warehouse = ${warehouse}`;
-      }
       if (brand) {
         teamBinsQuery = sql`${teamBinsQuery} AND brand = ${brand}`;
       }
@@ -140,7 +120,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     unassignedBins,
-    filterOptions: { warehouses, brands },
+    filterOptions: { brands },
     stats: {
       total: totalItems,
       assigned: assignedItems,

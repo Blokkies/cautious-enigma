@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, teams, supervisors, counts, queries, breakdowns, teamAssignments, auditLog, verificationAssignments } from "@/lib/db/schema";
+import { stocktakeEvents, items, teams, supervisors, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNull } from "drizzle-orm";
 
 // GET: Check readiness
@@ -122,7 +122,10 @@ export async function DELETE(request: NextRequest) {
     // Cascade delete all related data in correct order (children first)
     await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
     await db.delete(auditLog).where(eq(auditLog.eventId, eid));
+    await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
+    await db.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${eid})`);
     await db.delete(breakdowns).where(eq(breakdowns.eventId, eid));
+    await db.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${eid})`);
     await db.delete(queries).where(eq(queries.eventId, eid));
     await db.delete(counts).where(eq(counts.eventId, eid));
     await db.delete(teamAssignments).where(eq(teamAssignments.eventId, eid));

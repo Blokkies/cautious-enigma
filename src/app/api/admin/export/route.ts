@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, stocktakeEvents } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import * as XLSX from "xlsx";
+import { getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const eventId = request.nextUrl.searchParams.get("eventId");
@@ -23,6 +24,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Event not found" }, { status: 404 });
   }
 
+  const warehouses = await getEventWarehouses(eid);
+
   const rows = await db
     .select({
       internalId: items.internalId,
@@ -42,7 +45,7 @@ export async function GET(request: NextRequest) {
       isSerialized: items.isSerialized,
     })
     .from(items)
-    .where(eq(items.eventId, eid));
+    .where(and(eq(items.eventId, eid), warehouseFilter(warehouses)));
 
   const exportRows = rows.map((r) => ({
     "Internal ID": r.internalId || "",

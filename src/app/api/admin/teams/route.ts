@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { teams, supervisors, items } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
   const user = getApiUser(request);
@@ -24,18 +24,20 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });
   }
 
+  const warehouses = await getEventWarehouses(eid);
+
   const teamList = await db
     .select()
     .from(teams)
     .where(eq(teams.eventId, eid));
 
-  // Count assigned items per team
+  // Count assigned items per team (filtered by event's selected warehouses)
   const enriched = await Promise.all(teamList.map(async (team) => {
     const assignedCountResult = await db
       .select({ count: sql<number>`count(*)` })
       .from(items)
       .where(
-        and(eq(items.eventId, eid), eq(items.teamId, team.id))
+        and(eq(items.eventId, eid), eq(items.teamId, team.id), warehouseFilter(warehouses))
       );
 
     const [assignedCount] = assignedCountResult;

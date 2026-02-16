@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, verificationAssignments } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "team") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const warehouses = await getEventWarehouses(user.eventId);
 
   // Get all items assigned to this team with their count status
   const teamItems = await db
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
       and(eq(counts.itemId, items.id), eq(counts.teamId, user.id))
     )
     .where(
-      and(eq(items.eventId, user.eventId), eq(items.teamId, user.id))
+      and(eq(items.eventId, user.eventId), eq(items.teamId, user.id), warehouseFilter(warehouses))
     )
     .orderBy(items.binNumber, items.itemCode);
 
@@ -91,7 +93,8 @@ export async function GET(request: NextRequest) {
       and(
         eq(verificationAssignments.assignedTeamId, user.id),
         eq(verificationAssignments.eventId, user.eventId),
-        eq(verificationAssignments.status, "pending")
+        eq(verificationAssignments.status, "pending"),
+        warehouseFilter(warehouses)
       )
     )
     .orderBy(items.binNumber, items.itemCode);

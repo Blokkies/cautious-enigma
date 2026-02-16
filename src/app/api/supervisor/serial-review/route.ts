@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { serialDiscrepancies, teams, items, counts, auditLog } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { getApiUser, checkEventActive } from "@/lib/api-auth";
+import { getApiUser, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "supervisor") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const warehouses = await getEventWarehouses(user.eventId);
 
   const allDiscrepancies = await db
     .select({
@@ -29,7 +31,7 @@ export async function GET(request: NextRequest) {
     .where(eq(serialDiscrepancies.eventId, user.eventId))
     .orderBy(desc(serialDiscrepancies.createdAt));
 
-  // Enrich each discrepancy with expected serial info
+  // Enrich each discrepancy with expected serial info (filtered by selected warehouses)
   const enriched = await Promise.all(allDiscrepancies.map(async (disc) => {
     // Find expected serialized items matching itemCode + binNumber in this event
     const expectedItems = await db
@@ -43,6 +45,7 @@ export async function GET(request: NextRequest) {
           eq(items.eventId, user.eventId),
           eq(items.itemCode, disc.itemCode),
           eq(items.isSerialized, true),
+          warehouseFilter(warehouses),
           ...(disc.binNumber ? [eq(items.binNumber, disc.binNumber)] : [])
         )
       );

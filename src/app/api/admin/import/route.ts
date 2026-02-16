@@ -7,20 +7,27 @@ import { parseExcel } from "@/lib/excel";
 // GET: List events that have imported items (for "copy from" feature)
 export async function GET() {
   try {
-    const rows = await db
+    const allEvents = await db
       .select({
         id: stocktakeEvents.id,
         name: stocktakeEvents.name,
         status: stocktakeEvents.status,
-        itemCount: sql<number>`(SELECT count(*) FROM items WHERE items.event_id = ${stocktakeEvents.id})`,
       })
       .from(stocktakeEvents);
 
-    const eventsWithItems = rows
-      .filter((e) => Number(e.itemCount) > 0)
-      .map((e) => ({ id: e.id, name: e.name, status: e.status, itemCount: Number(e.itemCount) }));
+    const eventsWithItems = await Promise.all(
+      allEvents.map(async (event) => {
+        const [countRow] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(items)
+          .where(eq(items.eventId, event.id));
+        return { ...event, itemCount: Number(countRow?.count || 0) };
+      })
+    );
 
-    return NextResponse.json({ events: eventsWithItems });
+    return NextResponse.json({
+      events: eventsWithItems.filter((e) => e.itemCount > 0),
+    });
   } catch (error) {
     console.error("Error listing events:", error);
     return NextResponse.json({ error: "Failed to list events" }, { status: 500 });

@@ -274,6 +274,12 @@ export const serialDiscrepancies = pgTable("serial_discrepancies", {
   approvedSerials: text("approved_serials"),
   resolvedBy: integer("resolved_by").references(() => supervisors.id),
   resolvedAt: text("resolved_at"),
+  verificationTeamId: integer("verification_team_id").references(() => teams.id),
+  verificationAssignedBy: integer("verification_assigned_by").references(() => supervisors.id),
+  verificationAssignedAt: text("verification_assigned_at"),
+  verificationStatus: text("verification_status"), // "pending" | "completed"
+  verificationCompletedAt: text("verification_completed_at"),
+  verifiedSerials: text("verified_serials"), // JSON: [{serial, status: "confirmed"|"not_found"}]
   createdAt: text("created_at")
     .notNull()
     .default(sql`now()`),

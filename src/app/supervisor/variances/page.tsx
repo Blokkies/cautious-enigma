@@ -61,6 +61,11 @@ interface VarianceItem {
   discrepancyId?: number;
   serialIndex?: number;
   stockStatus?: string | null;
+  // Serial verification fields
+  serialVerificationStatus?: string | null;
+  serialVerificationTeamId?: number | null;
+  serialVerificationTeamName?: string | null;
+  serialVerificationResult?: string | null; // "confirmed" | "not_found"
 }
 
 interface Team {
@@ -113,6 +118,13 @@ export default function VariancesPage() {
   const [editingSerialItem, setEditingSerialItem] = useState<VarianceItem | null>(null);
   const [editSerialValue, setEditSerialValue] = useState("");
   const editSerialInputRef = useRef<HTMLInputElement>(null);
+
+  // Serial verification assignment state
+  const [showSerialVerifyDialog, setShowSerialVerifyDialog] = useState(false);
+  const [serialVerifyItem, setSerialVerifyItem] = useState<VarianceItem | null>(null);
+  const [serialVerifyTeams, setSerialVerifyTeams] = useState<Team[]>([]);
+  const [serialVerifySelectedTeamId, setSerialVerifySelectedTeamId] = useState<number | null>(null);
+  const [serialVerifyAssigning, setSerialVerifyAssigning] = useState(false);
 
   const loadVariances = useCallback(async () => {
     try {
@@ -636,6 +648,55 @@ export default function VariancesPage() {
     }
   };
 
+  // Open serial verify dialog — fetch teams + show dialog
+  const openSerialVerifyDialog = async (v: VarianceItem) => {
+    if (!v.discrepancyId) return;
+    setSerialVerifyItem(v);
+    setSerialVerifySelectedTeamId(null);
+    try {
+      const res = await fetch("/api/supervisor/teams");
+      if (res.ok) {
+        const data = await res.json();
+        setSerialVerifyTeams(data.teams || []);
+      }
+    } catch {
+      toast.error("Failed to load teams");
+    }
+    setShowSerialVerifyDialog(true);
+  };
+
+  const submitSerialVerifyAssignment = async () => {
+    if (!serialVerifyItem?.discrepancyId || !serialVerifySelectedTeamId) return;
+    setSerialVerifyAssigning(true);
+    try {
+      const res = await fetch("/api/supervisor/serial-review", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          discrepancyId: serialVerifyItem.discrepancyId,
+          action: "assign-verification",
+          assignedTeamId: serialVerifySelectedTeamId,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to assign verification");
+        return;
+      }
+
+      const teamName = serialVerifyTeams.find((t) => t.id === serialVerifySelectedTeamId)?.name;
+      toast.success(`Verification assigned to ${teamName}`);
+      setShowSerialVerifyDialog(false);
+      setSerialVerifyItem(null);
+      loadVariances();
+    } catch {
+      toast.error("Failed — check your connection");
+    } finally {
+      setSerialVerifyAssigning(false);
+    }
+  };
+
   const filterItems = (items: VarianceItem[]) => {
     if (!search) return items;
     const q = search.toLowerCase();
@@ -896,6 +957,7 @@ export default function VariancesPage() {
             onApproveUnknownSerial={handleApproveUnknownSerial}
             onDismissUnknownSerial={handleDismissUnknownSerial}
             onEditUnknownSerial={openEditSerialDialog}
+            onSerialVerify={openSerialVerifyDialog}
             isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
@@ -1288,6 +1350,80 @@ export default function VariancesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Serial Verification Assignment Dialog */}
+      <Dialog
+        open={showSerialVerifyDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowSerialVerifyDialog(false);
+            setSerialVerifyItem(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Assign Serial Verification</DialogTitle>
+            <DialogDescription>
+              Choose a team to physically verify the unknown serials for{" "}
+              <span className="font-mono font-medium">{serialVerifyItem?.itemCode}</span>
+              {serialVerifyItem?.binNumber && (
+                <> in bin <span className="font-mono font-medium">{serialVerifyItem.binNumber}</span></>
+              )}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Label>Select Team</Label>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {serialVerifyTeams.map((t) => (
+                <label
+                  key={t.id}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                    serialVerifySelectedTeamId === t.id
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:bg-muted/50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="serial-verify-team"
+                    checked={serialVerifySelectedTeamId === t.id}
+                    onChange={() => setSerialVerifySelectedTeamId(t.id)}
+                    className="h-4 w-4"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium">{t.name}</div>
+                    {t.members && (
+                      <div className="text-xs text-muted-foreground">
+                        {(() => { try { return (JSON.parse(t.members) as string[]).join(", "); } catch { return null; } })()}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSerialVerifyDialog(false);
+                setSerialVerifyItem(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={submitSerialVerifyAssignment}
+              disabled={serialVerifyAssigning || !serialVerifySelectedTeamId}
+            >
+              {serialVerifyAssigning ? "Assigning..." : "Assign Verification"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1311,6 +1447,7 @@ function VarianceTable({
   onApproveUnknownSerial,
   onDismissUnknownSerial,
   onEditUnknownSerial,
+  onSerialVerify,
   isSaving,
 }: {
   items: VarianceItem[];
@@ -1333,6 +1470,7 @@ function VarianceTable({
   onApproveUnknownSerial?: (item: VarianceItem) => void;
   onDismissUnknownSerial?: (item: VarianceItem) => void;
   onEditUnknownSerial?: (item: VarianceItem) => void;
+  onSerialVerify?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -1422,6 +1560,7 @@ function VarianceTable({
                       onApproveUnknownSerial,
                       onDismissUnknownSerial,
                       onEditUnknownSerial,
+                      onSerialVerify,
                       isSaving,
                     });
                   }
@@ -1530,6 +1669,7 @@ function VarianceTable({
                         onApproveUnknownSerial,
                         onDismissUnknownSerial,
                         onEditUnknownSerial,
+                        onSerialVerify,
                         isSaving,
                       }))}
                     </React.Fragment>
@@ -1560,11 +1700,12 @@ interface RowProps {
   onApproveUnknownSerial?: (item: VarianceItem) => void;
   onDismissUnknownSerial?: (item: VarianceItem) => void;
   onEditUnknownSerial?: (item: VarianceItem) => void;
+  onSerialVerify?: (item: VarianceItem) => void;
   isSaving?: boolean;
 }
 
 function renderSingleRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1630,44 +1771,68 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
       <TableCell className="text-sm">{v.teamName}</TableCell>
       <TableCell className="text-sm">
         {v.isUnknownSerial && !v.isApprovedSerial && (
-          <div className="flex items-center gap-1">
-            <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
-              Unknown Serial
-            </Badge>
-            {onApproveUnknownSerial && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
-                  onClick={() => onEditUnknownSerial?.(v)}
-                  disabled={isSaving}
-                  title="Edit serial number"
-                >
-                  <Pencil className="h-3 w-3" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
-                  onClick={() => onApproveUnknownSerial(v)}
-                  disabled={isSaving}
-                  title="Approve serial"
-                >
-                  <Check className="h-3 w-3" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
-                  onClick={() => onDismissUnknownSerial?.(v)}
-                  disabled={isSaving}
-                  title="Dismiss serial"
-                >
-                  <XIcon className="h-3 w-3" />
-                </Button>
-              </>
+          <div className="space-y-1">
+            {v.serialVerificationStatus === "completed" && v.serialVerificationResult ? (
+              <Badge className={`text-xs ${v.serialVerificationResult === "confirmed" ? "bg-green-100 text-green-800 border-green-300" : "bg-red-100 text-red-800 border-red-300"}`}>
+                {v.serialVerificationResult === "confirmed" ? "Confirmed Present" : "Not Found"}
+              </Badge>
+            ) : v.serialVerificationStatus === "pending" ? (
+              <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
+                Verifying — {v.serialVerificationTeamName}
+              </Badge>
+            ) : (
+              <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+                Unknown Serial
+              </Badge>
             )}
+            <div className="flex items-center gap-1">
+              {onApproveUnknownSerial && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
+                    onClick={() => onEditUnknownSerial?.(v)}
+                    disabled={isSaving}
+                    title="Edit serial number"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  {!v.serialVerificationStatus && onSerialVerify && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-xs px-1.5 text-purple-700 border-purple-300 hover:bg-purple-50"
+                      onClick={() => onSerialVerify(v)}
+                      disabled={isSaving}
+                      title="Assign verification"
+                    >
+                      <ClipboardCheck className="h-3 w-3" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
+                    onClick={() => onApproveUnknownSerial(v)}
+                    disabled={isSaving}
+                    title="Approve serial"
+                  >
+                    <Check className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
+                    onClick={() => onDismissUnknownSerial?.(v)}
+                    disabled={isSaving}
+                    title="Dismiss serial"
+                  >
+                    <XIcon className="h-3 w-3" />
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         )}
         {v.isApprovedSerial && (
@@ -1768,7 +1933,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
 }
 
 function renderSubRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1830,44 +1995,68 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
       <TableCell className="text-sm"></TableCell>
       <TableCell className="text-sm">
         {isUnknown && !v.isApprovedSerial && (
-          <div className="flex items-center gap-1">
-            <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
-              Unknown Serial
-            </Badge>
-            {onApproveUnknownSerial && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
-                  onClick={() => onEditUnknownSerial?.(v)}
-                  disabled={isSaving}
-                  title="Edit serial number"
-                >
-                  <Pencil className="h-3 w-3" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
-                  onClick={() => onApproveUnknownSerial(v)}
-                  disabled={isSaving}
-                  title="Approve serial"
-                >
-                  <Check className="h-3 w-3" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
-                  onClick={() => onDismissUnknownSerial?.(v)}
-                  disabled={isSaving}
-                  title="Dismiss serial"
-                >
-                  <XIcon className="h-3 w-3" />
-                </Button>
-              </>
+          <div className="space-y-1">
+            {v.serialVerificationStatus === "completed" && v.serialVerificationResult ? (
+              <Badge className={`text-xs ${v.serialVerificationResult === "confirmed" ? "bg-green-100 text-green-800 border-green-300" : "bg-red-100 text-red-800 border-red-300"}`}>
+                {v.serialVerificationResult === "confirmed" ? "Confirmed Present" : "Not Found"}
+              </Badge>
+            ) : v.serialVerificationStatus === "pending" ? (
+              <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-xs whitespace-nowrap">
+                Verifying — {v.serialVerificationTeamName}
+              </Badge>
+            ) : (
+              <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-xs">
+                Unknown Serial
+              </Badge>
             )}
+            <div className="flex items-center gap-1">
+              {onApproveUnknownSerial && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
+                    onClick={() => onEditUnknownSerial?.(v)}
+                    disabled={isSaving}
+                    title="Edit serial number"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  {!v.serialVerificationStatus && onSerialVerify && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-xs px-1.5 text-purple-700 border-purple-300 hover:bg-purple-50"
+                      onClick={() => onSerialVerify(v)}
+                      disabled={isSaving}
+                      title="Assign verification"
+                    >
+                      <ClipboardCheck className="h-3 w-3" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
+                    onClick={() => onApproveUnknownSerial(v)}
+                    disabled={isSaving}
+                    title="Approve serial"
+                  >
+                    <Check className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
+                    onClick={() => onDismissUnknownSerial?.(v)}
+                    disabled={isSaving}
+                    title="Dismiss serial"
+                  >
+                    <XIcon className="h-3 w-3" />
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         )}
         {v.isApprovedSerial && (

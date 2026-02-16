@@ -26,7 +26,16 @@ import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
 
-type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting";
+type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
+
+interface SerialVerificationTask {
+  id: number;
+  itemCode: string;
+  description: string | null;
+  binNumber: string | null;
+  unknownSerials: string[];
+  verificationAssignedAt: string | null;
+}
 
 interface VerificationItem {
   verificationId: number;
@@ -104,6 +113,12 @@ export default function CountingPage() {
   const [verificationQtyValue, setVerificationQtyValue] = useState("");
   const [verificationComment, setVerificationComment] = useState("");
 
+  // Serial verification tasks
+  const [serialVerificationTasks, setSerialVerificationTasks] = useState<SerialVerificationTask[]>([]);
+  const [activeSerialTask, setActiveSerialTask] = useState<SerialVerificationTask | null>(null);
+  const [serialVerificationResults, setSerialVerificationResults] = useState<Record<string, "confirmed" | "not_found">>({});
+  const [serialVerificationSubmitting, setSerialVerificationSubmitting] = useState(false);
+
   // Aisle collapse state
   const [collapsedAisles, setCollapsedAisles] = useState<Set<string>>(new Set());
 
@@ -129,6 +144,7 @@ export default function CountingPage() {
         setItems(data.items || []);
         setStats(data.stats || { total: 0, counted: 0, progressPercent: 0 });
         setVerificationItems(data.verificationItems || []);
+        setSerialVerificationTasks(data.serialVerificationTasks || []);
       }
     } catch {
       toast.error("Failed to load items");
@@ -340,7 +356,7 @@ export default function CountingPage() {
   // Auto-select first tab that has bins (verification highest priority)
   useEffect(() => {
     if (pageState !== "bin-selection") return;
-    if (verificationItems.length > 0) {
+    if (verificationItems.length > 0 || serialVerificationTasks.length > 0) {
       setBinTab("verification");
     } else if (inProgressBins.length > 0) {
       setBinTab("in-progress");
@@ -1111,9 +1127,216 @@ export default function CountingPage() {
     );
   }
 
+  // ---------- Serial Verification ----------
+  if (pageState === "serial-verification" && activeSerialTask) {
+    const allMarked = activeSerialTask.unknownSerials.every(
+      (s) => serialVerificationResults[s] !== undefined
+    );
+
+    const handleSerialVerificationSubmit = async () => {
+      if (!allMarked) {
+        toast.error("Please mark all serials before submitting");
+        return;
+      }
+
+      setSerialVerificationSubmitting(true);
+      try {
+        const verifiedSerials = activeSerialTask.unknownSerials.map((serial) => ({
+          serial,
+          status: serialVerificationResults[serial],
+        }));
+
+        const res = await fetch("/api/team/serial-discrepancies", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            discrepancyId: activeSerialTask.id,
+            verifiedSerials,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          toast.error(data.error || "Failed to submit verification");
+          return;
+        }
+
+        toast.success("Serial verification submitted");
+        setSerialVerificationTasks((prev) =>
+          prev.filter((t) => t.id !== activeSerialTask.id)
+        );
+        setActiveSerialTask(null);
+        setSerialVerificationResults({});
+        setPageState("bin-selection");
+        if (serialVerificationTasks.length > 1 || verificationItems.length > 0) {
+          setBinTab("verification");
+        }
+      } catch {
+        toast.error("Failed — check your connection");
+      } finally {
+        setSerialVerificationSubmitting(false);
+      }
+    };
+
+    const toggleSerialResult = (serial: string, status: "confirmed" | "not_found") => {
+      setSerialVerificationResults((prev) => {
+        if (prev[serial] === status) {
+          const next = { ...prev };
+          delete next[serial];
+          return next;
+        }
+        return { ...prev, [serial]: status };
+      });
+    };
+
+    const confirmedCount = activeSerialTask.unknownSerials.filter(
+      (s) => serialVerificationResults[s] === "confirmed"
+    ).length;
+    const notFoundCount = activeSerialTask.unknownSerials.filter(
+      (s) => serialVerificationResults[s] === "not_found"
+    ).length;
+    const unmarkedCount = activeSerialTask.unknownSerials.length - confirmedCount - notFoundCount;
+
+    return (
+      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
+        {/* Sticky header */}
+        <div className="sticky top-14 z-40 bg-amber-50 border-b border-amber-200 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setActiveSerialTask(null);
+                setSerialVerificationResults({});
+                setPageState("bin-selection");
+              }}
+              className="px-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <Badge className="bg-amber-100 text-amber-800 border-amber-300">
+              Serial Verification
+            </Badge>
+            <span className="font-mono font-semibold text-sm">
+              {activeSerialTask.itemCode}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 mt-1 pl-9 text-xs text-muted-foreground">
+            {activeSerialTask.binNumber && (
+              <span>Bin: <span className="font-mono font-medium">{activeSerialTask.binNumber}</span></span>
+            )}
+            <span>{activeSerialTask.unknownSerials.length} serial{activeSerialTask.unknownSerials.length !== 1 ? "s" : ""}</span>
+          </div>
+        </div>
+
+        {/* Main content */}
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="max-w-lg mx-auto space-y-4">
+            {/* Description */}
+            {activeSerialTask.description && (
+              <div className="text-sm text-muted-foreground">
+                {activeSerialTask.description}
+              </div>
+            )}
+
+            {/* Progress summary */}
+            <div className="flex items-center gap-2 text-xs">
+              {confirmedCount > 0 && (
+                <Badge className="bg-green-100 text-green-800 border-green-300">
+                  {confirmedCount} confirmed
+                </Badge>
+              )}
+              {notFoundCount > 0 && (
+                <Badge className="bg-red-100 text-red-800 border-red-300">
+                  {notFoundCount} not found
+                </Badge>
+              )}
+              {unmarkedCount > 0 && (
+                <Badge variant="secondary">
+                  {unmarkedCount} remaining
+                </Badge>
+              )}
+            </div>
+
+            {/* Serial list */}
+            <div className="space-y-2">
+              {activeSerialTask.unknownSerials.map((serial) => {
+                const result = serialVerificationResults[serial];
+                return (
+                  <Card key={serial} className={`${
+                    result === "confirmed"
+                      ? "border-green-300 bg-green-50/50"
+                      : result === "not_found"
+                        ? "border-red-300 bg-red-50/50"
+                        : ""
+                  }`}>
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono font-bold text-sm">
+                            {serial}
+                          </div>
+                        </div>
+                        <div className="flex gap-2 flex-shrink-0">
+                          <Button
+                            size="sm"
+                            variant={result === "confirmed" ? "default" : "outline"}
+                            className={`h-9 text-xs ${
+                              result === "confirmed"
+                                ? "bg-green-600 hover:bg-green-700 text-white"
+                                : "text-green-700 border-green-300 hover:bg-green-50"
+                            }`}
+                            onClick={() => toggleSerialResult(serial, "confirmed")}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                            Present
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={result === "not_found" ? "default" : "outline"}
+                            className={`h-9 text-xs ${
+                              result === "not_found"
+                                ? "bg-red-600 hover:bg-red-700 text-white"
+                                : "text-red-700 border-red-300 hover:bg-red-50"
+                            }`}
+                            onClick={() => toggleSerialResult(serial, "not_found")}
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5 mr-1" />
+                            Not Found
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* Submit button */}
+            <Button
+              className={`w-full h-14 text-lg font-bold ${
+                allMarked
+                  ? "bg-green-600 hover:bg-green-700 text-white"
+                  : ""
+              }`}
+              disabled={!allMarked || serialVerificationSubmitting}
+              onClick={handleSerialVerificationSubmit}
+            >
+              {serialVerificationSubmitting
+                ? "Submitting..."
+                : allMarked
+                  ? "Submit Verification"
+                  : `${unmarkedCount} serial${unmarkedCount !== 1 ? "s" : ""} remaining`}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- Bin Selection ----------
   if (pageState === "bin-selection") {
-    if (items.length === 0 && verificationItems.length === 0) {
+    if (items.length === 0 && verificationItems.length === 0 && serialVerificationTasks.length === 0) {
       return (
         <div className="flex items-center justify-center h-64">
           <div className="text-muted-foreground">
@@ -1230,8 +1453,8 @@ export default function CountingPage() {
             </div>
             <div className="flex gap-2 px-4 pb-2 overflow-x-auto">
               {([
-                ...(verificationItems.length > 0
-                  ? [{ key: "verification" as BinTab, label: "Verification", count: verificationItems.length }]
+                ...(verificationItems.length > 0 || serialVerificationTasks.length > 0
+                  ? [{ key: "verification" as BinTab, label: "Verification", count: verificationItems.length + serialVerificationTasks.length }]
                   : []),
                 { key: "not-started" as BinTab, label: "Not Started", count: notStartedBins.length },
                 { key: "in-progress" as BinTab, label: "In Progress", count: inProgressBins.length },
@@ -1341,20 +1564,60 @@ export default function CountingPage() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                    {verificationBinStats.map(([bin, bStats]) => (
-                      <button
-                        key={bin}
-                        className="text-left px-3 py-2.5 rounded-lg border border-purple-200 hover:border-purple-400 hover:shadow-sm transition-all bg-white"
-                        onClick={() => startVerificationCounting(bin)}
-                      >
-                        <div className="font-mono font-bold text-sm truncate">{bin}</div>
-                        <div className="text-[10px] text-purple-700 mt-1">
-                          {bStats.total} item{bStats.total !== 1 ? "s" : ""} to verify
+                  {verificationBinStats.length > 0 && (
+                    <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                      {verificationBinStats.map(([bin, bStats]) => (
+                        <button
+                          key={bin}
+                          className="text-left px-3 py-2.5 rounded-lg border border-purple-200 hover:border-purple-400 hover:shadow-sm transition-all bg-white"
+                          onClick={() => startVerificationCounting(bin)}
+                        >
+                          <div className="font-mono font-bold text-sm truncate">{bin}</div>
+                          <div className="text-[10px] text-purple-700 mt-1">
+                            {bStats.total} item{bStats.total !== 1 ? "s" : ""} to verify
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Serial Verification Tasks */}
+                  {serialVerificationTasks.length > 0 && (
+                    <>
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <div className="text-sm font-medium text-amber-900 mb-0.5">
+                          Serial Verification
                         </div>
-                      </button>
-                    ))}
-                  </div>
+                        <div className="text-xs text-amber-700">
+                          Physically verify unknown serial numbers. Mark each serial as present or not found.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                        {serialVerificationTasks.map((task) => (
+                          <button
+                            key={task.id}
+                            className="text-left px-3 py-2.5 rounded-lg border border-amber-200 hover:border-amber-400 hover:shadow-sm transition-all bg-white"
+                            onClick={() => {
+                              setActiveSerialTask(task);
+                              setSerialVerificationResults({});
+                              setPageState("serial-verification");
+                            }}
+                          >
+                            <div className="font-mono font-bold text-sm truncate">{task.itemCode}</div>
+                            {task.binNumber && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                Bin: {task.binNumber}
+                              </div>
+                            )}
+                            <div className="text-[10px] text-amber-700 mt-1">
+                              {task.unknownSerials.length} serial{task.unknownSerials.length !== 1 ? "s" : ""} to verify
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 

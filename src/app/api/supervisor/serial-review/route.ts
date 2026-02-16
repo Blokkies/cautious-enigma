@@ -25,6 +25,11 @@ export async function GET(request: NextRequest) {
       createdAt: serialDiscrepancies.createdAt,
       teamName: teams.name,
       teamId: serialDiscrepancies.teamId,
+      verificationTeamId: serialDiscrepancies.verificationTeamId,
+      verificationStatus: serialDiscrepancies.verificationStatus,
+      verificationAssignedAt: serialDiscrepancies.verificationAssignedAt,
+      verificationCompletedAt: serialDiscrepancies.verificationCompletedAt,
+      verifiedSerials: serialDiscrepancies.verifiedSerials,
     })
     .from(serialDiscrepancies)
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
@@ -73,6 +78,16 @@ export async function GET(request: NextRequest) {
       };
     }));
 
+    // Look up verification team name if assigned
+    let verificationTeamName: string | null = null;
+    if (disc.verificationTeamId) {
+      const [vTeam] = await db
+        .select({ name: teams.name })
+        .from(teams)
+        .where(eq(teams.id, disc.verificationTeamId));
+      verificationTeamName = vTeam?.name ?? null;
+    }
+
     return {
       id: disc.id,
       itemCode: disc.itemCode,
@@ -86,6 +101,12 @@ export async function GET(request: NextRequest) {
       createdAt: disc.createdAt,
       teamName: disc.teamName,
       teamId: disc.teamId,
+      verificationTeamId: disc.verificationTeamId,
+      verificationTeamName,
+      verificationStatus: disc.verificationStatus,
+      verificationAssignedAt: disc.verificationAssignedAt,
+      verificationCompletedAt: disc.verificationCompletedAt,
+      verifiedSerials: disc.verifiedSerials ? JSON.parse(disc.verifiedSerials) : null,
     };
   }));
 
@@ -248,6 +269,73 @@ export async function PATCH(request: NextRequest) {
             newValue: JSON.stringify({ countedQty, newStatus, serialNumber: item.serialNumber }),
           });
       }
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (effectiveAction === "assign-verification") {
+      const { assignedTeamId } = body as { assignedTeamId: number };
+      if (!assignedTeamId) {
+        return NextResponse.json(
+          { error: "assignedTeamId is required" },
+          { status: 400 }
+        );
+      }
+
+      // Validate discrepancy exists, belongs to event, and is open
+      const [disc] = await db
+        .select()
+        .from(serialDiscrepancies)
+        .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
+
+      if (!disc) {
+        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      }
+
+      if (disc.status !== "open") {
+        return NextResponse.json({ error: "Discrepancy is not open" }, { status: 400 });
+      }
+
+      // Prevent duplicate pending assignment
+      if (disc.verificationStatus === "pending") {
+        return NextResponse.json(
+          { error: "Verification already pending for this discrepancy" },
+          { status: 409 }
+        );
+      }
+
+      // Validate team belongs to event
+      const [team] = await db
+        .select({ id: teams.id })
+        .from(teams)
+        .where(and(eq(teams.id, assignedTeamId), eq(teams.eventId, user.eventId)));
+
+      if (!team) {
+        return NextResponse.json({ error: "Team not found in this event" }, { status: 404 });
+      }
+
+      // Set verification fields (allow re-assignment after completion)
+      await db.update(serialDiscrepancies)
+        .set({
+          verificationTeamId: assignedTeamId,
+          verificationAssignedBy: user.id,
+          verificationAssignedAt: new Date().toISOString(),
+          verificationStatus: "pending",
+          verificationCompletedAt: null,
+          verifiedSerials: null,
+        })
+        .where(eq(serialDiscrepancies.id, discrepancyId));
+
+      await db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "serial_assign_verification",
+          tableName: "serial_discrepancies",
+          recordId: discrepancyId,
+          newValue: JSON.stringify({ assignedTeamId }),
+        });
 
       return NextResponse.json({ success: true });
     }

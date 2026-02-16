@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, counts, verificationAssignments } from "@/lib/db/schema";
+import { items, counts, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
@@ -99,10 +99,37 @@ export async function GET(request: NextRequest) {
     )
     .orderBy(items.binNumber, items.itemCode);
 
+  // Fetch serial verification tasks assigned to this team
+  const serialVerificationTasks = await db
+    .select({
+      id: serialDiscrepancies.id,
+      itemCode: serialDiscrepancies.itemCode,
+      description: serialDiscrepancies.description,
+      binNumber: serialDiscrepancies.binNumber,
+      unknownSerials: serialDiscrepancies.unknownSerials,
+      verificationAssignedAt: serialDiscrepancies.verificationAssignedAt,
+    })
+    .from(serialDiscrepancies)
+    .where(
+      and(
+        eq(serialDiscrepancies.verificationTeamId, user.id),
+        eq(serialDiscrepancies.verificationStatus, "pending"),
+        eq(serialDiscrepancies.eventId, user.eventId)
+      )
+    )
+    .orderBy(serialDiscrepancies.createdAt);
+
+  // Parse unknownSerials JSON for each task
+  const parsedSerialTasks = serialVerificationTasks.map((task) => ({
+    ...task,
+    unknownSerials: JSON.parse(task.unknownSerials) as string[],
+  }));
+
   return NextResponse.json({
     items: teamItems,
     groupedByBin,
     stats: { total, counted, progressPercent },
     verificationItems,
+    serialVerificationTasks: parsedSerialTasks,
   });
 }

@@ -155,6 +155,10 @@ export async function GET(request: NextRequest) {
         binNumber: serialDiscrepancies.binNumber,
         unknownSerials: serialDiscrepancies.unknownSerials,
         teamName: teams.name,
+        verificationTeamId: serialDiscrepancies.verificationTeamId,
+        verificationStatus: serialDiscrepancies.verificationStatus,
+        verificationCompletedAt: serialDiscrepancies.verificationCompletedAt,
+        verifiedSerials: serialDiscrepancies.verifiedSerials,
       })
       .from(serialDiscrepancies)
       .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
@@ -164,6 +168,19 @@ export async function GET(request: NextRequest) {
           eq(serialDiscrepancies.status, "open")
         )
       );
+
+    // Build a map of verification team names for discrepancies that have one
+    const verTeamIds = Array.from(new Set(openDiscrepancies.filter((d) => d.verificationTeamId).map((d) => d.verificationTeamId!)));
+    const verTeamNameMap: Record<number, string> = {};
+    if (verTeamIds.length > 0) {
+      const verTeams = await db
+        .select({ id: teams.id, name: teams.name })
+        .from(teams)
+        .where(inArray(teams.id, verTeamIds));
+      for (const vt of verTeams) {
+        verTeamNameMap[vt.id] = vt.name;
+      }
+    }
 
     for (const disc of openDiscrepancies) {
       const unknowns: string[] = JSON.parse(disc.unknownSerials);
@@ -208,8 +225,17 @@ export async function GET(request: NextRequest) {
       )[0];
       const avgCost = finalRef?.avgCost ?? 0;
 
+      // Parse verified serials if completed
+      const parsedVerifiedSerials = disc.verifiedSerials
+        ? JSON.parse(disc.verifiedSerials) as { serial: string; status: string }[]
+        : null;
+
       for (let i = 0; i < unknowns.length; i++) {
         const varianceValue = 1 * avgCost;
+
+        // Find this serial's verification result if completed
+        const serialVerResult = parsedVerifiedSerials?.find((v) => v.serial === unknowns[i]);
+
         enrichedVariances.push({
           countId: -(disc.id * 1000 + i), // synthetic negative ID
           itemCode: disc.itemCode,
@@ -233,6 +259,10 @@ export async function GET(request: NextRequest) {
           warehouse: finalRef?.warehouse ?? null,
           division: finalRef?.division ?? null,
           stockStatus: finalRef?.stockStatus ?? null,
+          serialVerificationStatus: disc.verificationStatus ?? null,
+          serialVerificationTeamId: disc.verificationTeamId ?? null,
+          serialVerificationTeamName: disc.verificationTeamId ? (verTeamNameMap[disc.verificationTeamId] ?? null) : null,
+          serialVerificationResult: serialVerResult?.status ?? null,
         });
       }
     }

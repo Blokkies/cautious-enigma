@@ -227,6 +227,12 @@ ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
 ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS warehouses TEXT;
 CREATE INDEX IF NOT EXISTS idx_items_event_serial ON items(event_id, serial_number);
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS members TEXT;
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_team_id INTEGER REFERENCES teams(id);
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_assigned_by INTEGER REFERENCES supervisors(id);
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_assigned_at TEXT;
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_status TEXT;
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_completed_at TEXT;
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verified_serials TEXT;
 `;
 
 // DO block must be executed as a single statement (contains semicolons)

@@ -227,6 +227,10 @@ ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
 ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS warehouses TEXT;
 CREATE INDEX IF NOT EXISTS idx_items_event_serial ON items(event_id, serial_number);
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS members TEXT;
+`;
+
+// DO block must be executed as a single statement (contains semicolons)
+const membersMigration = `
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='teams' AND column_name='member1') THEN
     UPDATE teams SET members = CASE
@@ -263,6 +267,9 @@ async function migrate() {
   for (const stmt of alters) {
     await sql.unsafe(stmt + ";");
   }
+
+  // Migrate member1/member2 → members (runs as single DO block)
+  await sql.unsafe(membersMigration);
 
   // Seed default admin if admins table is empty
   const result = await sql`SELECT COUNT(*) as count FROM admins`;

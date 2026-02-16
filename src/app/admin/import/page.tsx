@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,6 +46,26 @@ export default function ImportPage() {
   const [existingEvents, setExistingEvents] = useState<{ id: number; name: string; status: string; itemCount: number }[]>([]);
   const [copySourceId, setCopySourceId] = useState<string>("");
   const [copying, setCopying] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const processingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startProcessingProgress = useCallback(() => {
+    setProcessingProgress(0);
+    processingIntervalRef.current = setInterval(() => {
+      setProcessingProgress((prev) => {
+        if (prev >= 90) return prev;
+        return prev + Math.random() * 8 + 2;
+      });
+    }, 500);
+  }, []);
+
+  const stopProcessingProgress = useCallback(() => {
+    if (processingIntervalRef.current) {
+      clearInterval(processingIntervalRef.current);
+      processingIntervalRef.current = null;
+    }
+    setProcessingProgress(100);
+  }, []);
 
   const loadEvents = useCallback(async () => {
     const res = await fetch("/api/admin/events");
@@ -101,13 +121,16 @@ export default function ImportPage() {
     });
     xhr.upload.addEventListener("load", () => {
       setUploadProgress(null);
+      startProcessingProgress();
     });
     xhr.addEventListener("load", () => {
+      stopProcessingProgress();
       try {
         const data = JSON.parse(xhr.responseText);
         if (xhr.status >= 200 && xhr.status < 300 && data.success) {
           setSummary(data.summary);
           toast.success(`Imported ${data.summary.totalItems} items successfully!`);
+          loadExistingEvents(); // Refresh so copy-from picks up new data
         } else {
           toast.error(data.error || "Import failed");
         }
@@ -118,6 +141,7 @@ export default function ImportPage() {
       setUploadProgress(null);
     });
     xhr.addEventListener("error", () => {
+      stopProcessingProgress();
       toast.error("Upload failed");
       setUploading(false);
       setUploadProgress(null);
@@ -242,11 +266,11 @@ export default function ImportPage() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {uploadProgress !== null ? "Uploading file..." : "Processing items..."}
                 </span>
-                {uploadProgress !== null && (
-                  <span className="text-muted-foreground">{uploadProgress}%</span>
-                )}
+                <span className="text-muted-foreground">
+                  {uploadProgress !== null ? `${uploadProgress}%` : `${Math.round(processingProgress)}%`}
+                </span>
               </div>
-              <Progress value={uploadProgress ?? 100} className={`h-3 ${uploadProgress === null ? "[&>div]:animate-pulse" : ""}`} />
+              <Progress value={uploadProgress ?? processingProgress} className="h-3" />
             </div>
           )}
         </CardContent>

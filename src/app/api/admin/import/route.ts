@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, stocktakeEvents } from "@/lib/db/schema";
-import { eq, sql, and, isNotNull } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
 
 // GET: List events that have imported items (for "copy from" feature)

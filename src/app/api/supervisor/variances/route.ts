@@ -169,7 +169,7 @@ export async function GET(request: NextRequest) {
       const unknowns: string[] = JSON.parse(disc.unknownSerials);
       if (unknowns.length === 0) continue;
 
-      // Look up source item metadata for this itemCode
+      // Look up source item metadata for this itemCode (prefer items in selected warehouses)
       const [refItem] = await db
         .select({
           avgCost: items.avgCost,
@@ -182,13 +182,31 @@ export async function GET(request: NextRequest) {
         .where(
           and(
             eq(items.eventId, user.eventId),
-            eq(items.itemCode, disc.itemCode)
+            eq(items.itemCode, disc.itemCode),
+            warehouseFilter(warehouses),
           )
-        );
-      const avgCost = refItem?.avgCost ?? 0;
+        )
+        .limit(1);
 
-      // Skip if source item's warehouse is not in selected warehouses
-      if (warehouses && warehouses.length > 0 && refItem?.warehouse && !warehouses.includes(refItem.warehouse)) continue;
+      // If no item found in selected warehouses, try without warehouse filter
+      const finalRef = refItem ?? (await db
+        .select({
+          avgCost: items.avgCost,
+          internalId: items.internalId,
+          warehouse: items.warehouse,
+          division: items.division,
+          stockStatus: items.stockStatus,
+        })
+        .from(items)
+        .where(
+          and(
+            eq(items.eventId, user.eventId),
+            eq(items.itemCode, disc.itemCode),
+          )
+        )
+        .limit(1)
+      )[0];
+      const avgCost = finalRef?.avgCost ?? 0;
 
       for (let i = 0; i < unknowns.length; i++) {
         const varianceValue = 1 * avgCost;
@@ -211,10 +229,10 @@ export async function GET(request: NextRequest) {
           serialNumber: unknowns[i],
           discrepancyId: disc.id,
           serialIndex: i,
-          internalId: refItem?.internalId ?? null,
-          warehouse: refItem?.warehouse ?? null,
-          division: refItem?.division ?? null,
-          stockStatus: refItem?.stockStatus ?? null,
+          internalId: finalRef?.internalId ?? null,
+          warehouse: finalRef?.warehouse ?? null,
+          division: finalRef?.division ?? null,
+          stockStatus: finalRef?.stockStatus ?? null,
         });
       }
     }
@@ -244,7 +262,7 @@ export async function GET(request: NextRequest) {
       const approved: string[] = JSON.parse(disc.approvedSerials!);
       if (approved.length === 0) continue;
 
-      const [refItem] = await db
+      const [refItem2] = await db
         .select({
           avgCost: items.avgCost,
           internalId: items.internalId,
@@ -256,13 +274,29 @@ export async function GET(request: NextRequest) {
         .where(
           and(
             eq(items.eventId, user.eventId),
-            eq(items.itemCode, disc.itemCode)
+            eq(items.itemCode, disc.itemCode),
+            warehouseFilter(warehouses),
           )
-        );
-      const avgCost = refItem?.avgCost ?? 0;
-
-      // Skip if source item's warehouse is not in selected warehouses
-      if (warehouses && warehouses.length > 0 && refItem?.warehouse && !warehouses.includes(refItem.warehouse)) continue;
+        )
+        .limit(1);
+      const finalRef2 = refItem2 ?? (await db
+        .select({
+          avgCost: items.avgCost,
+          internalId: items.internalId,
+          warehouse: items.warehouse,
+          division: items.division,
+          stockStatus: items.stockStatus,
+        })
+        .from(items)
+        .where(
+          and(
+            eq(items.eventId, user.eventId),
+            eq(items.itemCode, disc.itemCode),
+          )
+        )
+        .limit(1)
+      )[0];
+      const avgCost = finalRef2?.avgCost ?? 0;
 
       for (let i = 0; i < approved.length; i++) {
         const varianceValue = 1 * avgCost;
@@ -286,10 +320,10 @@ export async function GET(request: NextRequest) {
           serialNumber: approved[i],
           discrepancyId: disc.id,
           serialIndex: i,
-          internalId: refItem?.internalId ?? null,
-          warehouse: refItem?.warehouse ?? null,
-          division: refItem?.division ?? null,
-          stockStatus: refItem?.stockStatus ?? null,
+          internalId: finalRef2?.internalId ?? null,
+          warehouse: finalRef2?.warehouse ?? null,
+          division: finalRef2?.division ?? null,
+          stockStatus: finalRef2?.stockStatus ?? null,
         });
       }
     }

@@ -5,6 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -29,6 +37,8 @@ import {
   X,
   AlertTriangle,
   ClipboardCheck,
+  Loader2,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -168,21 +178,23 @@ export default function AdminSetup() {
   });
 
   // Step 2: Import
+  const [importMode, setImportMode] = useState<"file" | "copy">("file");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(
     null
   );
   const [selectedWarehouses, setSelectedWarehouses] = useState<Set<string>>(new Set());
+  const [existingEvents, setExistingEvents] = useState<{ id: number; name: string; status: string; itemCount: number }[]>([]);
+  const [copySourceId, setCopySourceId] = useState<string>("");
+  const [copying, setCopying] = useState(false);
 
   // Step 3: Teams
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([]);
   const [supervisorsList, setSupervisorsList] = useState<SupervisorInfo[]>([]);
-  const [teamForm, setTeamForm] = useState({
-    name: "",
-    members: "" as string,
-    pin: "",
-  });
+  const [teamForm, setTeamForm] = useState({ name: "", pin: "" });
+  const [teamMembers, setTeamMembers] = useState<string[]>([""]);
   const [supForm, setSupForm] = useState({ name: "", pin: "" });
   const [addingTeam, setAddingTeam] = useState(false);
   const [addingSupervisor, setAddingSupervisor] = useState(false);
@@ -239,11 +251,22 @@ export default function AdminSetup() {
     }
   }, [wizardEventId]);
 
+  const loadExistingEvents = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/import");
+      if (res.ok) {
+        const data = await res.json();
+        setExistingEvents(data.events || []);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   // Load data when wizard step changes
   useEffect(() => {
+    if (wizardStep === "import") loadExistingEvents();
     if (wizardStep === "teams" && wizardEventId) loadTeams();
     if (wizardStep === "review" && wizardEventId) loadReadiness();
-  }, [wizardStep, wizardEventId, loadTeams, loadReadiness]);
+  }, [wizardStep, wizardEventId, loadTeams, loadReadiness, loadExistingEvents]);
 
   // Confirmation dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -407,33 +430,76 @@ export default function AdminSetup() {
   };
 
   // Step 2: Import file
-  const handleImport = async () => {
+  const handleImport = () => {
     if (!file || !wizardEventId) {
       toast.error("Please select a file");
       return;
     }
     setUploading(true);
+    setUploadProgress(0);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("eventId", String(wizardEventId));
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) {
+        setUploadProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+    xhr.upload.addEventListener("load", () => {
+      setUploadProgress(null); // Switch to processing state
+    });
+    xhr.addEventListener("load", () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (xhr.status >= 200 && xhr.status < 300 && data.success) {
+          setImportSummary(data.summary);
+          setSelectedWarehouses(new Set());
+          toast.success(`Imported ${data.summary.totalItems} items`);
+          markComplete("import");
+        } else {
+          toast.error(data.error || "Import failed");
+        }
+      } catch {
+        toast.error("Import failed");
+      }
+      setUploading(false);
+      setUploadProgress(null);
+    });
+    xhr.addEventListener("error", () => {
+      toast.error("Upload failed");
+      setUploading(false);
+      setUploadProgress(null);
+    });
+
+    xhr.open("POST", "/api/admin/import");
+    xhr.send(formData);
+  };
+
+  const handleCopyFromEvent = async () => {
+    if (!copySourceId || !wizardEventId) return;
+    setCopying(true);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("eventId", String(wizardEventId));
       const res = await fetch("/api/admin/import", {
-        method: "POST",
-        body: formData,
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: wizardEventId }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setImportSummary(data.summary);
         setSelectedWarehouses(new Set());
-        toast.success(`Imported ${data.summary.totalItems} items`);
+        toast.success(`Copied ${data.summary.totalItems} items`);
         markComplete("import");
       } else {
-        toast.error(data.error || "Import failed");
+        toast.error(data.error || "Copy failed");
       }
     } catch {
-      toast.error("Upload failed");
+      toast.error("Copy failed");
     } finally {
-      setUploading(false);
+      setCopying(false);
     }
   };
 
@@ -452,13 +518,14 @@ export default function AdminSetup() {
           eventId: wizardEventId,
           type: "team",
           name: teamForm.name.trim(),
-          members: teamForm.members.trim() ? teamForm.members.split(",").map(m => m.trim()).filter(Boolean) : [],
+          members: teamMembers.filter(m => m.trim()),
           pin: teamForm.pin,
         }),
       });
       if (res.ok) {
         toast.success("Team added");
-        setTeamForm({ name: "", members: "", pin: "" });
+        setTeamForm({ name: "", pin: "" });
+        setTeamMembers([""]);
         loadTeams();
       } else {
         const data = await res.json();
@@ -647,39 +714,119 @@ export default function AdminSetup() {
             {/* Step 2: Import */}
             {wizardStep === "import" && (
               <div className="space-y-4">
-                <div className="border-2 border-dashed rounded-lg p-6 text-center">
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={(e) => setFile(e.target.files?.[0] || null)}
-                    className="hidden"
-                    id="wizard-file-upload"
-                  />
-                  <label
-                    htmlFor="wizard-file-upload"
-                    className="cursor-pointer flex flex-col items-center gap-2"
-                  >
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    {file ? (
-                      <span className="font-medium text-primary">
-                        {file.name}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">
-                        Click to select Excel file
-                      </span>
-                    )}
-                  </label>
-                </div>
+                {/* Mode tabs */}
+                {!importSummary && (
+                  <div className="flex gap-1 p-1 bg-muted rounded-lg">
+                    <button
+                      onClick={() => setImportMode("file")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        importMode === "file" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Upload className="h-4 w-4" />
+                      Upload File
+                    </button>
+                    <button
+                      onClick={() => setImportMode("copy")}
+                      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        importMode === "copy" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copy from Event
+                    </button>
+                  </div>
+                )}
 
-                {file && (
-                  <Button
-                    onClick={handleImport}
-                    disabled={uploading}
-                    className="w-full h-12"
-                  >
-                    {uploading ? "Importing..." : "Import Data"}
-                  </Button>
+                {/* File upload mode */}
+                {importMode === "file" && !importSummary && (
+                  <>
+                    <div className="border-2 border-dashed rounded-lg p-6 text-center">
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        onChange={(e) => setFile(e.target.files?.[0] || null)}
+                        className="hidden"
+                        id="wizard-file-upload"
+                      />
+                      <label
+                        htmlFor="wizard-file-upload"
+                        className="cursor-pointer flex flex-col items-center gap-2"
+                      >
+                        <Upload className="h-8 w-8 text-muted-foreground" />
+                        {file ? (
+                          <span className="font-medium text-primary">
+                            {file.name}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            Click to select Excel file
+                          </span>
+                        )}
+                      </label>
+                    </div>
+
+                    {file && !uploading && (
+                      <Button onClick={handleImport} className="w-full h-12">
+                        Import Data
+                      </Button>
+                    )}
+
+                    {uploading && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="flex items-center gap-2">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            {uploadProgress !== null ? "Uploading file..." : "Processing items..."}
+                          </span>
+                          {uploadProgress !== null && (
+                            <span className="text-muted-foreground">{uploadProgress}%</span>
+                          )}
+                        </div>
+                        <Progress value={uploadProgress ?? 100} className={`h-3 ${uploadProgress === null ? "[&>div]:animate-pulse" : ""}`} />
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Copy from event mode */}
+                {importMode === "copy" && !importSummary && (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Copy items from a previous event. Each event gets its own independent copy — changes won&apos;t affect the original.
+                    </p>
+                    {existingEvents.filter(e => e.id !== wizardEventId).length > 0 ? (
+                      <>
+                        <Select value={copySourceId} onValueChange={setCopySourceId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select an event to copy from..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {existingEvents.filter(e => e.id !== wizardEventId).map((e) => (
+                              <SelectItem key={e.id} value={String(e.id)}>
+                                {e.name} ({e.itemCount.toLocaleString()} items)
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          onClick={handleCopyFromEvent}
+                          disabled={!copySourceId || copying}
+                          className="w-full h-12 gap-2"
+                        >
+                          {copying ? (
+                            <><Loader2 className="h-4 w-4 animate-spin" /> Copying items...</>
+                          ) : (
+                            <><Copy className="h-4 w-4" /> Copy Items</>
+                          )}
+                        </Button>
+                      </>
+                    ) : (
+                      <div className="text-center py-6 text-muted-foreground text-sm">
+                        No other events with imported items found. Upload a file instead.
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {importSummary && (
@@ -882,14 +1029,26 @@ export default function AdminSetup() {
                         className="h-10"
                       />
                     </div>
-                    <Input
-                      value={teamForm.members}
-                      onChange={(e) =>
-                        setTeamForm((p) => ({ ...p, members: e.target.value }))
-                      }
-                      placeholder="Members (comma-separated, optional)"
-                      className="h-10"
-                    />
+                    <div className="space-y-2">
+                      {teamMembers.map((member, i) => (
+                        <div key={i} className="flex gap-2">
+                          <Input
+                            placeholder={`Member ${i + 1}`}
+                            value={member}
+                            onChange={(e) => setTeamMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
+                            className="h-10"
+                          />
+                          {teamMembers.length > 1 && (
+                            <Button variant="ghost" size="icon" className="shrink-0 h-10 w-10" onClick={() => setTeamMembers(prev => prev.filter((_, j) => j !== i))}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                      <Button variant="outline" size="sm" onClick={() => setTeamMembers(prev => [...prev, ""])} className="gap-1">
+                        <Plus className="h-3 w-3" /> Add Member
+                      </Button>
+                    </div>
                     <Button
                       size="sm"
                       onClick={handleAddTeam}

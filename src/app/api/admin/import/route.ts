@@ -1,8 +1,122 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, stocktakeEvents } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, isNotNull } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
+
+// GET: List events that have imported items (for "copy from" feature)
+export async function GET() {
+  try {
+    const rows = await db
+      .select({
+        id: stocktakeEvents.id,
+        name: stocktakeEvents.name,
+        status: stocktakeEvents.status,
+        itemCount: sql<number>`(SELECT count(*) FROM items WHERE items.event_id = ${stocktakeEvents.id})`,
+      })
+      .from(stocktakeEvents);
+
+    const eventsWithItems = rows
+      .filter((e) => Number(e.itemCount) > 0)
+      .map((e) => ({ id: e.id, name: e.name, status: e.status, itemCount: Number(e.itemCount) }));
+
+    return NextResponse.json({ events: eventsWithItems });
+  } catch (error) {
+    console.error("Error listing events:", error);
+    return NextResponse.json({ error: "Failed to list events" }, { status: 500 });
+  }
+}
+
+// PUT: Copy items from one event to another
+export async function PUT(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { sourceEventId, targetEventId } = body;
+
+    if (!sourceEventId || !targetEventId) {
+      return NextResponse.json({ error: "sourceEventId and targetEventId required" }, { status: 400 });
+    }
+
+    // Verify target event exists and is in setup
+    const [targetEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, Number(targetEventId)));
+    if (!targetEvent) return NextResponse.json({ error: "Target event not found" }, { status: 404 });
+    if (targetEvent.status !== "setup") return NextResponse.json({ error: "Can only import during setup phase" }, { status: 400 });
+
+    // Verify source event exists and has items
+    const [sourceEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, Number(sourceEventId)));
+    if (!sourceEvent) return NextResponse.json({ error: "Source event not found" }, { status: 404 });
+
+    // Get all items from source event
+    const sourceItems = await db.select().from(items).where(eq(items.eventId, Number(sourceEventId)));
+    if (sourceItems.length === 0) return NextResponse.json({ error: "Source event has no items" }, { status: 400 });
+
+    // Clear existing items in target event
+    await db.delete(items).where(eq(items.eventId, Number(targetEventId)));
+
+    // Copy items in batches (without team assignments)
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < sourceItems.length; i += BATCH_SIZE) {
+      const batch = sourceItems.slice(i, i + BATCH_SIZE);
+      await db.insert(items).values(
+        batch.map((item) => ({
+          eventId: Number(targetEventId),
+          internalId: item.internalId,
+          itemCode: item.itemCode,
+          description: item.description,
+          brand: item.brand,
+          category: item.category,
+          binNumber: item.binNumber,
+          binInternalId: item.binInternalId,
+          warehouse: item.warehouse,
+          division: item.division,
+          onHand: item.onHand,
+          avgCost: item.avgCost,
+          totalValue: item.totalValue,
+          stockStatus: item.stockStatus,
+          serialNumber: item.serialNumber,
+          isSerialized: item.isSerialized,
+          teamId: null, // Don't copy team assignments
+        }))
+      );
+    }
+
+    // Copy warehouse config from source
+    const warehouseRows = await db
+      .select({ warehouse: items.warehouse })
+      .from(items)
+      .where(eq(items.eventId, Number(targetEventId)))
+      .groupBy(items.warehouse);
+
+    const warehouses = warehouseRows
+      .map((r) => r.warehouse)
+      .filter((w): w is string => !!w && w.trim().length > 0)
+      .sort();
+
+    await db.update(stocktakeEvents)
+      .set({ warehouses: JSON.stringify(warehouses) })
+      .where(eq(stocktakeEvents.id, Number(targetEventId)));
+
+    // Summary stats
+    const [totalImported] = await db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [uniqueBins] = await db.select({ count: sql<number>`count(DISTINCT bin_number)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [uniqueBrands] = await db.select({ count: sql<number>`count(DISTINCT brand)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [totalValue] = await db.select({ total: sql<number>`sum(total_value)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
+
+    return NextResponse.json({
+      success: true,
+      summary: {
+        totalItems: totalImported?.count || 0,
+        uniqueBins: uniqueBins?.count || 0,
+        uniqueBrands: uniqueBrands?.count || 0,
+        totalValue: totalValue?.total || 0,
+        warehouses,
+      },
+    });
+  } catch (error) {
+    console.error("Copy error:", error);
+    return NextResponse.json({ error: "Failed to copy items" }, { status: 500 });
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {

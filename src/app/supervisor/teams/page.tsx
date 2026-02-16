@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2 } from "lucide-react";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -45,11 +45,8 @@ export default function SupervisorTeamsPage() {
   const [loading, setLoading] = useState(true);
 
   // Team form
-  const [teamForm, setTeamForm] = useState({
-    name: "",
-    members: "",
-    pin: "",
-  });
+  const [teamForm, setTeamForm] = useState({ name: "", pin: "" });
+  const [teamMembers, setTeamMembers] = useState<string[]>([""]);
 
   // Supervisor form
   const [supForm, setSupForm] = useState({
@@ -66,19 +63,14 @@ export default function SupervisorTeamsPage() {
 
   // Edit team
   const [editTeam, setEditTeam] = useState<TeamInfo | null>(null);
-  const [editForm, setEditForm] = useState({
-    name: "",
-    members: "",
-    pin: "",
-  });
+  const [editForm, setEditForm] = useState({ name: "", pin: "" });
+  const [editMembers, setEditMembers] = useState<string[]>([""]);
 
   const openEditDialog = (team: TeamInfo) => {
     setEditTeam(team);
-    setEditForm({
-      name: team.name,
-      members: parseMembers(team.members).join(", "),
-      pin: "",
-    });
+    const members = parseMembers(team.members);
+    setEditForm({ name: team.name, pin: "" });
+    setEditMembers(members.length > 0 ? members : [""]);
   };
 
   const saveEditTeam = async () => {
@@ -98,7 +90,7 @@ export default function SupervisorTeamsPage() {
         body: JSON.stringify({
           id: editTeam.id,
           name: editForm.name,
-          members: editForm.members.trim() ? editForm.members.split(",").map(m => m.trim()).filter(Boolean) : [],
+          members: editMembers.filter(m => m.trim()),
           pin: editForm.pin || undefined,
         }),
       });
@@ -151,13 +143,14 @@ export default function SupervisorTeamsPage() {
           eventId: Number(eventId),
           type: "team",
           name: teamForm.name,
-          members: teamForm.members.trim() ? teamForm.members.split(",").map(m => m.trim()).filter(Boolean) : [],
+          members: teamMembers.filter(m => m.trim()),
           pin: teamForm.pin,
         }),
       });
       if (res.ok) {
         toast.success("Team created");
-        setTeamForm({ name: "", members: "", pin: "" });
+        setTeamForm({ name: "", pin: "" });
+        setTeamMembers([""]);
         loadTeams();
       }
     } catch {
@@ -346,13 +339,26 @@ export default function SupervisorTeamsPage() {
                 }
               />
             </div>
-            <Input
-              placeholder="Members (comma-separated, e.g. Alice, Bob, Charlie)"
-              value={teamForm.members}
-              onChange={(e) =>
-                setTeamForm((p) => ({ ...p, members: e.target.value }))
-              }
-            />
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Members</div>
+              {teamMembers.map((member, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input
+                    placeholder={`Member ${i + 1}`}
+                    value={member}
+                    onChange={(e) => setTeamMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
+                  />
+                  {teamMembers.length > 1 && (
+                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTeamMembers(prev => prev.filter((_, j) => j !== i))}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <Button variant="outline" size="sm" onClick={() => setTeamMembers(prev => [...prev, ""])} className="gap-1">
+                <Plus className="h-3 w-3" /> Add Member
+              </Button>
+            </div>
             <Button onClick={createTeam} className="gap-1">
               <Plus className="h-4 w-4" />
               Add Team
@@ -382,13 +388,26 @@ export default function SupervisorTeamsPage() {
                 setEditForm((p) => ({ ...p, name: e.target.value }))
               }
             />
-            <Input
-              placeholder="Members (comma-separated)"
-              value={editForm.members}
-              onChange={(e) =>
-                setEditForm((p) => ({ ...p, members: e.target.value }))
-              }
-            />
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Members</div>
+              {editMembers.map((member, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input
+                    placeholder={`Member ${i + 1}`}
+                    value={member}
+                    onChange={(e) => setEditMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
+                  />
+                  {editMembers.length > 1 && (
+                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setEditMembers(prev => prev.filter((_, j) => j !== i))}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <Button variant="outline" size="sm" onClick={() => setEditMembers(prev => [...prev, ""])} className="gap-1">
+                <Plus className="h-3 w-3" /> Add Member
+              </Button>
+            </div>
             <Input
               placeholder="New PIN (leave empty to keep current)"
               type="password"

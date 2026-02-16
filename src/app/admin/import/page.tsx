@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -12,7 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, FileSpreadsheet, CheckCircle2, ArrowLeft } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { Upload, FileSpreadsheet, CheckCircle2, ArrowLeft, Loader2, Copy } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -39,7 +41,11 @@ export default function ImportPage() {
   const [selectedEventId, setSelectedEventId] = useState<string>(urlEventId || "");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [existingEvents, setExistingEvents] = useState<{ id: number; name: string; status: string; itemCount: number }[]>([]);
+  const [copySourceId, setCopySourceId] = useState<string>("");
+  const [copying, setCopying] = useState(false);
 
   const loadEvents = useCallback(async () => {
     const res = await fetch("/api/admin/events");
@@ -56,48 +62,92 @@ export default function ImportPage() {
     }
   }, [urlEventId]);
 
+  const loadExistingEvents = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/import");
+      if (res.ok) {
+        const data = await res.json();
+        setExistingEvents(data.events || []);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     loadEvents();
-  }, [loadEvents]);
+    loadExistingEvents();
+  }, [loadEvents, loadExistingEvents]);
 
   const selectedEvent = events.find((e) => String(e.id) === selectedEventId);
 
-  const handleUpload = async () => {
+  const handleUpload = () => {
     if (!file || !selectedEventId) {
       toast.error("Please select a file and event");
       return;
     }
 
     setUploading(true);
+    setUploadProgress(0);
     setSummary(null);
 
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("eventId", selectedEventId);
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) {
+        setUploadProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+    xhr.upload.addEventListener("load", () => {
+      setUploadProgress(null);
+    });
+    xhr.addEventListener("load", () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (xhr.status >= 200 && xhr.status < 300 && data.success) {
+          setSummary(data.summary);
+          toast.success(`Imported ${data.summary.totalItems} items successfully!`);
+        } else {
+          toast.error(data.error || "Import failed");
+        }
+      } catch {
+        toast.error("Import failed");
+      }
+      setUploading(false);
+      setUploadProgress(null);
+    });
+    xhr.addEventListener("error", () => {
+      toast.error("Upload failed");
+      setUploading(false);
+      setUploadProgress(null);
+    });
+
+    xhr.open("POST", "/api/admin/import");
+    xhr.send(formData);
+  };
+
+  const handleCopyFromEvent = async () => {
+    if (!copySourceId || !selectedEventId) return;
+    setCopying(true);
+    setSummary(null);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("eventId", selectedEventId);
-
       const res = await fetch("/api/admin/import", {
-        method: "POST",
-        body: formData,
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: Number(selectedEventId) }),
       });
-
       const data = await res.json();
-
       if (res.ok && data.success) {
         setSummary(data.summary);
-        toast.success(
-          `Imported ${data.summary.totalItems} items successfully!`
-        );
+        toast.success(`Copied ${data.summary.totalItems} items`);
       } else {
-        toast.error(data.error || "Import failed");
-        if (data.unmappedHeaders) {
-          console.log("Unmapped headers:", data.unmappedHeaders);
-        }
+        toast.error(data.error || "Copy failed");
       }
     } catch {
-      toast.error("Upload failed");
+      toast.error("Copy failed");
     } finally {
-      setUploading(false);
+      setCopying(false);
     }
   };
 
@@ -175,15 +225,72 @@ export default function ImportPage() {
             </div>
           </div>
 
-          <Button
-            onClick={handleUpload}
-            disabled={uploading || !file || !selectedEventId}
-            className="w-full h-12"
-          >
-            {uploading ? "Importing..." : "Import Data"}
-          </Button>
+          {!uploading && (
+            <Button
+              onClick={handleUpload}
+              disabled={!file || !selectedEventId}
+              className="w-full h-12"
+            >
+              Import Data
+            </Button>
+          )}
+
+          {uploading && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {uploadProgress !== null ? "Uploading file..." : "Processing items..."}
+                </span>
+                {uploadProgress !== null && (
+                  <span className="text-muted-foreground">{uploadProgress}%</span>
+                )}
+              </div>
+              <Progress value={uploadProgress ?? 100} className={`h-3 ${uploadProgress === null ? "[&>div]:animate-pulse" : ""}`} />
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      {/* Copy from Existing Event */}
+      {existingEvents.filter(e => String(e.id) !== selectedEventId).length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Copy className="h-5 w-5" />
+              Copy from Existing Event
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Copy items from a previous event. Each event gets its own independent copy.
+            </p>
+            <Select value={copySourceId} onValueChange={setCopySourceId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select an event to copy from..." />
+              </SelectTrigger>
+              <SelectContent>
+                {existingEvents.filter(e => String(e.id) !== selectedEventId).map((e) => (
+                  <SelectItem key={e.id} value={String(e.id)}>
+                    {e.name} ({e.itemCount.toLocaleString()} items)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={handleCopyFromEvent}
+              disabled={!copySourceId || !selectedEventId || copying}
+              className="w-full h-12 gap-2"
+            >
+              {copying ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Copying items...</>
+              ) : (
+                <><Copy className="h-4 w-4" /> Copy Items</>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Import Summary */}
       {summary && (

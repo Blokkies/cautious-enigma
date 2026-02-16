@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Play, CheckCircle2, AlertTriangle, Lock, XCircle, Trash2, ArrowLeft, Download } from "lucide-react";
+import { Play, CheckCircle2, AlertTriangle, Lock, XCircle, Trash2, ArrowLeft, Download, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -153,6 +153,31 @@ export default function ActivatePage() {
       }
     } catch {
       toast.error("Failed to cancel stocktake");
+    }
+  };
+
+  const handleReset = async () => {
+    const eventName = selectedEvent?.name || "this event";
+    if (!confirm(`RESET "${eventName}"? This will delete ALL counts, teams, supervisors, queries, breakdowns, and bin assignments. Imported items will be kept.`)) return;
+    if (!confirm("Are you sure? This cannot be undone.")) return;
+    try {
+      const res = await fetch("/api/admin/activate", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId: Number(selectedEventId),
+          action: "reset",
+        }),
+      });
+      if (res.ok) {
+        toast.success("Stocktake reset — all operational data cleared");
+        loadEvents();
+        checkReadiness();
+      } else {
+        toast.error("Reset failed");
+      }
+    } catch {
+      toast.error("Failed to reset stocktake");
     }
   };
 
@@ -326,8 +351,18 @@ export default function ActivatePage() {
               </div>
             )}
 
-            {/* Export + Delete */}
+            {/* Reset + Export + Delete */}
             <div className="pt-4 border-t space-y-3">
+              <Button
+                onClick={handleReset}
+                variant="outline"
+                className="w-full h-12 gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Reset Stocktake (Clear All Data, Keep Items)
+              </Button>
+            </div>
+            <div className="space-y-3">
               <Button
                 variant="outline"
                 className="w-full h-12 gap-2"

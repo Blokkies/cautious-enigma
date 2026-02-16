@@ -13,6 +13,7 @@ import {
   LogOut,
   ClipboardCheck,
   Users,
+  Grid3X3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSupervisorNotifications } from "@/hooks/use-notifications";
@@ -20,6 +21,7 @@ import { useSupervisorNotifications } from "@/hooks/use-notifications";
 const navItems = [
   { href: "/supervisor", icon: LayoutDashboard, label: "Dashboard", badgeKey: null },
   { href: "/supervisor/teams", icon: Users, label: "Teams", badgeKey: null },
+  { href: "/supervisor/teams/assign", icon: Grid3X3, label: "Assign", badgeKey: null },
   { href: "/supervisor/variances", icon: AlertTriangle, label: "Variances", badgeKey: "serials" as const },
   { href: "/supervisor/queries", icon: MessageSquare, label: "Queries", badgeKey: "queries" as const },
   { href: "/supervisor/breakdowns", icon: Package, label: "Breakdowns", badgeKey: "breakdowns" as const },

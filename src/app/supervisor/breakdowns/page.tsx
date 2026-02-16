@@ -26,8 +26,7 @@ interface BreakdownItem {
   messages: BreakdownMessage[];
   createdAt: string;
   teamName: string;
-  teamMember1: string | null;
-  teamMember2: string | null;
+  teamMembers: string | null;
   itemCode: string | null;
   itemDescription: string | null;
 }
@@ -171,8 +170,8 @@ export default function SupervisorBreakdownsPage() {
   };
 
   const getTeamMembers = (b: BreakdownItem) => {
-    const parts = [b.teamMember1, b.teamMember2].filter(Boolean);
-    return parts.length > 0 ? parts.join(", ") : null;
+    if (!b.teamMembers) return null;
+    try { const arr = JSON.parse(b.teamMembers) as string[]; return arr.length > 0 ? arr.join(", ") : null; } catch { return null; }
   };
 
   const statusConfig = {

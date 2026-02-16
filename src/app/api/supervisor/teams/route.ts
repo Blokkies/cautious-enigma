@@ -14,8 +14,7 @@ export async function GET(request: NextRequest) {
     .select({
       id: teams.id,
       name: teams.name,
-      member1: teams.member1,
-      member2: teams.member2,
+      members: teams.members,
     })
     .from(teams)
     .where(eq(teams.eventId, user.eventId));

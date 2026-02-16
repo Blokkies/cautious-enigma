@@ -132,8 +132,7 @@ export async function GET(request: NextRequest) {
     return {
       id: team.id,
       name: team.name,
-      member1: team.member1,
-      member2: team.member2,
+      members: team.members,
       total,
       counted,
       pending: total - counted,

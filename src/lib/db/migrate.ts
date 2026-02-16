@@ -226,6 +226,19 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS bin_internal_id TEXT;
 ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS warehouses TEXT;
 CREATE INDEX IF NOT EXISTS idx_items_event_serial ON items(event_id, serial_number);
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS members TEXT;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='teams' AND column_name='member1') THEN
+    UPDATE teams SET members = CASE
+      WHEN member1 IS NOT NULL AND member2 IS NOT NULL THEN '["' || member1 || '","' || member2 || '"]'
+      WHEN member1 IS NOT NULL THEN '["' || member1 || '"]'
+      WHEN member2 IS NOT NULL THEN '["' || member2 || '"]'
+      ELSE NULL
+    END WHERE members IS NULL AND (member1 IS NOT NULL OR member2 IS NOT NULL);
+    ALTER TABLE teams DROP COLUMN IF EXISTS member1;
+    ALTER TABLE teams DROP COLUMN IF EXISTS member2;
+  END IF;
+END $$;
 `;
 
 async function migrate() {

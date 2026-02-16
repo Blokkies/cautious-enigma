@@ -35,8 +35,7 @@ interface OverallStats {
 interface TeamProgress {
   id: number;
   name: string;
-  member1: string | null;
-  member2: string | null;
+  members: string | null;
   total: number;
   counted: number;
   pending: number;
@@ -226,9 +225,7 @@ export default function SupervisorDashboard() {
                     <div>
                       <div className="font-semibold">{team.name}</div>
                       <div className="text-xs text-muted-foreground">
-                        {[team.member1, team.member2]
-                          .filter(Boolean)
-                          .join(", ")}
+                        {(() => { try { return team.members ? (JSON.parse(team.members) as string[]).join(", ") : ""; } catch { return ""; } })()}
                       </div>
                     </div>
                     <div className="text-2xl font-bold text-primary">

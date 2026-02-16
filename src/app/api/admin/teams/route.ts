@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { type, name, member1, member2, pin, role } = body;
+    const { type, name, members, pin, role } = body;
     const eid = getAuthorizedEventId(request, body.eventId);
 
     if (!eid || !name || !pin) {
@@ -103,8 +103,7 @@ export async function POST(request: NextRequest) {
       .values({
         eventId: eid,
         name,
-        member1: member1 || null,
-        member2: member2 || null,
+        members: members ? JSON.stringify(members) : null,
         pinHash: pinHashed,
       })
       .returning({ id: teams.id });
@@ -130,7 +129,7 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const { id, name, member1, member2, pin } = await request.json();
+    const { id, name, members, pin } = await request.json();
 
     if (!id || !name) {
       return NextResponse.json(
@@ -147,10 +146,9 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const updateData: { name: string; member1: string | null; member2: string | null; pinHash?: string } = {
+    const updateData: { name: string; members: string | null; pinHash?: string } = {
       name,
-      member1: member1 || null,
-      member2: member2 || null,
+      members: members ? JSON.stringify(members) : null,
     };
 
     if (pin && pin.length >= 4) {

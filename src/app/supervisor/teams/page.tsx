@@ -13,15 +13,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Plus, Trash2, Users, Shield, Pencil, ArrowRight } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
+
+function parseMembers(members: string | null): string[] {
+  if (!members) return [];
+  try { return JSON.parse(members) as string[]; } catch { return []; }
+}
 
 interface TeamInfo {
   id: number;
   name: string;
-  member1: string | null;
-  member2: string | null;
+  members: string | null;
   assignedItems: number;
 }
 
@@ -42,8 +47,7 @@ export default function SupervisorTeamsPage() {
   // Team form
   const [teamForm, setTeamForm] = useState({
     name: "",
-    member1: "",
-    member2: "",
+    members: "",
     pin: "",
   });
 
@@ -54,16 +58,17 @@ export default function SupervisorTeamsPage() {
   });
 
   // Bulk create
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkCount, setBulkCount] = useState("13");
   const [bulkPrefix, setBulkPrefix] = useState("Team");
   const [bulkPin, setBulkPin] = useState("");
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; created: number } | null>(null);
 
   // Edit team
   const [editTeam, setEditTeam] = useState<TeamInfo | null>(null);
   const [editForm, setEditForm] = useState({
     name: "",
-    member1: "",
-    member2: "",
+    members: "",
     pin: "",
   });
 
@@ -71,8 +76,7 @@ export default function SupervisorTeamsPage() {
     setEditTeam(team);
     setEditForm({
       name: team.name,
-      member1: team.member1 || "",
-      member2: team.member2 || "",
+      members: parseMembers(team.members).join(", "),
       pin: "",
     });
   };
@@ -94,8 +98,7 @@ export default function SupervisorTeamsPage() {
         body: JSON.stringify({
           id: editTeam.id,
           name: editForm.name,
-          member1: editForm.member1,
-          member2: editForm.member2,
+          members: editForm.members.trim() ? editForm.members.split(",").map(m => m.trim()).filter(Boolean) : [],
           pin: editForm.pin || undefined,
         }),
       });
@@ -147,12 +150,14 @@ export default function SupervisorTeamsPage() {
         body: JSON.stringify({
           eventId: Number(eventId),
           type: "team",
-          ...teamForm,
+          name: teamForm.name,
+          members: teamForm.members.trim() ? teamForm.members.split(",").map(m => m.trim()).filter(Boolean) : [],
+          pin: teamForm.pin,
         }),
       });
       if (res.ok) {
         toast.success("Team created");
-        setTeamForm({ name: "", member1: "", member2: "", pin: "" });
+        setTeamForm({ name: "", members: "", pin: "" });
         loadTeams();
       }
     } catch {
@@ -198,6 +203,7 @@ export default function SupervisorTeamsPage() {
     }
 
     let created = 0;
+    setBulkProgress({ current: 0, total: count, created: 0 });
     for (let i = 1; i <= count; i++) {
       const pin = String(parseInt(bulkPin) + i - 1).padStart(4, "0");
       try {
@@ -215,8 +221,12 @@ export default function SupervisorTeamsPage() {
       } catch {
         // continue
       }
+      setBulkProgress({ current: i, total: count, created });
     }
-    toast.success(`Created ${created} teams`);
+    toast.success(`Created ${created} of ${count} teams`);
+    setBulkProgress(null);
+    setBulkOpen(false);
+    setBulkPin("");
     loadTeams();
   };
 
@@ -278,9 +288,7 @@ export default function SupervisorTeamsPage() {
                   <div>
                     <div className="font-medium">{team.name}</div>
                     <div className="text-sm text-muted-foreground">
-                      {[team.member1, team.member2]
-                        .filter(Boolean)
-                        .join(", ") || "No members set"}
+                      {parseMembers(team.members).length > 0 ? parseMembers(team.members).join(", ") : "No members set"}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -337,21 +345,14 @@ export default function SupervisorTeamsPage() {
                   }))
                 }
               />
-              <Input
-                placeholder="Member 1 name"
-                value={teamForm.member1}
-                onChange={(e) =>
-                  setTeamForm((p) => ({ ...p, member1: e.target.value }))
-                }
-              />
-              <Input
-                placeholder="Member 2 name"
-                value={teamForm.member2}
-                onChange={(e) =>
-                  setTeamForm((p) => ({ ...p, member2: e.target.value }))
-                }
-              />
             </div>
+            <Input
+              placeholder="Members (comma-separated, e.g. Alice, Bob, Charlie)"
+              value={teamForm.members}
+              onChange={(e) =>
+                setTeamForm((p) => ({ ...p, members: e.target.value }))
+              }
+            />
             <Button onClick={createTeam} className="gap-1">
               <Plus className="h-4 w-4" />
               Add Team
@@ -360,38 +361,10 @@ export default function SupervisorTeamsPage() {
 
           <Separator className="my-4" />
 
-          {/* Bulk Create */}
-          <div className="space-y-3">
-            <h3 className="font-medium">Bulk Create Teams</h3>
-            <div className="grid grid-cols-3 gap-3">
-              <Input
-                placeholder="Prefix (e.g. Team)"
-                value={bulkPrefix}
-                onChange={(e) => setBulkPrefix(e.target.value)}
-              />
-              <Input
-                type="number"
-                placeholder="Count"
-                value={bulkCount}
-                onChange={(e) => setBulkCount(e.target.value)}
-              />
-              <Input
-                placeholder="Base PIN (e.g. 1001)"
-                value={bulkPin}
-                onChange={(e) =>
-                  setBulkPin(e.target.value.replace(/\D/g, ""))
-                }
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Creates teams with sequential PINs (e.g. Team 1=1001, Team
-              2=1002, etc.)
-            </p>
-            <Button onClick={bulkCreateTeams} variant="outline" className="gap-1">
-              <Plus className="h-4 w-4" />
-              Bulk Create
-            </Button>
-          </div>
+          <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
+            <Plus className="h-4 w-4" />
+            Bulk Create Teams
+          </Button>
         </CardContent>
       </Card>
 
@@ -410,17 +383,10 @@ export default function SupervisorTeamsPage() {
               }
             />
             <Input
-              placeholder="Member 1 name"
-              value={editForm.member1}
+              placeholder="Members (comma-separated)"
+              value={editForm.members}
               onChange={(e) =>
-                setEditForm((p) => ({ ...p, member1: e.target.value }))
-              }
-            />
-            <Input
-              placeholder="Member 2 name"
-              value={editForm.member2}
-              onChange={(e) =>
-                setEditForm((p) => ({ ...p, member2: e.target.value }))
+                setEditForm((p) => ({ ...p, members: e.target.value }))
               }
             />
             <Input
@@ -440,6 +406,81 @@ export default function SupervisorTeamsPage() {
                 Cancel
               </Button>
               <Button onClick={saveEditTeam}>Save Changes</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Create Dialog */}
+      <Dialog open={bulkOpen} onOpenChange={(open) => { if (!bulkProgress) setBulkOpen(open); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bulk Create Teams</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium mb-1 block">Prefix</label>
+                <Input
+                  placeholder="e.g. Team"
+                  value={bulkPrefix}
+                  onChange={(e) => setBulkPrefix(e.target.value)}
+                  disabled={!!bulkProgress}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">Count</label>
+                <Input
+                  type="number"
+                  placeholder="e.g. 13"
+                  value={bulkCount}
+                  onChange={(e) => setBulkCount(e.target.value)}
+                  disabled={!!bulkProgress}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Base PIN</label>
+              <Input
+                placeholder="e.g. 1001"
+                value={bulkPin}
+                onChange={(e) => setBulkPin(e.target.value.replace(/\D/g, ""))}
+                disabled={!!bulkProgress}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Creates {bulkPrefix} 1, {bulkPrefix} 2, ... {bulkPrefix} {bulkCount} with sequential PINs starting from {bulkPin || "____"}.
+            </p>
+
+            {bulkProgress && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Creating teams...
+                  </span>
+                  <span className="text-muted-foreground">
+                    {bulkProgress.current}/{bulkProgress.total}
+                  </span>
+                </div>
+                <Progress value={Math.round((bulkProgress.current / bulkProgress.total) * 100)} className="h-3" />
+                <p className="text-xs text-muted-foreground text-center">
+                  {bulkProgress.created} created successfully
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setBulkOpen(false)} disabled={!!bulkProgress}>
+                Cancel
+              </Button>
+              <Button onClick={bulkCreateTeams} disabled={!!bulkProgress} className="gap-1">
+                {bulkProgress ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Creating...</>
+                ) : (
+                  <><Plus className="h-4 w-4" /> Create Teams</>
+                )}
+              </Button>
             </div>
           </div>
         </DialogContent>

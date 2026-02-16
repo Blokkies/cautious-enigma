@@ -56,8 +56,7 @@ interface DashboardData {
   teamResults: {
     id: number;
     name: string;
-    member1: string | null;
-    member2: string | null;
+    members: string | null;
     total: number;
     counted: number;
     uncounted: number;
@@ -314,9 +313,7 @@ export default function CompletedDashboard() {
                       <td className="px-3 py-3">
                         <div className="font-medium">{team.name}</div>
                         <div className="text-xs text-muted-foreground">
-                          {[team.member1, team.member2]
-                            .filter(Boolean)
-                            .join(", ")}
+                          {(() => { try { return team.members ? (JSON.parse(team.members) as string[]).join(", ") : ""; } catch { return ""; } })()}
                         </div>
                       </td>
                       <td className="px-3 py-3 text-right whitespace-nowrap">{team.total.toLocaleString()}</td>

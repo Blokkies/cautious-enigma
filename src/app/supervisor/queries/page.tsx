@@ -24,8 +24,7 @@ interface QueryItem {
   status: string;
   createdAt: string;
   teamName: string;
-  teamMember1: string | null;
-  teamMember2: string | null;
+  teamMembers: string | null;
   itemCode: string | null;
   itemDescription: string | null;
 }
@@ -180,8 +179,8 @@ export default function SupervisorQueriesPage() {
   };
 
   const teamMembers = (q: QueryItem) => {
-    const parts = [q.teamMember1, q.teamMember2].filter(Boolean);
-    return parts.length > 0 ? parts.join(", ") : null;
+    if (!q.teamMembers) return null;
+    try { const arr = JSON.parse(q.teamMembers) as string[]; return arr.length > 0 ? arr.join(", ") : null; } catch { return null; }
   };
 
   if (loading) {

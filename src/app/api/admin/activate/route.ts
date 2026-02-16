@@ -79,10 +79,36 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PUT: Change status (complete/lock/setup)
+// PUT: Change status (complete/lock/setup) or reset stocktake
 export async function PUT(request: NextRequest) {
   try {
-    const { eventId, status } = await request.json();
+    const { eventId, status, action } = await request.json();
+    const eid = Number(eventId);
+
+    // Full reset: delete all operational data but keep imported items and event
+    if (action === "reset") {
+      // Delete operational data in correct order (children first)
+      await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
+      await db.delete(auditLog).where(eq(auditLog.eventId, eid));
+      await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
+      await db.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${eid})`);
+      await db.delete(breakdowns).where(eq(breakdowns.eventId, eid));
+      await db.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${eid})`);
+      await db.delete(queries).where(eq(queries.eventId, eid));
+      await db.delete(counts).where(eq(counts.eventId, eid));
+      await db.delete(teamAssignments).where(eq(teamAssignments.eventId, eid));
+      // Clear bin assignments but keep items
+      await db.update(items).set({ teamId: null }).where(eq(items.eventId, eid));
+      // Delete teams and supervisors
+      await db.delete(supervisors).where(eq(supervisors.eventId, eid));
+      await db.delete(teams).where(eq(teams.eventId, eid));
+      // Reset status to setup
+      await db.update(stocktakeEvents)
+        .set({ status: "setup", updatedAt: new Date().toISOString() })
+        .where(eq(stocktakeEvents.id, eid));
+
+      return NextResponse.json({ success: true });
+    }
 
     if (!["setup", "completed", "locked"].includes(status)) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
@@ -90,7 +116,7 @@ export async function PUT(request: NextRequest) {
 
     await db.update(stocktakeEvents)
       .set({ status, updatedAt: new Date().toISOString() })
-      .where(eq(stocktakeEvents.id, Number(eventId)));
+      .where(eq(stocktakeEvents.id, eid));
 
     return NextResponse.json({ success: true });
   } catch (error) {

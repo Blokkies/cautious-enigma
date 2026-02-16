@@ -77,8 +77,7 @@ interface BinInfo {
 interface TeamDetail {
   id: number;
   name: string;
-  member1: string | null;
-  member2: string | null;
+  members: string | null;
   itemCount: number;
   totalValue: number;
   bins: BinInfo[];

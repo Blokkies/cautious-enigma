@@ -66,8 +66,7 @@ interface VarianceItem {
 interface Team {
   id: number;
   name: string;
-  member1: string | null;
-  member2: string | null;
+  members: string | null;
 }
 
 export default function VariancesPage() {
@@ -1244,9 +1243,9 @@ export default function VariancesPage() {
                       />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium">{t.name}</div>
-                        {(t.member1 || t.member2) && (
+                        {t.members && (
                           <div className="text-xs text-muted-foreground">
-                            {[t.member1, t.member2].filter(Boolean).join(", ")}
+                            {(() => { try { return (JSON.parse(t.members) as string[]).join(", "); } catch { return null; } })()}
                           </div>
                         )}
                       </div>

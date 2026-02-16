@@ -59,8 +59,7 @@ interface ImportSummary {
 interface TeamInfo {
   id: number;
   name: string;
-  member1: string | null;
-  member2: string | null;
+  members: string | null;
   assignedItems: number;
 }
 
@@ -181,8 +180,7 @@ export default function AdminSetup() {
   const [supervisorsList, setSupervisorsList] = useState<SupervisorInfo[]>([]);
   const [teamForm, setTeamForm] = useState({
     name: "",
-    member1: "",
-    member2: "",
+    members: "" as string,
     pin: "",
   });
   const [supForm, setSupForm] = useState({ name: "", pin: "" });
@@ -454,14 +452,13 @@ export default function AdminSetup() {
           eventId: wizardEventId,
           type: "team",
           name: teamForm.name.trim(),
-          member1: teamForm.member1.trim() || null,
-          member2: teamForm.member2.trim() || null,
+          members: teamForm.members.trim() ? teamForm.members.split(",").map(m => m.trim()).filter(Boolean) : [],
           pin: teamForm.pin,
         }),
       });
       if (res.ok) {
         toast.success("Team added");
-        setTeamForm({ name: "", member1: "", member2: "", pin: "" });
+        setTeamForm({ name: "", members: "", pin: "" });
         loadTeams();
       } else {
         const data = await res.json();
@@ -845,11 +842,9 @@ export default function AdminSetup() {
                     >
                       <div>
                         <span className="font-medium">{team.name}</span>
-                        {(team.member1 || team.member2) && (
+                        {team.members && (
                           <span className="text-sm text-muted-foreground ml-2">
-                            ({[team.member1, team.member2]
-                              .filter(Boolean)
-                              .join(", ")})
+                            ({(() => { try { return (JSON.parse(team.members) as string[]).join(", "); } catch { return ""; } })()})
                           </span>
                         )}
                       </div>
@@ -887,30 +882,14 @@ export default function AdminSetup() {
                         className="h-10"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input
-                        value={teamForm.member1}
-                        onChange={(e) =>
-                          setTeamForm((p) => ({
-                            ...p,
-                            member1: e.target.value,
-                          }))
-                        }
-                        placeholder="Member 1 (optional)"
-                        className="h-10"
-                      />
-                      <Input
-                        value={teamForm.member2}
-                        onChange={(e) =>
-                          setTeamForm((p) => ({
-                            ...p,
-                            member2: e.target.value,
-                          }))
-                        }
-                        placeholder="Member 2 (optional)"
-                        className="h-10"
-                      />
-                    </div>
+                    <Input
+                      value={teamForm.members}
+                      onChange={(e) =>
+                        setTeamForm((p) => ({ ...p, members: e.target.value }))
+                      }
+                      placeholder="Members (comma-separated, optional)"
+                      className="h-10"
+                    />
                     <Button
                       size="sm"
                       onClick={handleAddTeam}

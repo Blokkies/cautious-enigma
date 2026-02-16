@@ -27,8 +27,7 @@ export const teams = pgTable("teams", {
     .notNull()
     .references(() => stocktakeEvents.id),
   name: text("name").notNull(),
-  member1: text("member1"),
-  member2: text("member2"),
+  members: text("members"), // JSON array of member names e.g. ["Alice","Bob","Charlie"]
   pinHash: text("pin_hash").notNull(),
   createdAt: text("created_at")
     .notNull()

@@ -294,6 +294,7 @@ export default function AdminSetup() {
     eventId: number;
     eventName: string;
     newStatus: string;
+    action: "status" | "delete";
     title: string;
     message: string;
     confirmLabel: string;
@@ -337,6 +338,7 @@ export default function AdminSetup() {
         eventId,
         eventName,
         newStatus,
+        action: "status",
         title: "Complete Stocktake?",
         message:
           "This will lock the count. Teams and supervisors will no longer be able to submit counts, queries, or breakdowns. You can reopen the event later if needed.",
@@ -352,6 +354,7 @@ export default function AdminSetup() {
         eventId,
         eventName,
         newStatus,
+        action: "status",
         title: "Lock Event?",
         message:
           "Locking prevents any further changes including status changes by supervisors. This is typically done after final export.",
@@ -365,9 +368,44 @@ export default function AdminSetup() {
     doStatusChange(eventId, newStatus);
   };
 
-  const handleConfirmStatusChange = async () => {
+  const handleDeleteEvent = (eventId: number) => {
+    const event = events.find((e) => e.id === eventId);
+    setConfirmDialog({
+      open: true,
+      eventId,
+      eventName: event?.name || "this event",
+      newStatus: "",
+      action: "delete",
+      title: "Delete Event?",
+      message:
+        "This will permanently delete the event and ALL related data including items, teams, supervisors, counts, queries, and breakdowns. This cannot be undone.",
+      confirmLabel: "Delete Permanently",
+      variant: "destructive",
+    });
+  };
+
+  const handleConfirmAction = async () => {
     if (!confirmDialog) return;
-    await doStatusChange(confirmDialog.eventId, confirmDialog.newStatus);
+    if (confirmDialog.action === "delete") {
+      try {
+        const res = await fetch("/api/admin/events", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: confirmDialog.eventId }),
+        });
+        if (res.ok) {
+          toast.success("Event deleted");
+          loadEvents();
+        } else {
+          const data = await res.json();
+          toast.error(data.error || "Failed to delete event");
+        }
+      } catch {
+        toast.error("Network error");
+      }
+    } else {
+      await doStatusChange(confirmDialog.eventId, confirmDialog.newStatus);
+    }
     setConfirmDialog(null);
   };
 
@@ -1340,6 +1378,15 @@ export default function AdminSetup() {
                           {action.label}
                         </Button>
                       )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDeleteEvent(event.id)}
+                        className="gap-1.5 text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </Button>
                     </div>
                   </div>
                 </CardContent>
@@ -1392,7 +1439,7 @@ export default function AdminSetup() {
             </Button>
             <Button
               variant={confirmDialog?.variant || "default"}
-              onClick={handleConfirmStatusChange}
+              onClick={handleConfirmAction}
             >
               {confirmDialog?.confirmLabel}
             </Button>

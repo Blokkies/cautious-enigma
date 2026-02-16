@@ -53,8 +53,11 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL("/", request.url));
     }
   }
+  const supervisorAllowedAdminApis = ["/api/admin/teams", "/api/admin/assign"];
   if (pathname.startsWith("/admin") && payload.type !== "admin") {
-    return NextResponse.redirect(new URL("/", request.url));
+    if (!(payload.type === "supervisor" && supervisorAllowedAdminApis.some(p => pathname.startsWith(p)))) {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
   }
   // /completed is accessible to supervisors and admins
   if (

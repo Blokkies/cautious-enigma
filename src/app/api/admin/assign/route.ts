@@ -2,16 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, teams } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
-import { getEventWarehouses } from "@/lib/api-auth";
+import { getEventWarehouses, getApiUser } from "@/lib/api-auth";
+
+function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
+  const user = getApiUser(request);
+  if (!user) return null;
+  if (user.type === "admin") return clientEventId ? Number(clientEventId) : null;
+  if (user.type === "supervisor") return user.eventId;
+  return null;
+}
 
 // GET: Get assignment overview - unassigned bins and per-team bin breakdown
 export async function GET(request: NextRequest) {
-  const eventId = request.nextUrl.searchParams.get("eventId");
-  if (!eventId) {
-    return NextResponse.json({ error: "eventId required" }, { status: 400 });
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
-  const eid = Number(eventId);
+  const eid = getAuthorizedEventId(request, request.nextUrl.searchParams.get("eventId"));
+  if (!eid) {
+    return NextResponse.json({ error: "eventId required" }, { status: 400 });
+  }
 
   // Check for bin items request (Feature 4)
   const binNumber = request.nextUrl.searchParams.get("binNumber");
@@ -132,18 +143,21 @@ export async function GET(request: NextRequest) {
 
 // POST: Assign bins to a team or auto-balance
 export async function POST(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
-    const { eventId, action } = body;
+    const eid = getAuthorizedEventId(request, body.eventId);
 
-    if (!eventId) {
+    if (!eid) {
       return NextResponse.json({ error: "eventId required" }, { status: 400 });
     }
 
-    const eid = Number(eventId);
-
     // Auto-balance: assign multiple teams at once in a transaction
-    if (action === "auto-balance") {
+    if (body.action === "auto-balance") {
       const { assignments } = body as { assignments: Array<{ teamId: number; bins: string[] }> };
       if (!assignments || !Array.isArray(assignments)) {
         return NextResponse.json({ error: "assignments array required" }, { status: 400 });
@@ -194,17 +208,23 @@ export async function POST(request: NextRequest) {
 
 // DELETE: Unassign items - either specific bins or all items from a team
 export async function DELETE(request: NextRequest) {
-  try {
-    const { eventId, teamId, bins } = await request.json();
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
 
-    if (!eventId || !teamId) {
+  try {
+    const body = await request.json();
+    const eid = getAuthorizedEventId(request, body.eventId);
+    const { teamId, bins } = body;
+
+    if (!eid || !teamId) {
       return NextResponse.json(
         { error: "eventId and teamId required" },
         { status: 400 }
       );
     }
 
-    const eid = Number(eventId);
     const tid = Number(teamId);
 
     if (bins && Array.isArray(bins) && bins.length > 0) {

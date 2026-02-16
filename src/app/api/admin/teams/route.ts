@@ -3,18 +3,31 @@ import { db } from "@/lib/db";
 import { teams, supervisors, items } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
+import { getApiUser } from "@/lib/api-auth";
+
+function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
+  const user = getApiUser(request);
+  if (!user) return null;
+  if (user.type === "admin") return clientEventId ? Number(clientEventId) : null;
+  if (user.type === "supervisor") return user.eventId;
+  return null;
+}
 
 export async function GET(request: NextRequest) {
-  const eventId = request.nextUrl.searchParams.get("eventId");
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
 
-  if (!eventId) {
+  const eid = getAuthorizedEventId(request, request.nextUrl.searchParams.get("eventId"));
+  if (!eid) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });
   }
 
   const teamList = await db
     .select()
     .from(teams)
-    .where(eq(teams.eventId, Number(eventId)));
+    .where(eq(teams.eventId, eid));
 
   // Count assigned items per team
   const enriched = await Promise.all(teamList.map(async (team) => {
@@ -22,7 +35,7 @@ export async function GET(request: NextRequest) {
       .select({ count: sql<number>`count(*)` })
       .from(items)
       .where(
-        and(eq(items.eventId, Number(eventId)), eq(items.teamId, team.id))
+        and(eq(items.eventId, eid), eq(items.teamId, team.id))
       );
 
     const [assignedCount] = assignedCountResult;
@@ -41,17 +54,23 @@ export async function GET(request: NextRequest) {
       role: supervisors.role,
     })
     .from(supervisors)
-    .where(eq(supervisors.eventId, Number(eventId)));
+    .where(eq(supervisors.eventId, eid));
 
   return NextResponse.json({ teams: enriched, supervisors: supervisorList });
 }
 
 export async function POST(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
-    const { eventId, type, name, member1, member2, pin, role } = body;
+    const { type, name, member1, member2, pin, role } = body;
+    const eid = getAuthorizedEventId(request, body.eventId);
 
-    if (!eventId || !name || !pin) {
+    if (!eid || !name || !pin) {
       return NextResponse.json(
         { error: "eventId, name, and pin are required" },
         { status: 400 }
@@ -64,7 +83,7 @@ export async function POST(request: NextRequest) {
       const [result] = await db
         .insert(supervisors)
         .values({
-          eventId: Number(eventId),
+          eventId: eid,
           name,
           pinHash: pinHashed,
           role: role || "supervisor",
@@ -82,7 +101,7 @@ export async function POST(request: NextRequest) {
     const [result] = await db
       .insert(teams)
       .values({
-        eventId: Number(eventId),
+        eventId: eid,
         name,
         member1: member1 || null,
         member2: member2 || null,
@@ -105,6 +124,11 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const { id, name, member1, member2, pin } = await request.json();
 
@@ -113,6 +137,14 @@ export async function PUT(request: NextRequest) {
         { error: "id and name are required" },
         { status: 400 }
       );
+    }
+
+    // Supervisor: verify team belongs to their event
+    if (user.type === "supervisor") {
+      const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
+      if (!team || team.eventId !== user.eventId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+      }
     }
 
     const updateData: { name: string; member1: string | null; member2: string | null; pinHash?: string } = {
@@ -140,12 +172,28 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const { id, type } = await request.json();
 
     if (type === "supervisor") {
+      // Supervisors cannot delete other supervisors
+      if (user.type === "supervisor") {
+        return NextResponse.json({ error: "Supervisors cannot delete other supervisors" }, { status: 403 });
+      }
       await db.delete(supervisors).where(eq(supervisors.id, id));
     } else {
+      // Supervisor: verify team belongs to their event
+      if (user.type === "supervisor") {
+        const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
+        if (!team || team.eventId !== user.eventId) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+        }
+      }
       // Unassign items first
       await db.update(items).set({ teamId: null }).where(eq(items.teamId, id));
       await db.delete(teams).where(eq(teams.id, id));

@@ -355,6 +355,72 @@ export default function CountingPage() {
     });
   }, [verificationItems, selectedVerificationBin]);
 
+  // Verification queue: groups serialized verification items by itemCode
+  type VerificationQueueEntry =
+    | { type: "single"; item: VerificationItem }
+    | { type: "serialized-group"; itemCode: string; description: string | null;
+        brand: string | null; stockStatus: string | null; items: VerificationItem[] };
+
+  const verificationQueue = useMemo((): VerificationQueueEntry[] => {
+    const queue: VerificationQueueEntry[] = [];
+    const serialGroupMap = new Map<string, VerificationItem[]>();
+    const usedSerialCodes = new Set<string>();
+
+    for (const vi of scopedVerificationItems) {
+      const isSerialized = vi.isSerialized === true || vi.isSerialized === 1;
+      if (isSerialized) {
+        if (!serialGroupMap.has(vi.itemCode)) {
+          serialGroupMap.set(vi.itemCode, []);
+        }
+        serialGroupMap.get(vi.itemCode)!.push(vi);
+      }
+    }
+
+    for (const vi of scopedVerificationItems) {
+      const isSerialized = vi.isSerialized === true || vi.isSerialized === 1;
+      if (isSerialized) {
+        if (usedSerialCodes.has(vi.itemCode)) continue;
+        usedSerialCodes.add(vi.itemCode);
+        const groupItems = serialGroupMap.get(vi.itemCode)!;
+        queue.push({
+          type: "serialized-group",
+          itemCode: vi.itemCode,
+          description: groupItems[0].description,
+          brand: groupItems[0].brand,
+          stockStatus: groupItems[0].stockStatus,
+          items: groupItems,
+        });
+      } else {
+        queue.push({ type: "single", item: vi });
+      }
+    }
+    return queue;
+  }, [scopedVerificationItems]);
+
+  // Helper: convert VerificationItem to CountItem for SerializedGroupCard
+  function verificationItemToCountItem(vi: VerificationItem): CountItem {
+    return {
+      id: vi.itemId,
+      itemCode: vi.itemCode,
+      description: vi.description,
+      brand: vi.brand,
+      binNumber: vi.binNumber,
+      binInternalId: null,
+      onHand: vi.onHand,
+      avgCost: vi.avgCost,
+      stockStatus: vi.stockStatus,
+      serialNumber: vi.serialNumber,
+      isSerialized: vi.isSerialized,
+      countId: null,
+      countedQty: null,
+      variance: null,
+      isMatch: null,
+      comment: null,
+      checkStatus: null,
+      countedAt: null,
+    };
+  }
+
   // Auto-select first tab that has bins (verification highest priority)
   useEffect(() => {
     if (pageState !== "bin-selection") return;
@@ -469,13 +535,19 @@ export default function CountingPage() {
 
   // ---------- Core functions ----------
   const handleCount = useCallback(
-    async (itemId: number, qty: number, countComment?: string) => {
+    async (itemId: number, qty: number, countComment?: string, silent?: boolean) => {
       const item = items.find((i) => i.id === itemId);
       if (!item) return;
 
       // Block changes to items reviewed by supervisor
       if (item.checkStatus === "accepted") {
-        toast.error("This item has been reviewed by a supervisor and cannot be changed");
+        if (!silent) toast.error("This item has been reviewed by a supervisor and cannot be changed");
+        return;
+      }
+
+      // Block changes to items with pending verification
+      if (item.hasPendingVerification) {
+        if (!silent) toast.error("This item has a pending verification and cannot be edited");
         return;
       }
 
@@ -545,11 +617,11 @@ export default function CountingPage() {
           );
         }
 
-        if (!isMatch) {
+        if (!isMatch && !silent) {
           toast.warning(`Variance: ${variance > 0 ? "+" : ""}${variance}`);
         }
       } catch {
-        toast.error("Count saved locally, will sync when online");
+        if (!silent) toast.error("Count saved locally, will sync when online");
       }
     },
     [items]
@@ -580,11 +652,21 @@ export default function CountingPage() {
       if (isSubmitting) return;
       setIsSubmitting(true);
       try {
+        // Submit all serials silently (no individual toasts)
         await Promise.all(
           results.map(({ itemId, qty }) =>
-            handleCount(itemId, qty, comment || undefined)
+            handleCount(itemId, qty, comment || undefined, true)
           )
         );
+
+        // Show consolidated summary toast
+        const found = results.filter((r) => r.qty > 0).length;
+        const notFound = results.filter((r) => r.qty === 0).length;
+        if (notFound > 0) {
+          toast.warning(`${found} found, ${notFound} not found (${notFound > found ? "-" : "+"}${Math.abs(found - results.length)} variance)`);
+        } else {
+          toast.success(`All ${found} serials matched`);
+        }
 
         // Send unknown serials as a single discrepancy record to supervisor
         if (unknownSerials && unknownSerials.length > 0 && currentEntry?.type === "serialized-group") {
@@ -676,17 +758,22 @@ export default function CountingPage() {
   }
 
   // ---------- Verification counting ----------
-  const currentVerificationItem = scopedVerificationItems[verificationIndex] ?? null;
+  const currentVerificationEntry_q = verificationQueue[verificationIndex] ?? null;
+  const currentVerificationItem = currentVerificationEntry_q?.type === "single" ? currentVerificationEntry_q.item : null;
 
   const startVerificationCounting = useCallback((bin: string) => {
     setSelectedVerificationBin(bin);
     setVerificationIndex(0);
-    const scoped = verificationItems.filter((vi) => (vi.binNumber || "No Bin") === bin);
-    if (scoped.length > 0) {
-      setVerificationQtyValue(String(scoped[0].onHand ?? 0));
-    }
     setVerificationComment("");
     setShowFlash(false);
+    // Auto-fill qty only for the first non-serialized item
+    const scoped = verificationItems.filter((vi) => (vi.binNumber || "No Bin") === bin);
+    const firstNonSerialized = scoped.find((vi) => !(vi.isSerialized === true || vi.isSerialized === 1));
+    if (firstNonSerialized) {
+      setVerificationQtyValue(String(firstNonSerialized.onHand ?? 0));
+    } else {
+      setVerificationQtyValue("");
+    }
     setPageState("verification-counting");
   }, [verificationItems]);
 
@@ -760,35 +847,136 @@ export default function CountingPage() {
     }
   }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting]);
 
+  // Submit serialized verification group (uses SerializedGroupCard)
+  const submitSerializedVerificationGroup = useCallback(
+    async (results: SerialGroupResult[], unknownSerials?: string[]) => {
+      if (isSubmitting) return;
+      setIsSubmitting(true);
+
+      const currentEntry = verificationQueue[verificationIndex];
+      if (!currentEntry || currentEntry.type !== "serialized-group") {
+        setIsSubmitting(false);
+        return;
+      }
+
+      try {
+        // Submit each serial's verification count
+        await Promise.all(
+          results.map(async ({ itemId, qty }) => {
+            // Find the matching verification item to get verificationId
+            const vi = currentEntry.items.find((v) => v.itemId === itemId);
+            if (!vi) return;
+
+            const item = currentEntry.items.find((v) => v.itemId === itemId);
+            const onHand = item?.onHand ?? 0;
+
+            await fetch("/api/team/count", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                itemId,
+                countedQty: qty,
+                isMatch: qty === onHand,
+                verificationId: vi.verificationId,
+              }),
+            });
+          })
+        );
+
+        // Show consolidated summary toast
+        const found = results.filter((r) => r.qty > 0).length;
+        const notFound = results.filter((r) => r.qty === 0).length;
+        if (notFound > 0) {
+          toast.warning(`Verification: ${found} found, ${notFound} not found`);
+        } else {
+          toast.success(`All ${found} serials verified`);
+        }
+
+        // Send unknown serials as discrepancy
+        if (unknownSerials && unknownSerials.length > 0) {
+          try {
+            await fetch("/api/team/serial-discrepancies", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                itemCode: currentEntry.itemCode,
+                description: currentEntry.description || null,
+                binNumber: selectedVerificationBin === "No Bin" ? null : selectedVerificationBin,
+                binInternalId: null,
+                unknownSerials,
+              }),
+            });
+            toast.info(`${unknownSerials.length} unknown serial(s) sent to supervisor for review`);
+          } catch {
+            toast.error("Failed to send unknown serials to supervisor");
+          }
+        }
+
+        // Remove completed items from verification list
+        const completedItemIds = new Set(currentEntry.items.map((v) => v.verificationId));
+        setVerificationItems((prev) =>
+          prev.filter((v) => !completedItemIds.has(v.verificationId))
+        );
+
+        // Check if bin is complete
+        const remainingInBin = scopedVerificationItems.filter(
+          (v) => !completedItemIds.has(v.verificationId)
+        );
+
+        if (remainingInBin.length === 0) {
+          toast.success("All verifications in this bin complete!");
+          setSelectedVerificationBin(null);
+          setVerificationIndex(0);
+          setShowFlash(false);
+          setPageState("bin-selection");
+          const totalRemaining = verificationItems.filter(
+            (v) => !completedItemIds.has(v.verificationId)
+          );
+          if (totalRemaining.length > 0) {
+            setBinTab("verification");
+          }
+        } else {
+          setShowFlash(true);
+        }
+      } catch {
+        toast.error("Failed to submit — check your connection");
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [isSubmitting, verificationQueue, verificationIndex, selectedVerificationBin, scopedVerificationItems, verificationItems]
+  );
+
   // Auto-advance verification after flash
   useEffect(() => {
     if (pageState !== "verification-counting") return;
     if (showFlash) return;
-    if (scopedVerificationItems.length === 0) {
+    if (verificationQueue.length === 0) {
       toast.success("All verifications in this bin complete!");
       setSelectedVerificationBin(null);
       setPageState("bin-selection");
       setShowFlash(false);
       setVerificationIndex(0);
-      // Stay on verification tab if there are more bins, otherwise auto-select will pick the right one
       if (verificationItems.length > 0) {
         setBinTab("verification");
       }
       return;
     }
-    if (verificationIndex >= scopedVerificationItems.length) {
+    if (verificationIndex >= verificationQueue.length) {
       setVerificationIndex(0);
     }
-    const vi = scopedVerificationItems[verificationIndex];
-    if (vi) {
-      setVerificationQtyValue(String(vi.onHand ?? 0));
+    const entry = verificationQueue[verificationIndex];
+    if (entry && entry.type === "single") {
+      setVerificationQtyValue(String(entry.item.onHand ?? 0));
       setVerificationComment("");
     }
-  }, [scopedVerificationItems.length, verificationIndex, pageState, showFlash]);
+  }, [verificationQueue.length, verificationIndex, pageState, showFlash]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-focus for verification
+  // Auto-focus for verification (single items only)
   useEffect(() => {
-    if (pageState !== "verification-counting" || !currentVerificationItem) return;
+    if (pageState !== "verification-counting") return;
+    const entry = verificationQueue[verificationIndex];
+    if (!entry || entry.type !== "single") return;
     const timer = setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
@@ -796,7 +984,7 @@ export default function CountingPage() {
       }
     }, 50);
     return () => clearTimeout(timer);
-  }, [currentVerificationItem?.verificationId, pageState]);
+  }, [verificationQueue, verificationIndex, pageState]);
 
   const handleBinCompleteFinish = useCallback(() => {
     setShowFlash(false);
@@ -811,6 +999,10 @@ export default function CountingPage() {
   const startRecount = useCallback((item: CountItem) => {
     if (item.checkStatus === "accepted") {
       toast.error("This item has been reviewed by a supervisor and cannot be changed");
+      return;
+    }
+    if (item.hasPendingVerification) {
+      toast.error("This item has a pending verification and cannot be edited");
       return;
     }
     setRecountItem(item);
@@ -1012,7 +1204,9 @@ export default function CountingPage() {
 
   // ---------- Verification Counting ----------
   if (pageState === "verification-counting") {
-    if (!currentVerificationItem) {
+    const currentVerificationEntry = verificationQueue[verificationIndex] ?? null;
+
+    if (!currentVerificationEntry) {
       return (
         <div className="flex items-center justify-center h-64">
           <div className="text-muted-foreground">No verification items</div>
@@ -1020,29 +1214,7 @@ export default function CountingPage() {
       );
     }
 
-    // Convert to CountItem shape for ActiveItemCard
-    const verAsCountItem: CountItem = {
-      id: currentVerificationItem.itemId,
-      itemCode: currentVerificationItem.itemCode,
-      description: currentVerificationItem.description,
-      brand: currentVerificationItem.brand,
-      binNumber: currentVerificationItem.binNumber,
-      binInternalId: null,
-      onHand: currentVerificationItem.onHand,
-      avgCost: currentVerificationItem.avgCost,
-      stockStatus: currentVerificationItem.stockStatus,
-      serialNumber: currentVerificationItem.serialNumber,
-      isSerialized: currentVerificationItem.isSerialized,
-      countId: null,
-      countedQty: null,
-      variance: null,
-      isMatch: null,
-      comment: null,
-      checkStatus: null,
-      countedAt: null,
-    };
-
-    const upcomingVerification = scopedVerificationItems.filter((_, i) => i !== verificationIndex);
+    const upcomingVerificationEntries = verificationQueue.filter((_, i) => i !== verificationIndex);
 
     return (
       <div className="flex flex-col h-[calc(100vh-7.5rem)]">
@@ -1075,60 +1247,80 @@ export default function CountingPage() {
         {/* Main content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <div className="max-w-lg mx-auto">
-            <ActiveItemCard
-              item={verAsCountItem}
-              qtyValue={verificationQtyValue}
-              onQtyChange={setVerificationQtyValue}
-              onSubmit={submitVerificationCount}
-              onSkip={() => {
-                if (scopedVerificationItems.length <= 1) return;
-                setVerificationIndex((i) => (i + 1) % scopedVerificationItems.length);
-              }}
-              comment={verificationComment}
-              onCommentChange={setVerificationComment}
-              inputRef={inputRef}
-              isSubmitting={isSubmitting}
-              showSuccessFlash={showFlash}
-              onFlashComplete={handleFlashComplete}
-              isVerification
-            />
+            {currentVerificationEntry.type === "serialized-group" ? (
+              <SerializedGroupCard
+                key={`ver-serial-${currentVerificationEntry.itemCode}`}
+                entry={{
+                  type: "serialized-group",
+                  itemCode: currentVerificationEntry.itemCode,
+                  description: currentVerificationEntry.description,
+                  brand: currentVerificationEntry.brand,
+                  stockStatus: currentVerificationEntry.stockStatus,
+                  items: currentVerificationEntry.items.map(verificationItemToCountItem),
+                }}
+                onSubmitAll={submitSerializedVerificationGroup}
+                onSkip={() => {
+                  if (verificationQueue.length <= 1) return;
+                  setVerificationIndex((i) => (i + 1) % verificationQueue.length);
+                }}
+                isSubmitting={isSubmitting}
+                showSuccessFlash={showFlash}
+                onFlashComplete={handleFlashComplete}
+                comment={verificationComment}
+                onCommentChange={setVerificationComment}
+              />
+            ) : (
+              <ActiveItemCard
+                item={verificationItemToCountItem(currentVerificationEntry.item)}
+                qtyValue={verificationQtyValue}
+                onQtyChange={setVerificationQtyValue}
+                onSubmit={submitVerificationCount}
+                onSkip={() => {
+                  if (verificationQueue.length <= 1) return;
+                  setVerificationIndex((i) => (i + 1) % verificationQueue.length);
+                }}
+                comment={verificationComment}
+                onCommentChange={setVerificationComment}
+                inputRef={inputRef}
+                isSubmitting={isSubmitting}
+                showSuccessFlash={showFlash}
+                onFlashComplete={handleFlashComplete}
+                isVerification
+              />
+            )}
           </div>
 
-          {/* Remaining verification items in this bin */}
-          {upcomingVerification.length > 0 && (
+          {/* Remaining verification entries in this bin */}
+          {upcomingVerificationEntries.length > 0 && (
             <div className="max-w-lg mx-auto">
               <div className="text-sm font-medium text-muted-foreground mb-2">
-                Up Next ({upcomingVerification.length} more)
+                Up Next ({upcomingVerificationEntries.length} more)
               </div>
               <Card>
                 <div className="max-h-[300px] overflow-y-auto">
                   <CardContent className="p-0">
-                    {upcomingVerification.slice(0, 20).map((vi, i) => (
-                      <QueueItemRow
-                        key={vi.verificationId}
-                        item={{
-                          id: vi.itemId,
-                          itemCode: vi.itemCode,
-                          description: vi.description,
-                          brand: vi.brand,
-                          binNumber: vi.binNumber,
-                          binInternalId: null,
-                          onHand: vi.onHand,
-                          avgCost: vi.avgCost,
-                          stockStatus: vi.stockStatus,
-                          serialNumber: vi.serialNumber,
-                          isSerialized: vi.isSerialized,
-                          countId: null,
-                          countedQty: null,
-                          variance: null,
-                          isMatch: null,
-                          comment: null,
-                          checkStatus: null,
-                          countedAt: null,
-                        }}
-                        position={i + 1}
-                      />
-                    ))}
+                    {upcomingVerificationEntries.slice(0, 20).map((entry, i) =>
+                      entry.type === "serialized-group" ? (
+                        <QueueGroupRow
+                          key={`ver-group-${entry.itemCode}`}
+                          entry={{
+                            type: "serialized-group",
+                            itemCode: entry.itemCode,
+                            description: entry.description,
+                            brand: entry.brand,
+                            stockStatus: entry.stockStatus,
+                            items: entry.items.map(verificationItemToCountItem),
+                          }}
+                          position={i + 1}
+                        />
+                      ) : (
+                        <QueueItemRow
+                          key={entry.item.verificationId}
+                          item={verificationItemToCountItem(entry.item)}
+                          position={i + 1}
+                        />
+                      )
+                    )}
                   </CardContent>
                 </div>
               </Card>

@@ -134,6 +134,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Block edits when item has pending verification
+    const [pendingVa] = await db
+      .select({ id: verificationAssignments.id })
+      .from(verificationAssignments)
+      .where(
+        and(
+          eq(verificationAssignments.itemId, itemId),
+          eq(verificationAssignments.eventId, user.eventId),
+          eq(verificationAssignments.status, "pending")
+        )
+      );
+
+    if (pendingVa) {
+      return NextResponse.json(
+        { error: "This item has a pending verification and cannot be edited" },
+        { status: 403 }
+      );
+    }
+
     // Check for duplicate sync (clientId dedup)
     if (clientId) {
       const [existing] = await db
@@ -312,6 +331,23 @@ export async function PUT(request: NextRequest) {
 
       if (!item) {
         results.push({ itemId, error: "Not found" });
+        continue;
+      }
+
+      // Block edits when item has pending verification
+      const [pendingVaBatch] = await db
+        .select({ id: verificationAssignments.id })
+        .from(verificationAssignments)
+        .where(
+          and(
+            eq(verificationAssignments.itemId, itemId),
+            eq(verificationAssignments.eventId, user.eventId),
+            eq(verificationAssignments.status, "pending")
+          )
+        );
+
+      if (pendingVaBatch) {
+        results.push({ itemId, error: "Pending verification" });
         continue;
       }
 

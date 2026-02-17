@@ -28,6 +28,7 @@ export interface CountItem {
   comment: string | null;
   checkStatus: string | null;
   countedAt: string | null;
+  hasPendingVerification?: boolean;
 }
 
 interface ActiveItemCardProps {
@@ -412,13 +413,18 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
                 Locked
               </Badge>
             )}
+            {item.hasPendingVerification && (
+              <Badge className="text-xs bg-purple-100 text-purple-800 border-purple-300">
+                Verification Pending
+              </Badge>
+            )}
           </>
         ) : (
           <Badge variant="outline" className="text-xs text-amber-700 border-amber-300">
             Pending
           </Badge>
         )}
-        {item.checkStatus !== "accepted" && (
+        {item.checkStatus !== "accepted" && !item.hasPendingVerification && (
           <Button
             variant="ghost"
             size="sm"
@@ -648,7 +654,12 @@ export function CountedSerialGroupRow({ row, onRecount }: CountedSerialGroupRowP
                   Locked
                 </Badge>
               )}
-              {item.checkStatus !== "accepted" && (
+              {item.hasPendingVerification && (
+                <Badge className="text-[10px] bg-purple-100 text-purple-800 border-purple-300">
+                  Verification Pending
+                </Badge>
+              )}
+              {item.checkStatus !== "accepted" && !item.hasPendingVerification && (
                 <Button
                   variant="ghost"
                   size="sm"

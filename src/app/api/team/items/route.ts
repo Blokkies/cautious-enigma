@@ -47,6 +47,16 @@ export async function GET(request: NextRequest) {
     )
     .orderBy(items.binNumber, items.itemCode);
 
+  // Find items with pending verification assignments (locked for original team)
+  const pendingVerificationItemIds = await db
+    .select({ itemId: verificationAssignments.itemId })
+    .from(verificationAssignments)
+    .where(and(
+      eq(verificationAssignments.eventId, user.eventId),
+      eq(verificationAssignments.status, "pending")
+    ));
+  const pendingVerificationSet = new Set(pendingVerificationItemIds.map((r) => r.itemId));
+
   // Group by bin number
   const groupedByBin: Record<
     string,
@@ -138,7 +148,10 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    items: teamItems,
+    items: teamItems.map((item) => ({
+      ...item,
+      hasPendingVerification: pendingVerificationSet.has(item.id),
+    })),
     groupedByBin,
     stats: { total, counted, progressPercent },
     verificationItems,

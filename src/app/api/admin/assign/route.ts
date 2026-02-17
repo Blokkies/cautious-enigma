@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, teams, counts } from "@/lib/db/schema";
+import { items, teams } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { getEventWarehouses, getApiUser } from "@/lib/api-auth";
 

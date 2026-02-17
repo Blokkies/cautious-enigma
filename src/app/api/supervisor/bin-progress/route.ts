@@ -37,8 +37,6 @@ export async function GET(request: NextRequest) {
 
   // Get team info
   const teamList = await db.select().from(teams).where(eq(teams.eventId, eid));
-  const teamMap = new Map(teamList.map(t => [t.id, t]));
-
   // Group bins by team
   const teamBins = new Map<number, { binNumber: string; totalItems: number; countedItems: number; isComplete: boolean }[]>();
   for (const row of rows) {

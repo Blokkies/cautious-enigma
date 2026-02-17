@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useAuth } from "@/contexts/auth-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +32,6 @@ interface TeamProgress {
 }
 
 export default function BinProgressPage() {
-  const { user } = useAuth();
   const [teams, setTeams] = useState<TeamProgress[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedTeams, setExpandedTeams] = useState<Set<number>>(new Set());

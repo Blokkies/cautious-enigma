@@ -18,10 +18,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });
   }
 
+  const brand = request.nextUrl.searchParams.get("brand") || "";
+
   const eventWarehouses = await getEventWarehouses(eid);
   const whFragment = eventWarehouses
     ? sql` AND i.warehouse IN (${sql.raw(eventWarehouses.map(w => `'${w.replace(/'/g, "''")}'`).join(","))})`
     : sql``;
+  const brandFragment = brand
+    ? sql` AND i.brand = ${brand}`
+    : sql``;
+
+  // Query distinct brands for filter options
+  const brandRows = await db.execute(
+    sql`SELECT DISTINCT i.brand FROM items i
+        WHERE i.event_id = ${eid} AND i.team_id IS NOT NULL AND i.brand IS NOT NULL AND i.brand != ''${whFragment}
+        ORDER BY i.brand`
+  ) as { brand: string }[];
 
   // Single query: per-team, per-bin counts with initial count status
   const rows = await db.execute(
@@ -30,7 +42,7 @@ export async function GET(request: NextRequest) {
            count(c.id)::int as counted_items
          FROM items i
          LEFT JOIN counts c ON c.item_id = i.id AND c.count_type = 'initial'
-         WHERE i.event_id = ${eid} AND i.team_id IS NOT NULL AND i.bin_number IS NOT NULL${whFragment}
+         WHERE i.event_id = ${eid} AND i.team_id IS NOT NULL AND i.bin_number IS NOT NULL${whFragment}${brandFragment}
          GROUP BY i.team_id, i.bin_number
          ORDER BY i.team_id, i.bin_number`
   ) as { team_id: number; bin_number: string; total_items: number; counted_items: number }[];
@@ -63,5 +75,8 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  return NextResponse.json({ teams: teamsResult });
+  return NextResponse.json({
+    teams: teamsResult,
+    filterOptions: { brands: brandRows.map(r => r.brand) },
+  });
 }

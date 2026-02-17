@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, teams } from "@/lib/db/schema";
+import { items, teams, counts } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { getEventWarehouses, getApiUser } from "@/lib/api-auth";
 
@@ -98,20 +98,24 @@ export async function GET(request: NextRequest) {
 
   const teamDetails = await Promise.all(
     teamList.map(async (team) => {
-      let teamBinsQuery = sql`SELECT bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
-         FROM items WHERE event_id = ${eid} AND team_id = ${team.id} AND bin_number IS NOT NULL${whFragment}`;
+      let teamBinsQuery = sql`SELECT i.bin_number, count(*)::int as item_count, COALESCE(sum(i.total_value), 0) as total_value,
+             count(c.id)::int as counted_items
+         FROM items i
+         LEFT JOIN counts c ON c.item_id = i.id AND c.count_type = 'initial'
+         WHERE i.event_id = ${eid} AND i.team_id = ${team.id} AND i.bin_number IS NOT NULL${whFragment}`;
 
       if (brand) {
-        teamBinsQuery = sql`${teamBinsQuery} AND brand = ${brand}`;
+        teamBinsQuery = sql`${teamBinsQuery} AND i.brand = ${brand}`;
       }
 
-      teamBinsQuery = sql`${teamBinsQuery} GROUP BY bin_number ORDER BY bin_number`;
+      teamBinsQuery = sql`${teamBinsQuery} GROUP BY i.bin_number ORDER BY i.bin_number`;
 
-      const teamBinsRaw = await db.execute(teamBinsQuery) as { bin_number: string; item_count: string | number; total_value: string | number }[];
+      const teamBinsRaw = await db.execute(teamBinsQuery) as { bin_number: string; item_count: number; total_value: string | number; counted_items: number }[];
       const teamBins = teamBinsRaw.map(b => ({
         bin_number: b.bin_number,
         item_count: Number(b.item_count),
         total_value: Number(b.total_value),
+        counted_items: Number(b.counted_items),
       }));
 
       const totalCount = teamBins.reduce((s, b) => s + b.item_count, 0);
@@ -245,6 +249,75 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Unassign error:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
+
+// PATCH: Re-assign uncounted bins from one team to another
+export async function PATCH(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
+  try {
+    const body = await request.json();
+    const eid = getAuthorizedEventId(request, body.eventId);
+    const { fromTeamId, toTeamId, bins } = body;
+
+    if (!eid || !fromTeamId || !toTeamId || !bins || !Array.isArray(bins) || bins.length === 0) {
+      return NextResponse.json(
+        { error: "eventId, fromTeamId, toTeamId, and bins[] required" },
+        { status: 400 }
+      );
+    }
+
+    if (fromTeamId === toTeamId) {
+      return NextResponse.json(
+        { error: "Source and target teams must differ" },
+        { status: 400 }
+      );
+    }
+
+    // Validate both teams exist in this event
+    const [fromTeam] = await db.select({ id: teams.id }).from(teams)
+      .where(and(eq(teams.id, Number(fromTeamId)), eq(teams.eventId, eid)));
+    const [toTeam] = await db.select({ id: teams.id }).from(teams)
+      .where(and(eq(teams.id, Number(toTeamId)), eq(teams.eventId, eid)));
+
+    if (!fromTeam || !toTeam) {
+      return NextResponse.json({ error: "One or both teams not found in this event" }, { status: 404 });
+    }
+
+    // Check that no items in these bins have counts
+    const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
+    const countedCheck = await db.execute(
+      sql`SELECT count(*)::int as cnt FROM counts c
+          JOIN items i ON i.id = c.item_id
+          WHERE i.event_id = ${eid} AND i.team_id = ${Number(fromTeamId)}
+          AND i.bin_number IN (${binList})`
+    ) as { cnt: number }[];
+
+    if (Number(countedCheck[0]?.cnt) > 0) {
+      return NextResponse.json(
+        { error: "Cannot re-assign bins that have counted items" },
+        { status: 409 }
+      );
+    }
+
+    // Move items
+    const result = await db.execute(
+      sql`UPDATE items SET team_id = ${Number(toTeamId)}
+          WHERE event_id = ${eid} AND team_id = ${Number(fromTeamId)}
+          AND bin_number IN (${binList}) RETURNING id`
+    );
+
+    return NextResponse.json({ success: true, movedCount: result.length });
+  } catch (error) {
+    console.error("Re-assign error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

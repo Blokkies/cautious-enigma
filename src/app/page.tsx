@@ -21,6 +21,7 @@ type LoginStep = "choose" | "event" | "credentials" | "admin";
 interface ListItem {
   id: number;
   name: string;
+  members?: string | null;
 }
 
 interface EventInfo {
@@ -400,15 +401,24 @@ export default function LoginPage() {
                       />
                     </SelectTrigger>
                     <SelectContent>
-                      {listItems.map((item) => (
-                        <SelectItem
-                          key={item.id}
-                          value={String(item.id)}
-                          className="text-base py-3"
-                        >
-                          {item.name}
-                        </SelectItem>
-                      ))}
+                      {listItems.map((item) => {
+                        let displayName = item.name;
+                        if (loginType === "team" && item.members) {
+                          try {
+                            const firstMember = JSON.parse(item.members)[0];
+                            if (firstMember) displayName = `${item.name} — ${firstMember}`;
+                          } catch { /* ignore parse errors */ }
+                        }
+                        return (
+                          <SelectItem
+                            key={item.id}
+                            value={String(item.id)}
+                            className="text-base py-3"
+                          >
+                            {displayName}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
                 </div>

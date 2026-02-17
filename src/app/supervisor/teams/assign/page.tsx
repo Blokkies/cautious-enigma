@@ -27,6 +27,8 @@ import {
   ArrowUpDown,
   ArrowLeft,
   X,
+  ArrowRightLeft,
+  Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -66,6 +68,7 @@ interface BinInfo {
   bin_number: string;
   item_count: number;
   total_value: number;
+  counted_items?: number;
 }
 
 interface TeamDetail {
@@ -126,6 +129,11 @@ export default function SupervisorAssignPage() {
   const [balancing, setBalancing] = useState(false);
   const [balanceMode, setBalanceMode] = useState<BalanceMode>("equal-bins");
   const [balanceTeams, setBalanceTeams] = useState<Set<number>>(new Set());
+
+  // Re-assign state
+  const [reassignDialog, setReassignDialog] = useState<{ fromTeamId: number; bins: string[] } | null>(null);
+  const [reassignToTeam, setReassignToTeam] = useState<string>("");
+  const [reassigning, setReassigning] = useState(false);
 
   // Team bin selection (for bulk removal)
   const [selectedTeamBins, setSelectedTeamBins] = useState<Record<number, Set<string>>>({});
@@ -509,6 +517,47 @@ export default function SupervisorAssignPage() {
     }
   };
 
+  const handleReassign = async () => {
+    if (!reassignDialog || !reassignToTeam) return;
+    setReassigning(true);
+    try {
+      const res = await fetch("/api/admin/assign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId: Number(eventId),
+          fromTeamId: reassignDialog.fromTeamId,
+          toTeamId: Number(reassignToTeam),
+          bins: reassignDialog.bins,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast.success(`Re-assigned ${data.movedCount} items (${reassignDialog.bins.length} bins)`);
+        setReassignDialog(null);
+        setReassignToTeam("");
+        setSelectedTeamBins((prev) => ({ ...prev, [reassignDialog.fromTeamId]: new Set() }));
+        loadData();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Re-assign failed");
+      }
+    } catch {
+      toast.error("Re-assign failed");
+    } finally {
+      setReassigning(false);
+    }
+  };
+
+  const getUncountedSelectedBins = (teamId: number): string[] => {
+    const team = teamDetails.find(t => t.id === teamId);
+    if (!team) return [];
+    const selected = selectedTeamBins[teamId] || new Set<string>();
+    return team.bins
+      .filter(b => selected.has(b.bin_number) && (b.counted_items ?? 0) === 0)
+      .map(b => b.bin_number);
+  };
+
   const toggleTeamExpand = (teamId: number) => {
     setExpandedTeams((prev) => {
       const next = new Set(prev);
@@ -645,15 +694,31 @@ export default function SupervisorAssignPage() {
                         R{team.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </span>
                       {selectedCount > 0 && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleBulkUnassign(team.id)}
-                          className="h-7 text-xs gap-1"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Remove {selectedCount}
-                        </Button>
+                        <>
+                          {getUncountedSelectedBins(team.id).length > 0 && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setReassignDialog({ fromTeamId: team.id, bins: getUncountedSelectedBins(team.id) });
+                                setReassignToTeam("");
+                              }}
+                              className="h-7 text-xs gap-1 text-blue-600 border-blue-300 hover:bg-blue-50"
+                            >
+                              <ArrowRightLeft className="h-3 w-3" />
+                              Re-assign {getUncountedSelectedBins(team.id).length}
+                            </Button>
+                          )}
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleBulkUnassign(team.id)}
+                            className="h-7 text-xs gap-1"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Remove {selectedCount}
+                          </Button>
+                        </>
                       )}
                       {team.bins.length > 0 && selectedCount === 0 && (
                         <Button
@@ -687,34 +752,59 @@ export default function SupervisorAssignPage() {
                           Select all {team.bins.length} bins
                         </label>
                       </div>
-                      {team.bins.map((bin) => (
-                        <div
-                          key={bin.bin_number}
-                          className="flex items-center justify-between text-sm py-1"
-                        >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={teamBinSet.has(bin.bin_number)}
-                              onChange={() => toggleTeamBin(team.id, bin.bin_number)}
-                              className="rounded"
-                            />
-                            <Package className="h-3 w-3 text-muted-foreground" />
-                            <span className="font-mono">{bin.bin_number}</span>
-                            <span className="text-muted-foreground">
-                              ({bin.item_count} items)
-                            </span>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                            onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
+                      {team.bins.map((bin) => {
+                        const isCounted = (bin.counted_items ?? 0) > 0;
+                        return (
+                          <div
+                            key={bin.bin_number}
+                            className="flex items-center justify-between text-sm py-1"
                           >
-                            Remove
-                          </Button>
-                        </div>
-                      ))}
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={teamBinSet.has(bin.bin_number)}
+                                onChange={() => toggleTeamBin(team.id, bin.bin_number)}
+                                className="rounded"
+                              />
+                              <Package className="h-3 w-3 text-muted-foreground" />
+                              <span className="font-mono">{bin.bin_number}</span>
+                              <span className="text-muted-foreground">
+                                ({bin.item_count} items)
+                              </span>
+                              {isCounted && (
+                                <Badge variant="outline" className="h-5 text-[10px] bg-green-50 text-green-700 border-green-300 gap-0.5">
+                                  <Lock className="h-2.5 w-2.5" />
+                                  Counted
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {!isCounted && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                  onClick={() => {
+                                    setReassignDialog({ fromTeamId: team.id, bins: [bin.bin_number] });
+                                    setReassignToTeam("");
+                                  }}
+                                  title="Re-assign to another team"
+                                >
+                                  <ArrowRightLeft className="h-3 w-3" />
+                                </Button>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                                onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -1016,6 +1106,69 @@ export default function SupervisorAssignPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Re-assign dialog */}
+      {reassignDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-sm mx-4">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <ArrowRightLeft className="h-4 w-4" />
+                Re-assign {reassignDialog.bins.length} bin{reassignDialog.bins.length !== 1 ? "s" : ""}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-sm text-muted-foreground">
+                From: <span className="font-medium text-foreground">
+                  {teamDetails.find(t => t.id === reassignDialog.fromTeamId)?.name}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Bins: {reassignDialog.bins.join(", ")}
+              </div>
+              <Select value={reassignToTeam} onValueChange={setReassignToTeam}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Move to team..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {teamDetails
+                    .filter(t => t.id !== reassignDialog.fromTeamId)
+                    .map(t => (
+                      <SelectItem key={t.id} value={String(t.id)}>
+                        {t.name} ({t.itemCount} items)
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setReassignDialog(null);
+                    setReassignToTeam("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!reassignToTeam || reassigning}
+                  onClick={handleReassign}
+                  className="gap-1"
+                >
+                  {reassigning ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ArrowRightLeft className="h-3 w-3" />
+                  )}
+                  {reassigning ? "Moving..." : "Confirm"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

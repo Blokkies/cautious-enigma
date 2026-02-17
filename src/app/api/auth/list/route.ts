@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
 
   if (type === "team") {
     const teamList = await db
-      .select({ id: teams.id, name: teams.name })
+      .select({ id: teams.id, name: teams.name, members: teams.members })
       .from(teams)
       .where(eq(teams.eventId, resolvedEventId));
     return NextResponse.json({ items: teamList });

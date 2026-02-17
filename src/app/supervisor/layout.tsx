@@ -74,7 +74,7 @@ export default function SupervisorLayout({
                 <span className="text-muted-foreground font-normal">·</span>
               </>
             )}
-            <span>Supervisor: {user?.name}</span>
+            <span>{user?.type === "auditor" ? "Auditor" : "Supervisor"}: {user?.name}</span>
           </div>
           <Button
             variant="ghost"

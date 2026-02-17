@@ -49,13 +49,13 @@ export async function middleware(request: NextRequest) {
     const isAdminAllowed =
       payload.type === "admin" &&
       adminAllowedSupervisorPaths.some((p) => pathname.startsWith(p));
-    if (payload.type !== "supervisor" && !isAdminAllowed) {
+    if (payload.type !== "supervisor" && payload.type !== "auditor" && !isAdminAllowed) {
       return NextResponse.redirect(new URL("/", request.url));
     }
   }
   const supervisorAllowedAdminApis = ["/api/admin/teams", "/api/admin/assign"];
   if (pathname.startsWith("/admin") && payload.type !== "admin") {
-    if (!(payload.type === "supervisor" && supervisorAllowedAdminApis.some(p => pathname.startsWith(p)))) {
+    if (!((payload.type === "supervisor" || payload.type === "auditor") && supervisorAllowedAdminApis.some(p => pathname.startsWith(p)))) {
       return NextResponse.redirect(new URL("/", request.url));
     }
   }
@@ -63,7 +63,8 @@ export async function middleware(request: NextRequest) {
   if (
     pathname.startsWith("/completed") &&
     payload.type !== "supervisor" &&
-    payload.type !== "admin"
+    payload.type !== "admin" &&
+    payload.type !== "auditor"
   ) {
     return NextResponse.redirect(new URL("/", request.url));
   }

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/contexts/auth-context";
 import { CheckCircle2, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users } from "lucide-react";
 import { toast } from "sonner";
 import { markNotificationSeen } from "@/hooks/use-notifications";
@@ -30,6 +31,8 @@ interface QueryItem {
 }
 
 export default function SupervisorQueriesPage() {
+  const { user } = useAuth();
+  const isAuditor = user?.type === "auditor";
   const [allQueries, setAllQueries] = useState<QueryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [respondingTo, setRespondingTo] = useState<number | null>(null);
@@ -246,14 +249,16 @@ export default function SupervisorQueriesPage() {
               </p>
             )}
           </button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0 mt-2.5 mr-2"
-            onClick={() => handleDelete(q.id)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+          {!isAuditor && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0 mt-2.5 mr-2"
+              onClick={() => handleDelete(q.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -287,7 +292,7 @@ export default function SupervisorQueriesPage() {
         </div>
         )}
 
-        {q.status === "open" && (
+        {!isAuditor && q.status === "open" && (
           <>
             {respondingTo === q.id ? (
               <div className="space-y-2">
@@ -348,7 +353,7 @@ export default function SupervisorQueriesPage() {
           </>
         )}
 
-        {q.status === "resolved" && (
+        {!isAuditor && q.status === "resolved" && (
           <Button
             variant="outline"
             size="sm"

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, counts, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
+import { items, counts, verificationAssignments, serialDiscrepancies, teams } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
@@ -126,11 +126,23 @@ export async function GET(request: NextRequest) {
     unknownSerials: JSON.parse(task.unknownSerials) as string[],
   }));
 
+  // Fetch team members
+  const [team] = await db
+    .select({ members: teams.members })
+    .from(teams)
+    .where(and(eq(teams.id, user.id), eq(teams.eventId, user.eventId)));
+
+  let memberNames: string[] = [];
+  if (team?.members) {
+    try { memberNames = JSON.parse(team.members); } catch { /* ignore */ }
+  }
+
   return NextResponse.json({
     items: teamItems,
     groupedByBin,
     stats: { total, counted, progressPercent },
     verificationItems,
     serialVerificationTasks: parsedSerialTasks,
+    members: memberNames,
   });
 }

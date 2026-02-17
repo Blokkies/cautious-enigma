@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams, supervisors, stocktakeEvents } from "@/lib/db/schema";
-import { eq, or, sql } from "drizzle-orm";
+import { eq, or, and, sql } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   const type = request.nextUrl.searchParams.get("type");
@@ -29,7 +29,12 @@ export async function GET(request: NextRequest) {
         const [supervisorCount] = await db
           .select({ count: sql<number>`count(*)` })
           .from(supervisors)
-          .where(eq(supervisors.eventId, event.id));
+          .where(and(eq(supervisors.eventId, event.id), eq(supervisors.role, "supervisor")));
+
+        const [auditorCount] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(supervisors)
+          .where(and(eq(supervisors.eventId, event.id), eq(supervisors.role, "auditor")));
 
         return {
           id: event.id,
@@ -38,6 +43,7 @@ export async function GET(request: NextRequest) {
           status: event.status,
           teamCount: teamCount?.count || 0,
           supervisorCount: supervisorCount?.count || 0,
+          auditorCount: auditorCount?.count || 0,
         };
       })
     );
@@ -83,8 +89,16 @@ export async function GET(request: NextRequest) {
     const supervisorList = await db
       .select({ id: supervisors.id, name: supervisors.name })
       .from(supervisors)
-      .where(eq(supervisors.eventId, resolvedEventId));
+      .where(and(eq(supervisors.eventId, resolvedEventId), eq(supervisors.role, "supervisor")));
     return NextResponse.json({ items: supervisorList });
+  }
+
+  if (type === "auditor") {
+    const auditorList = await db
+      .select({ id: supervisors.id, name: supervisors.name })
+      .from(supervisors)
+      .where(and(eq(supervisors.eventId, resolvedEventId), eq(supervisors.role, "auditor")));
+    return NextResponse.json({ items: auditorList });
   }
 
   return NextResponse.json({ items: [] });

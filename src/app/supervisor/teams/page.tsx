@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X } from "lucide-react";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X, Eye } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -38,6 +38,7 @@ interface SupervisorInfo {
 
 export default function SupervisorTeamsPage() {
   const { user } = useAuth();
+  const isAuditor = user?.type === "auditor";
   const eventId = user?.eventId;
 
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([]);
@@ -288,21 +289,25 @@ export default function SupervisorTeamsPage() {
                     <Badge variant="secondary">
                       {team.assignedItems} items
                     </Badge>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openEditDialog(team)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(team.id)}
-                      className="text-destructive hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {!isAuditor && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEditDialog(team)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDelete(team.id)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -313,64 +318,68 @@ export default function SupervisorTeamsPage() {
             </p>
           )}
 
-          <Separator className="my-4" />
+          {!isAuditor && (
+            <>
+              <Separator className="my-4" />
 
-          {/* Add Single Team */}
-          <div className="space-y-3">
-            <h3 className="font-medium">Add Team</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                placeholder="Team name"
-                value={teamForm.name}
-                onChange={(e) =>
-                  setTeamForm((p) => ({ ...p, name: e.target.value }))
-                }
-              />
-              <Input
-                placeholder="4-digit PIN"
-                type="password"
-                maxLength={6}
-                value={teamForm.pin}
-                onChange={(e) =>
-                  setTeamForm((p) => ({
-                    ...p,
-                    pin: e.target.value.replace(/\D/g, ""),
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Members</div>
-              {teamMembers.map((member, i) => (
-                <div key={i} className="flex gap-2">
+              {/* Add Single Team */}
+              <div className="space-y-3">
+                <h3 className="font-medium">Add Team</h3>
+                <div className="grid grid-cols-2 gap-3">
                   <Input
-                    placeholder={`Member ${i + 1}`}
-                    value={member}
-                    onChange={(e) => setTeamMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
+                    placeholder="Team name"
+                    value={teamForm.name}
+                    onChange={(e) =>
+                      setTeamForm((p) => ({ ...p, name: e.target.value }))
+                    }
                   />
-                  {teamMembers.length > 1 && (
-                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTeamMembers(prev => prev.filter((_, j) => j !== i))}>
-                      <X className="h-4 w-4" />
-                    </Button>
-                  )}
+                  <Input
+                    placeholder="4-digit PIN"
+                    type="password"
+                    maxLength={6}
+                    value={teamForm.pin}
+                    onChange={(e) =>
+                      setTeamForm((p) => ({
+                        ...p,
+                        pin: e.target.value.replace(/\D/g, ""),
+                      }))
+                    }
+                  />
                 </div>
-              ))}
-              <Button variant="outline" size="sm" onClick={() => setTeamMembers(prev => [...prev, ""])} className="gap-1">
-                <Plus className="h-3 w-3" /> Add Member
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">Members</div>
+                  {teamMembers.map((member, i) => (
+                    <div key={i} className="flex gap-2">
+                      <Input
+                        placeholder={`Member ${i + 1}`}
+                        value={member}
+                        onChange={(e) => setTeamMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
+                      />
+                      {teamMembers.length > 1 && (
+                        <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTeamMembers(prev => prev.filter((_, j) => j !== i))}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <Button variant="outline" size="sm" onClick={() => setTeamMembers(prev => [...prev, ""])} className="gap-1">
+                    <Plus className="h-3 w-3" /> Add Member
+                  </Button>
+                </div>
+                <Button onClick={createTeam} className="gap-1">
+                  <Plus className="h-4 w-4" />
+                  Add Team
+                </Button>
+              </div>
+
+              <Separator className="my-4" />
+
+              <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
+                <Plus className="h-4 w-4" />
+                Bulk Create Teams
               </Button>
-            </div>
-            <Button onClick={createTeam} className="gap-1">
-              <Plus className="h-4 w-4" />
-              Add Team
-            </Button>
-          </div>
-
-          <Separator className="my-4" />
-
-          <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
-            <Plus className="h-4 w-4" />
-            Bulk Create Teams
-          </Button>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -510,13 +519,13 @@ export default function SupervisorTeamsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5" />
-            Supervisors ({supervisorsList.length})
+            Supervisors ({supervisorsList.filter(s => s.role !== "auditor").length})
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {supervisorsList.length > 0 && (
+          {supervisorsList.filter(s => s.role !== "auditor").length > 0 && (
             <div className="space-y-2 mb-4">
-              {supervisorsList.map((sup) => (
+              {supervisorsList.filter(s => s.role !== "auditor").map((sup) => (
                 <div
                   key={sup.id}
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
@@ -527,36 +536,134 @@ export default function SupervisorTeamsPage() {
             </div>
           )}
 
+          {!isAuditor && (
+            <div className="space-y-3">
+              <h3 className="font-medium">Add Supervisor</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  placeholder="Supervisor name"
+                  value={supForm.name}
+                  onChange={(e) =>
+                    setSupForm((p) => ({ ...p, name: e.target.value }))
+                  }
+                />
+                <Input
+                  placeholder="4-digit PIN"
+                  type="password"
+                  maxLength={6}
+                  value={supForm.pin}
+                  onChange={(e) =>
+                    setSupForm((p) => ({
+                      ...p,
+                      pin: e.target.value.replace(/\D/g, ""),
+                    }))
+                  }
+                />
+              </div>
+              <Button onClick={createSupervisor} className="gap-1">
+                <Plus className="h-4 w-4" />
+                Add Supervisor
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Auditors */}
+      <AuditorSection eventId={eventId} isAuditor={isAuditor} supervisorsList={supervisorsList} onCreated={loadTeams} />
+    </div>
+  );
+}
+
+function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated }: { eventId?: number; isAuditor: boolean; supervisorsList: SupervisorInfo[]; onCreated: () => void }) {
+  const [auditorForm, setAuditorForm] = useState({ name: "", pin: "" });
+  const auditors = supervisorsList.filter(s => s.role === "auditor");
+
+  const createAuditor = async () => {
+    if (!auditorForm.name || !auditorForm.pin) {
+      toast.error("Name and PIN are required");
+      return;
+    }
+    if (auditorForm.pin.length < 4) {
+      toast.error("PIN must be at least 4 digits");
+      return;
+    }
+    try {
+      const res = await fetch("/api/admin/teams", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId: Number(eventId),
+          type: "auditor",
+          name: auditorForm.name,
+          pin: auditorForm.pin,
+        }),
+      });
+      if (res.ok) {
+        toast.success("Auditor created");
+        setAuditorForm({ name: "", pin: "" });
+        onCreated();
+      } else {
+        toast.error("Failed to create auditor");
+      }
+    } catch {
+      toast.error("Failed to create auditor");
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Eye className="h-5 w-5" />
+          Auditors ({auditors.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {auditors.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {auditors.map((aud) => (
+              <div
+                key={aud.id}
+                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+              >
+                <div className="font-medium">{aud.name}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!isAuditor && (
           <div className="space-y-3">
-            <h3 className="font-medium">Add Supervisor</h3>
+            <h3 className="font-medium">Add Auditor</h3>
             <div className="grid grid-cols-2 gap-3">
               <Input
-                placeholder="Supervisor name"
-                value={supForm.name}
+                placeholder="Auditor name"
+                value={auditorForm.name}
                 onChange={(e) =>
-                  setSupForm((p) => ({ ...p, name: e.target.value }))
+                  setAuditorForm((p) => ({ ...p, name: e.target.value }))
                 }
               />
               <Input
                 placeholder="4-digit PIN"
                 type="password"
                 maxLength={6}
-                value={supForm.pin}
+                value={auditorForm.pin}
                 onChange={(e) =>
-                  setSupForm((p) => ({
+                  setAuditorForm((p) => ({
                     ...p,
                     pin: e.target.value.replace(/\D/g, ""),
                   }))
                 }
               />
             </div>
-            <Button onClick={createSupervisor} className="gap-1">
+            <Button onClick={createAuditor} className="gap-1">
               <Plus className="h-4 w-4" />
-              Add Supervisor
+              Add Auditor
             </Button>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

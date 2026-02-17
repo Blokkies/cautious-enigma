@@ -124,6 +124,57 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
+    if (type === "auditor") {
+      const [auditor] = await db
+        .select()
+        .from(supervisors)
+        .where(
+          and(
+            eq(supervisors.id, Number(id)),
+            eq(supervisors.eventId, event.id),
+            eq(supervisors.role, "auditor")
+          )
+        );
+
+      if (!auditor) {
+        return NextResponse.json(
+          { error: "Auditor not found" },
+          { status: 401 }
+        );
+      }
+
+      const valid = await verifyPin(pin, auditor.pinHash);
+      if (!valid) {
+        return NextResponse.json({ error: "Invalid PIN" }, { status: 401 });
+      }
+
+      const token = await createToken({
+        id: auditor.id,
+        type: "auditor",
+        name: auditor.name,
+        eventId: event.id,
+        eventName: event.name,
+      });
+
+      const response = NextResponse.json({
+        success: true,
+        user: {
+          id: auditor.id,
+          type: "auditor",
+          name: auditor.name,
+          eventId: event.id,
+          eventName: event.name,
+        },
+      });
+
+      response.cookies.set({
+        ...getTokenCookieOptions(),
+        value: token,
+      });
+
+      return response;
+    }
+
     return NextResponse.json({ error: "Invalid login type" }, { status: 400 });
   } catch (error) {
     console.error("Login error:", error);

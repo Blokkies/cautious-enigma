@@ -8,14 +8,14 @@ function getAuthorizedEventId(request: NextRequest, clientEventId?: number | str
   const user = getApiUser(request);
   if (!user) return null;
   if (user.type === "admin") return clientEventId ? Number(clientEventId) : null;
-  if (user.type === "supervisor") return user.eventId;
+  if (user.type === "supervisor" || user.type === "auditor") return user.eventId;
   return null;
 }
 
 // GET: Get assignment overview - unassigned bins and per-team bin breakdown
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+  if (!user || (user.type !== "admin" && user.type !== "supervisor" && user.type !== "auditor")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
@@ -266,7 +266,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const eid = getAuthorizedEventId(request, body.eventId);
-    const { fromTeamId, toTeamId, bins } = body;
+    const { fromTeamId, toTeamId, bins, clearCounts } = body;
 
     if (!eid || !fromTeamId || !toTeamId || !bins || !Array.isArray(bins) || bins.length === 0) {
       return NextResponse.json(
@@ -292,7 +292,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "One or both teams not found in this event" }, { status: 404 });
     }
 
-    // Check that no items in these bins have counts
+    // Check if items in these bins have counts
     const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
     const countedCheck = await db.execute(
       sql`SELECT count(*)::int as cnt FROM counts c
@@ -301,10 +301,24 @@ export async function PATCH(request: NextRequest) {
           AND i.bin_number IN (${binList})`
     ) as { cnt: number }[];
 
-    if (Number(countedCheck[0]?.cnt) > 0) {
+    const countedCount = Number(countedCheck[0]?.cnt) || 0;
+
+    if (countedCount > 0 && !clearCounts) {
       return NextResponse.json(
-        { error: "Cannot re-assign bins that have counted items" },
+        { error: "Cannot re-assign bins that have counted items", hasCountedItems: true, countedCount },
         { status: 409 }
+      );
+    }
+
+    // If clearing counts, delete all counts for items in these bins
+    if (countedCount > 0 && clearCounts) {
+      await db.execute(
+        sql`DELETE FROM counts WHERE id IN (
+          SELECT c.id FROM counts c
+          JOIN items i ON i.id = c.item_id
+          WHERE i.event_id = ${eid} AND i.team_id = ${Number(fromTeamId)}
+          AND i.bin_number IN (${binList})
+        )`
       );
     }
 
@@ -315,7 +329,7 @@ export async function PATCH(request: NextRequest) {
           AND bin_number IN (${binList}) RETURNING id`
     );
 
-    return NextResponse.json({ success: true, movedCount: result.length });
+    return NextResponse.json({ success: true, movedCount: result.length, clearedCounts: countedCount > 0 ? countedCount : 0 });
   } catch (error) {
     console.error("Re-assign error:", error);
     return NextResponse.json(

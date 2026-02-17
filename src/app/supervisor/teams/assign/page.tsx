@@ -94,6 +94,7 @@ interface BinItem {
 
 export default function SupervisorAssignPage() {
   const { user } = useAuth();
+  const isAuditor = user?.type === "auditor";
   const eventId = String(user?.eventId || "");
 
   const [unassignedBins, setUnassignedBins] = useState<BinInfo[]>([]);
@@ -131,12 +132,15 @@ export default function SupervisorAssignPage() {
   const [balanceTeams, setBalanceTeams] = useState<Set<number>>(new Set());
 
   // Re-assign state
-  const [reassignDialog, setReassignDialog] = useState<{ fromTeamId: number; bins: string[] } | null>(null);
+  const [reassignDialog, setReassignDialog] = useState<{ fromTeamId: number; bins: string[]; hasCountedBins: boolean } | null>(null);
   const [reassignToTeam, setReassignToTeam] = useState<string>("");
   const [reassigning, setReassigning] = useState(false);
 
   // Team bin selection (for bulk removal)
   const [selectedTeamBins, setSelectedTeamBins] = useState<Record<number, Set<string>>>({});
+
+  // Assigned bin search (shared across teams)
+  const [assignedBinSearch, setAssignedBinSearch] = useState("");
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -529,6 +533,7 @@ export default function SupervisorAssignPage() {
           fromTeamId: reassignDialog.fromTeamId,
           toTeamId: Number(reassignToTeam),
           bins: reassignDialog.bins,
+          ...(reassignDialog.hasCountedBins ? { clearCounts: true } : {}),
         }),
       });
       if (res.ok) {
@@ -549,13 +554,20 @@ export default function SupervisorAssignPage() {
     }
   };
 
-  const getUncountedSelectedBins = (teamId: number): string[] => {
+  const getSelectedBinsForReassign = (teamId: number): string[] => {
     const team = teamDetails.find(t => t.id === teamId);
     if (!team) return [];
     const selected = selectedTeamBins[teamId] || new Set<string>();
     return team.bins
-      .filter(b => selected.has(b.bin_number) && (b.counted_items ?? 0) === 0)
+      .filter(b => selected.has(b.bin_number))
       .map(b => b.bin_number);
+  };
+
+  const hasCountedBinsInSelection = (teamId: number): boolean => {
+    const team = teamDetails.find(t => t.id === teamId);
+    if (!team) return false;
+    const selected = selectedTeamBins[teamId] || new Set<string>();
+    return team.bins.some(b => selected.has(b.bin_number) && (b.counted_items ?? 0) > 0);
   };
 
   const toggleTeamExpand = (teamId: number) => {
@@ -624,24 +636,26 @@ export default function SupervisorAssignPage() {
         <CardHeader>
           <CardTitle className="text-lg flex items-center justify-between">
             <span>Team Assignments</span>
-            <div className="flex items-center gap-2">
-              {balanceTeams.size > 0 && (
-                <Button variant="ghost" size="sm" onClick={clearBalanceTeams} className="text-xs gap-1 h-7">
-                  <X className="h-3 w-3" />
-                  Clear
-                </Button>
-              )}
-              {teamDetails.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => balanceTeams.size === teamDetails.length ? clearBalanceTeams() : selectAllTeamsForBalance()}
-                  className="text-xs h-7"
-                >
-                  {balanceTeams.size === teamDetails.length ? "Deselect All" : "Select All"}
-                </Button>
-              )}
-            </div>
+            {!isAuditor && (
+              <div className="flex items-center gap-2">
+                {balanceTeams.size > 0 && (
+                  <Button variant="ghost" size="sm" onClick={clearBalanceTeams} className="text-xs gap-1 h-7">
+                    <X className="h-3 w-3" />
+                    Clear
+                  </Button>
+                )}
+                {teamDetails.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => balanceTeams.size === teamDetails.length ? clearBalanceTeams() : selectAllTeamsForBalance()}
+                    className="text-xs h-7"
+                  >
+                    {balanceTeams.size === teamDetails.length ? "Deselect All" : "Select All"}
+                  </Button>
+                )}
+              </div>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -662,13 +676,15 @@ export default function SupervisorAssignPage() {
                 <div key={team.id} className={`border rounded-lg ${isBalanceSelected ? "border-blue-300 bg-blue-50/30" : ""}`}>
                   <div className="flex items-center justify-between p-3 hover:bg-gray-50">
                     <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={isBalanceSelected}
-                        onChange={() => toggleBalanceTeam(team.id)}
-                        className="rounded"
-                        title="Include in auto-balance"
-                      />
+                      {!isAuditor && (
+                        <input
+                          type="checkbox"
+                          checked={isBalanceSelected}
+                          onChange={() => toggleBalanceTeam(team.id)}
+                          className="rounded"
+                          title="Include in auto-balance"
+                        />
+                      )}
                       <div
                         className="flex items-center gap-2 cursor-pointer"
                         onClick={() => toggleTeamExpand(team.id)}
@@ -693,20 +709,20 @@ export default function SupervisorAssignPage() {
                       <span className="text-sm text-muted-foreground">
                         R{team.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </span>
-                      {selectedCount > 0 && (
+                      {!isAuditor && selectedCount > 0 && (
                         <>
-                          {getUncountedSelectedBins(team.id).length > 0 && (
+                          {getSelectedBinsForReassign(team.id).length > 0 && (
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => {
-                                setReassignDialog({ fromTeamId: team.id, bins: getUncountedSelectedBins(team.id) });
+                                setReassignDialog({ fromTeamId: team.id, bins: getSelectedBinsForReassign(team.id), hasCountedBins: hasCountedBinsInSelection(team.id) });
                                 setReassignToTeam("");
                               }}
                               className="h-7 text-xs gap-1 text-blue-600 border-blue-300 hover:bg-blue-50"
                             >
                               <ArrowRightLeft className="h-3 w-3" />
-                              Re-assign {getUncountedSelectedBins(team.id).length}
+                              Re-assign {getSelectedBinsForReassign(team.id).length}
                             </Button>
                           )}
                           <Button
@@ -720,7 +736,7 @@ export default function SupervisorAssignPage() {
                           </Button>
                         </>
                       )}
-                      {team.bins.length > 0 && selectedCount === 0 && (
+                      {!isAuditor && team.bins.length > 0 && selectedCount === 0 && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -736,23 +752,45 @@ export default function SupervisorAssignPage() {
                     </div>
                   </div>
 
-                  {isExpanded && team.bins.length > 0 && (
-                    <div className="border-t px-3 py-2 bg-gray-50 space-y-1 max-h-60 overflow-y-auto">
-                      <div className="flex items-center justify-between pb-1 mb-1 border-b border-gray-200">
-                        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={allBinsSelected}
-                            ref={(el) => {
-                              if (el) el.indeterminate = someBinsSelected && !allBinsSelected;
-                            }}
-                            onChange={() => toggleAllTeamBins(team.id, team.bins)}
-                            className="rounded"
+                  {isExpanded && team.bins.length > 0 && (() => {
+                    const aq = assignedBinSearch.toLowerCase();
+                    const visibleBins = aq
+                      ? [...team.bins].filter(b => b.bin_number.toLowerCase().includes(aq)).sort((a, b) => naturalCompare(a.bin_number, b.bin_number))
+                      : [...team.bins].sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
+                    return (
+                    <div className="border-t px-3 py-2 bg-gray-50 space-y-1">
+                      {!isAuditor && (
+                        <div className="flex items-center justify-between pb-1 mb-1 border-b border-gray-200">
+                          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={allBinsSelected}
+                              ref={(el) => {
+                                if (el) el.indeterminate = someBinsSelected && !allBinsSelected;
+                              }}
+                              onChange={() => toggleAllTeamBins(team.id, team.bins)}
+                              className="rounded"
+                            />
+                            Select all {team.bins.length} bins
+                          </label>
+                        </div>
+                      )}
+                      {team.bins.length > 5 && (
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                          <Input
+                            placeholder="Filter assigned bins..."
+                            value={assignedBinSearch}
+                            onChange={(e) => setAssignedBinSearch(e.target.value)}
+                            className="pl-8 h-7 text-xs"
+                            onClick={(e) => e.stopPropagation()}
                           />
-                          Select all {team.bins.length} bins
-                        </label>
-                      </div>
-                      {team.bins.map((bin) => {
+                        </div>
+                      )}
+                      <div className="max-h-60 overflow-y-auto space-y-1">
+                      {visibleBins.length === 0 ? (
+                        <div className="text-xs text-muted-foreground text-center py-2">No bins match &quot;{assignedBinSearch}&quot;</div>
+                      ) : visibleBins.map((bin) => {
                         const isCounted = (bin.counted_items ?? 0) > 0;
                         return (
                           <div
@@ -760,12 +798,14 @@ export default function SupervisorAssignPage() {
                             className="flex items-center justify-between text-sm py-1"
                           >
                             <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={teamBinSet.has(bin.bin_number)}
-                                onChange={() => toggleTeamBin(team.id, bin.bin_number)}
-                                className="rounded"
-                              />
+                              {!isAuditor && (
+                                <input
+                                  type="checkbox"
+                                  checked={teamBinSet.has(bin.bin_number)}
+                                  onChange={() => toggleTeamBin(team.id, bin.bin_number)}
+                                  className="rounded"
+                                />
+                              )}
                               <Package className="h-3 w-3 text-muted-foreground" />
                               <span className="font-mono">{bin.bin_number}</span>
                               <span className="text-muted-foreground">
@@ -778,35 +818,37 @@ export default function SupervisorAssignPage() {
                                 </Badge>
                               )}
                             </div>
-                            <div className="flex items-center gap-1">
-                              {!isCounted && (
+                            {!isAuditor && (
+                              <div className="flex items-center gap-1">
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   className="h-6 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                                   onClick={() => {
-                                    setReassignDialog({ fromTeamId: team.id, bins: [bin.bin_number] });
+                                    setReassignDialog({ fromTeamId: team.id, bins: [bin.bin_number], hasCountedBins: isCounted });
                                     setReassignToTeam("");
                                   }}
                                   title="Re-assign to another team"
                                 >
                                   <ArrowRightLeft className="h-3 w-3" />
                                 </Button>
-                              )}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                                onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
-                              >
-                                Remove
-                              </Button>
-                            </div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                                  onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
+                      </div>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {isExpanded && team.bins.length === 0 && (
                     <div className="border-t px-3 py-3 bg-gray-50 text-sm text-muted-foreground text-center">
@@ -819,7 +861,7 @@ export default function SupervisorAssignPage() {
           )}
 
           {/* Balance toolbar */}
-          {balanceTeams.size > 0 && unassignedBins.length > 0 && (
+          {!isAuditor && balanceTeams.size > 0 && unassignedBins.length > 0 && (
             <div className="border-t pt-3 mt-3 space-y-2">
               <div className="flex items-center gap-2 text-sm">
                 <Scale className="h-4 w-4 text-muted-foreground" />
@@ -933,13 +975,17 @@ export default function SupervisorAssignPage() {
                 <SelectItem value="value-desc">Highest Value</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" size="sm" onClick={selectAll}>
-              Select All
-            </Button>
-            {selectedBins.size > 0 && (
-              <Button variant="destructive" size="sm" onClick={clearSelection}>
-                Clear Selection
-              </Button>
+            {!isAuditor && (
+              <>
+                <Button variant="outline" size="sm" onClick={selectAll}>
+                  Select All
+                </Button>
+                {selectedBins.size > 0 && (
+                  <Button variant="destructive" size="sm" onClick={clearSelection}>
+                    Clear Selection
+                  </Button>
+                )}
+              </>
             )}
           </div>
 
@@ -991,21 +1037,23 @@ export default function SupervisorAssignPage() {
                   <div key={prefix}>
                     {/* Group header */}
                     <div
-                      className="flex items-center justify-between px-2 py-1.5 bg-gray-100 rounded cursor-pointer hover:bg-gray-200"
-                      onClick={() => selectGroup(bins)}
+                      className={`flex items-center justify-between px-2 py-1.5 bg-gray-100 rounded ${!isAuditor ? "cursor-pointer hover:bg-gray-200" : ""}`}
+                      onClick={!isAuditor ? () => selectGroup(bins) : undefined}
                     >
                       <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          ref={(el) => {
-                            if (el)
-                              el.indeterminate = someSelected && !allSelected;
-                          }}
-                          onChange={() => selectGroup(bins)}
-                          className="rounded"
-                          onClick={(e) => e.stopPropagation()}
-                        />
+                        {!isAuditor && (
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            ref={(el) => {
+                              if (el)
+                                el.indeterminate = someSelected && !allSelected;
+                            }}
+                            onChange={() => selectGroup(bins)}
+                            className="rounded"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        )}
                         <span className="font-semibold text-sm">{prefix}</span>
                         <span className="text-xs text-muted-foreground">
                           {bins.length} bins, {groupItemCount} items
@@ -1019,12 +1067,14 @@ export default function SupervisorAssignPage() {
                         <div key={bin.bin_number}>
                           <div className="flex items-center justify-between py-0.5 px-2 rounded hover:bg-gray-50 text-sm">
                             <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={selectedBins.has(bin.bin_number)}
-                                onChange={() => toggleBin(bin.bin_number)}
-                                className="rounded"
-                              />
+                              {!isAuditor && (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedBins.has(bin.bin_number)}
+                                  onChange={() => toggleBin(bin.bin_number)}
+                                  className="rounded"
+                                />
+                              )}
                               <button
                                 type="button"
                                 onClick={() => toggleBinExpand(bin.bin_number)}
@@ -1078,7 +1128,7 @@ export default function SupervisorAssignPage() {
           </div>
 
           {/* Assign controls */}
-          {selectedBins.size > 0 && (
+          {!isAuditor && selectedBins.size > 0 && (
             <div className="flex gap-2 pt-2 border-t">
               <Select value={assignToTeam} onValueChange={setAssignToTeam}>
                 <SelectTrigger className="flex-1">
@@ -1126,6 +1176,15 @@ export default function SupervisorAssignPage() {
               <div className="text-xs text-muted-foreground">
                 Bins: {reassignDialog.bins.join(", ")}
               </div>
+              {reassignDialog.hasCountedBins && (
+                <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 text-amber-800">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <div className="text-xs">
+                    <p className="font-semibold">Warning: Counted data will be cleared</p>
+                    <p className="mt-0.5">One or more of these bins have already been counted. Re-assigning will permanently delete all count data for these bins.</p>
+                  </div>
+                </div>
+              )}
               <Select value={reassignToTeam} onValueChange={setReassignToTeam}>
                 <SelectTrigger>
                   <SelectValue placeholder="Move to team..." />

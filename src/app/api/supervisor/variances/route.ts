@@ -6,7 +6,7 @@ import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth"
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || user.type !== "supervisor") {
+  if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -539,6 +539,65 @@ export async function PATCH(request: NextRequest) {
           recordId: discrepancyId,
           oldValue: JSON.stringify({ serial: oldSerial, index: serialIndex }),
           newValue: JSON.stringify({ serial: trimmed, index: serialIndex }),
+        });
+
+      return NextResponse.json({ success: true, action, oldSerial, newSerial: trimmed });
+    }
+
+    // Handle edit approved serial action
+    if (action === "edit_approved_serial") {
+      const { newSerial } = body;
+      if (countId === undefined || !newSerial || typeof newSerial !== "string") {
+        return NextResponse.json({ error: "countId and newSerial are required" }, { status: 400 });
+      }
+
+      const trimmed = newSerial.trim();
+      if (trimmed.length === 0) {
+        return NextResponse.json({ error: "Serial number cannot be empty" }, { status: 400 });
+      }
+
+      // Approved serials use synthetic countId: -(disc.id * 1000 + 500 + i)
+      const absId = Math.abs(countId);
+      const discrepancyId = Math.floor(absId / 1000);
+      const approvedIndex = (absId % 1000) - 500;
+
+      const [disc] = await db
+        .select()
+        .from(serialDiscrepancies)
+        .where(
+          and(
+            eq(serialDiscrepancies.id, discrepancyId),
+            eq(serialDiscrepancies.eventId, user.eventId)
+          )
+        );
+
+      if (!disc) {
+        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      }
+
+      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+
+      if (approvedIndex < 0 || approvedIndex >= approved.length) {
+        return NextResponse.json({ error: "Approved serial index out of range" }, { status: 400 });
+      }
+
+      const oldSerial = approved[approvedIndex];
+      approved[approvedIndex] = trimmed;
+
+      await db.update(serialDiscrepancies)
+        .set({ approvedSerials: JSON.stringify(approved) })
+        .where(eq(serialDiscrepancies.id, discrepancyId));
+
+      await db.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "serial_edit_approved",
+          tableName: "serial_discrepancies",
+          recordId: discrepancyId,
+          oldValue: JSON.stringify({ serial: oldSerial, index: approvedIndex }),
+          newValue: JSON.stringify({ serial: trimmed, index: approvedIndex }),
         });
 
       return NextResponse.json({ success: true, action, oldSerial, newSerial: trimmed });

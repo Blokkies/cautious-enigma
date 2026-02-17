@@ -9,13 +9,13 @@ function getAuthorizedEventId(request: NextRequest, clientEventId?: number | str
   const user = getApiUser(request);
   if (!user) return null;
   if (user.type === "admin") return clientEventId ? Number(clientEventId) : null;
-  if (user.type === "supervisor") return user.eventId;
+  if (user.type === "supervisor" || user.type === "auditor") return user.eventId;
   return null;
 }
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
+  if (!user || (user.type !== "admin" && user.type !== "supervisor" && user.type !== "auditor")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
@@ -81,21 +81,21 @@ export async function POST(request: NextRequest) {
 
     const pinHashed = await hashPin(pin);
 
-    if (type === "supervisor") {
+    if (type === "supervisor" || type === "auditor") {
       const [result] = await db
         .insert(supervisors)
         .values({
           eventId: eid,
           name,
           pinHash: pinHashed,
-          role: role || "supervisor",
+          role: type === "auditor" ? "auditor" : (role || "supervisor"),
         })
         .returning({ id: supervisors.id });
 
       return NextResponse.json({
         success: true,
         id: result.id,
-        type: "supervisor",
+        type,
       });
     }
 

@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ClipboardList, Shield, Lock, ArrowLeft, MapPin, ArrowRight, BarChart3, Users, Package } from "lucide-react";
+import { ClipboardList, Shield, Lock, ArrowLeft, MapPin, ArrowRight, BarChart3, Users, Package, Eye } from "lucide-react";
 
 type LoginStep = "choose" | "event" | "credentials" | "admin";
 
@@ -31,13 +31,14 @@ interface EventInfo {
   status: string;
   teamCount: number;
   supervisorCount: number;
+  auditorCount: number;
 }
 
 export default function LoginPage() {
   const { user, loading, login, adminLogin } = useAuth();
   const router = useRouter();
   const [step, setStep] = useState<LoginStep>("choose");
-  const [loginType, setLoginType] = useState<"team" | "supervisor">("team");
+  const [loginType, setLoginType] = useState<"team" | "supervisor" | "auditor">("team");
   const [pin, setPin] = useState("");
   const [selectedId, setSelectedId] = useState<string>("");
   const [error, setError] = useState("");
@@ -52,11 +53,12 @@ export default function LoginPage() {
     if (!loading && user) {
       if (user.type === "team") router.push("/team");
       else if (user.type === "supervisor") router.push("/supervisor");
+      else if (user.type === "auditor") router.push("/supervisor");
       else if (user.type === "admin") router.push("/admin/dashboard");
     }
   }, [user, loading, router]);
 
-  const handleModeSelect = async (type: "team" | "supervisor") => {
+  const handleModeSelect = async (type: "team" | "supervisor" | "auditor") => {
     setLoginType(type);
     setError("");
     setLoadingEvents(true);
@@ -67,11 +69,11 @@ export default function LoginPage() {
       const eventList: EventInfo[] = data.events || [];
 
       const relevantEvents = eventList.filter((e) =>
-        type === "team" ? e.teamCount > 0 : e.supervisorCount > 0
+        type === "team" ? e.teamCount > 0 : type === "auditor" ? e.auditorCount > 0 : e.supervisorCount > 0
       );
 
       if (relevantEvents.length === 0) {
-        setError(`No events with ${type === "team" ? "teams" : "supervisors"} available`);
+        setError(`No events with ${type === "team" ? "teams" : type === "auditor" ? "auditors" : "supervisors"} available`);
         setLoadingEvents(false);
         return;
       }
@@ -289,6 +291,25 @@ export default function LoginPage() {
                   </div>
                   <ArrowRight className="h-5 w-5 text-slate-300 group-hover:text-emerald-500 transition-colors" />
                 </button>
+
+                <button
+                  onClick={() => handleModeSelect("auditor")}
+                  disabled={loadingEvents}
+                  className="w-full group flex items-center justify-between p-5 bg-white border border-slate-200 rounded-xl hover:border-amber-300 hover:shadow-md hover:shadow-amber-500/5 transition-all disabled:opacity-50"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="h-12 w-12 rounded-lg bg-amber-500 flex items-center justify-center shrink-0">
+                      <Eye className="h-6 w-6 text-white" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-semibold text-slate-900">
+                        {loadingEvents && loginType === "auditor" ? "Loading..." : "Auditor Login"}
+                      </div>
+                      <div className="text-sm text-slate-500">Read-only access to supervisor views</div>
+                    </div>
+                  </div>
+                  <ArrowRight className="h-5 w-5 text-slate-300 group-hover:text-amber-500 transition-colors" />
+                </button>
               </div>
 
               <div className="pt-2">
@@ -344,7 +365,9 @@ export default function LoginPage() {
                         <div className="text-xs text-slate-400 mt-1.5">
                           {loginType === "team"
                             ? `${event.teamCount} team${event.teamCount !== 1 ? "s" : ""}`
-                            : `${event.supervisorCount} supervisor${event.supervisorCount !== 1 ? "s" : ""}`}
+                            : loginType === "auditor"
+                              ? `${event.auditorCount} auditor${event.auditorCount !== 1 ? "s" : ""}`
+                              : `${event.supervisorCount} supervisor${event.supervisorCount !== 1 ? "s" : ""}`}
                         </div>
                       </div>
                       <Badge variant="outline" className={statusColors[event.status] || ""}>
@@ -375,7 +398,7 @@ export default function LoginPage() {
                 </button>
                 <div>
                   <h2 className="text-2xl font-semibold text-slate-900">
-                    {loginType === "team" ? "Team Login" : "Supervisor Login"}
+                    {loginType === "team" ? "Team Login" : loginType === "auditor" ? "Auditor Login" : "Supervisor Login"}
                   </h2>
                   {selectedEventId && events.length > 0 && (
                     <p className="text-slate-500 text-sm">
@@ -388,7 +411,7 @@ export default function LoginPage() {
               <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-slate-700">
-                    {loginType === "team" ? "Select Team" : "Select Name"}
+                    {loginType === "team" ? "Select Team" : loginType === "auditor" ? "Select Name" : "Select Name"}
                   </Label>
                   <Select value={selectedId} onValueChange={setSelectedId}>
                     <SelectTrigger className="h-12 text-base bg-slate-50 border-slate-200">
@@ -405,8 +428,8 @@ export default function LoginPage() {
                         let displayName = item.name;
                         if (loginType === "team" && item.members) {
                           try {
-                            const firstMember = JSON.parse(item.members)[0];
-                            if (firstMember) displayName = `${item.name} — ${firstMember}`;
+                            const members = JSON.parse(item.members) as string[];
+                            if (members.length > 0) displayName = `${item.name} — ${members.join(", ")}`;
                           } catch { /* ignore parse errors */ }
                         }
                         return (

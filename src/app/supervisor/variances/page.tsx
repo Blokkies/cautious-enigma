@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useAuth } from "@/contexts/auth-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +76,8 @@ interface Team {
 }
 
 export default function VariancesPage() {
+  const { user } = useAuth();
+  const isAuditor = user?.type === "auditor";
   const searchParams = useSearchParams();
   const [activeVariances, setActiveVariances] = useState<VarianceItem[]>([]);
   const [acceptedVariances, setAcceptedVariances] = useState<VarianceItem[]>([]);
@@ -626,7 +629,7 @@ export default function VariancesPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "edit_unknown_serial",
+          action: editingSerialItem.isApprovedSerial ? "edit_approved_serial" : "edit_unknown_serial",
           countId: editingSerialItem.countId,
           newSerial: trimmed,
         }),
@@ -878,7 +881,7 @@ export default function VariancesPage() {
 
         <TabsContent value="active">
           {/* Selection toolbar */}
-          {activeVariances.length > 0 && (
+          {!isAuditor && activeVariances.length > 0 && (
             <div className="bg-muted/30 rounded-lg p-2 mb-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -945,19 +948,19 @@ export default function VariancesPage() {
             emptyMessage={
               search ? "No matching variances" : serialFilter ? "No unknown serials" : "No variances recorded"
             }
-            showEditButton
-            showCheckbox
-            showAcceptButton
-            onEdit={openEditDialog}
-            selectedCountIds={selectedCountIds}
-            onToggleSelect={toggleSelection}
-            canSelect={canSelect}
-            onAccept={handleAccept}
-            onAcceptVariance={handleAcceptVariance}
-            onApproveUnknownSerial={handleApproveUnknownSerial}
-            onDismissUnknownSerial={handleDismissUnknownSerial}
-            onEditUnknownSerial={openEditSerialDialog}
-            onSerialVerify={openSerialVerifyDialog}
+            showEditButton={!isAuditor}
+            showCheckbox={!isAuditor}
+            showAcceptButton={!isAuditor}
+            onEdit={isAuditor ? undefined : openEditDialog}
+            selectedCountIds={isAuditor ? undefined : selectedCountIds}
+            onToggleSelect={isAuditor ? undefined : toggleSelection}
+            canSelect={isAuditor ? undefined : canSelect}
+            onAccept={isAuditor ? undefined : handleAccept}
+            onAcceptVariance={isAuditor ? undefined : handleAcceptVariance}
+            onApproveUnknownSerial={isAuditor ? undefined : handleApproveUnknownSerial}
+            onDismissUnknownSerial={isAuditor ? undefined : handleDismissUnknownSerial}
+            onEditUnknownSerial={isAuditor ? undefined : openEditSerialDialog}
+            onSerialVerify={isAuditor ? undefined : openSerialVerifyDialog}
             isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
@@ -974,11 +977,12 @@ export default function VariancesPage() {
                 ? "No matching accepted variances"
                 : serialFilter ? "No approved serials" : "No accepted variances yet"
             }
-            showEditButton
+            showEditButton={!isAuditor}
             showCheckbox={false}
-            showReopenButton
-            onEdit={openEditDialog}
-            onReopenVariance={handleReopenVariance}
+            showReopenButton={!isAuditor}
+            onEdit={isAuditor ? undefined : openEditDialog}
+            onReopenVariance={isAuditor ? undefined : handleReopenVariance}
+            onEditUnknownSerial={isAuditor ? undefined : openEditSerialDialog}
             isSaving={saving}
           />
           <div className="text-sm text-muted-foreground mt-2">
@@ -1836,9 +1840,25 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
           </div>
         )}
         {v.isApprovedSerial && (
-          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
-            Approved Serial
-          </Badge>
+          <div className="space-y-1">
+            <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+              Approved Serial
+            </Badge>
+            {onEditUnknownSerial && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
+                  onClick={() => onEditUnknownSerial(v)}
+                  disabled={isSaving}
+                  title="Edit serial number"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+          </div>
         )}
         {!v.isUnknownSerial && !v.isApprovedSerial && !hasVerification && (
           <span className="text-muted-foreground">—</span>
@@ -2060,9 +2080,25 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
           </div>
         )}
         {v.isApprovedSerial && (
-          <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
-            Approved Serial
-          </Badge>
+          <div className="space-y-1">
+            <Badge className="bg-green-100 text-green-800 border-green-300 text-xs">
+              Approved Serial
+            </Badge>
+            {onEditUnknownSerial && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
+                  onClick={() => onEditUnknownSerial(v)}
+                  disabled={isSaving}
+                  title="Edit serial number"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+          </div>
         )}
         {!isUnknown && !v.isApprovedSerial && !hasVerification && (
           <span className="text-muted-foreground">—</span>

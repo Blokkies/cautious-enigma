@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 
 interface User {
   id: number;
-  type: "team" | "supervisor" | "admin";
+  type: "team" | "supervisor" | "admin" | "auditor";
   name: string;
   eventId?: number;
   eventName?: string;

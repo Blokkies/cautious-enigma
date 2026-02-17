@@ -20,7 +20,7 @@ import {
 import { SerializedGroupCard, type SerialGroupResult } from "@/components/counting/serialized-group-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode, Users } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
@@ -89,6 +89,7 @@ export default function CountingPage() {
     counted: 0,
     progressPercent: 0,
   });
+  const [members, setMembers] = useState<string[]>([]);
 
   // Page flow
   const [pageState, setPageState] = useState<PageState>("loading");
@@ -145,6 +146,7 @@ export default function CountingPage() {
         setStats(data.stats || { total: 0, counted: 0, progressPercent: 0 });
         setVerificationItems(data.verificationItems || []);
         setSerialVerificationTasks(data.serialVerificationTasks || []);
+        if (data.members) setMembers(data.members);
       }
     } catch {
       toast.error("Failed to load items");
@@ -1360,8 +1362,17 @@ export default function CountingPage() {
 
     return (
       <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-        {/* Header: progress + search */}
+        {/* Header: team info + progress + search */}
         <div className="p-4 space-y-3 border-b">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="font-semibold">{user?.name}</span>
+            {members.length > 0 && (
+              <span className="text-muted-foreground flex items-center gap-1">
+                <Users className="h-3 w-3" />
+                {members.join(", ")}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-3">
             <Progress value={stats.progressPercent} className="h-3 flex-1" />
             <span className="text-sm font-semibold text-primary min-w-[3rem] text-right">

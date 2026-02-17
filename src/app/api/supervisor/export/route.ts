@@ -177,7 +177,7 @@ async function buildRefMap(eventId: number, itemCodes: string[]) {
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "admin")) {
+  if (!user || (user.type !== "supervisor" && user.type !== "admin" && user.type !== "auditor")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

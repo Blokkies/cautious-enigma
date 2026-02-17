@@ -5,7 +5,7 @@ import { eq, inArray, sql } from "drizzle-orm";
 
 export interface ApiUser {
   id: number;
-  type: "team" | "supervisor" | "admin";
+  type: "team" | "supervisor" | "admin" | "auditor";
   name: string;
   eventId: number;
 }

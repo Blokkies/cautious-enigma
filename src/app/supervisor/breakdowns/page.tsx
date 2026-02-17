@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/contexts/auth-context";
 import { CheckCircle2, XCircle, Send, RotateCcw, Trash2, ChevronDown, ChevronRight, Users, Package } from "lucide-react";
 import { toast } from "sonner";
 import { markNotificationSeen } from "@/hooks/use-notifications";
@@ -32,6 +33,8 @@ interface BreakdownItem {
 }
 
 export default function SupervisorBreakdownsPage() {
+  const { user } = useAuth();
+  const isAuditor = user?.type === "auditor";
   const [allBreakdowns, setAllBreakdowns] = useState<BreakdownItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [respondingTo, setRespondingTo] = useState<number | null>(null);
@@ -238,14 +241,16 @@ export default function SupervisorBreakdownsPage() {
                 </p>
               )}
             </button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0 mt-2.5 mr-2"
-              onClick={() => handleDelete(b.id)}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+            {!isAuditor && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 shrink-0 mt-2.5 mr-2"
+                onClick={() => handleDelete(b.id)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </div>
 
@@ -280,7 +285,7 @@ export default function SupervisorBreakdownsPage() {
           )}
 
           {/* Actions */}
-          {b.approvalStatus === "pending" && (
+          {!isAuditor && b.approvalStatus === "pending" && (
             <>
               {respondingTo === b.id ? (
                 <div className="space-y-2">
@@ -349,7 +354,7 @@ export default function SupervisorBreakdownsPage() {
             </>
           )}
 
-          {b.approvalStatus !== "pending" && (
+          {!isAuditor && b.approvalStatus !== "pending" && (
             <div className="flex gap-2">
               <Button
                 variant="outline"

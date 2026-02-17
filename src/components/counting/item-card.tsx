@@ -409,7 +409,7 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
             </Badge>
             {item.checkStatus === "accepted" && (
               <Badge className="text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
-                Supervisor Edited
+                Locked
               </Badge>
             )}
           </>
@@ -418,15 +418,17 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
             Pending
           </Badge>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => onRecount(item.id)}
-        >
-          <RotateCcw className="h-3 w-3 mr-1" />
-          Recount
-        </Button>
+        {item.checkStatus !== "accepted" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => onRecount(item.id)}
+          >
+            <RotateCcw className="h-3 w-3 mr-1" />
+            Recount
+          </Button>
+        )}
       </div>
 
       {/* Row 2: Description */}
@@ -641,18 +643,25 @@ export function CountedSerialGroupRow({ row, onRecount }: CountedSerialGroupRowP
                   Pending
                 </Badge>
               )}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRecount(item.id);
-                }}
-              >
-                <RotateCcw className="h-3 w-3 mr-1" />
-                Recount
-              </Button>
+              {item.checkStatus === "accepted" && (
+                <Badge className="text-[10px] bg-indigo-100 text-indigo-800 border-indigo-300">
+                  Locked
+                </Badge>
+              )}
+              {item.checkStatus !== "accepted" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRecount(item.id);
+                  }}
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  Recount
+                </Button>
+              )}
             </div>
             <div className="flex items-center gap-4 text-xs">
               <span className="text-muted-foreground">On Hand: <span className="font-semibold text-foreground">{item.onHand ?? 0}</span></span>

@@ -114,7 +114,8 @@ export async function GET(request: NextRequest) {
       and(
         eq(serialDiscrepancies.verificationTeamId, user.id),
         eq(serialDiscrepancies.verificationStatus, "pending"),
-        eq(serialDiscrepancies.eventId, user.eventId)
+        eq(serialDiscrepancies.eventId, user.eventId),
+        eq(serialDiscrepancies.status, "open")
       )
     )
     .orderBy(serialDiscrepancies.createdAt);

@@ -508,6 +508,14 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
       }
 
+      // Prevent editing serial while a team is verifying
+      if (disc.verificationStatus === "pending") {
+        return NextResponse.json(
+          { error: "Cannot edit serial while verification is in progress" },
+          { status: 409 }
+        );
+      }
+
       const unknowns: string[] = JSON.parse(disc.unknownSerials);
 
       if (serialIndex >= unknowns.length) {
@@ -560,6 +568,14 @@ export async function PATCH(request: NextRequest) {
 
       if (!disc) {
         return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      }
+
+      // Prevent modifying unknowns while a team is verifying them
+      if (disc.verificationStatus === "pending") {
+        return NextResponse.json(
+          { error: "Cannot modify serials while verification is in progress" },
+          { status: 409 }
+        );
       }
 
       const unknowns: string[] = JSON.parse(disc.unknownSerials);

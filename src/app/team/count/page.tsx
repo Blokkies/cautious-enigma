@@ -365,7 +365,7 @@ export default function CountingPage() {
     } else if (completedBins.length > 0) {
       setBinTab("completed");
     }
-  }, [pageState, notStartedBins.length, inProgressBins.length, completedBins.length, verificationItems.length]);
+  }, [pageState, notStartedBins.length, inProgressBins.length, completedBins.length, verificationItems.length, serialVerificationTasks.length]);
 
   // ---------- Review items (all items in selected bin) ----------
   const reviewItems = useMemo(() => {
@@ -470,6 +470,12 @@ export default function CountingPage() {
     async (itemId: number, qty: number, countComment?: string) => {
       const item = items.find((i) => i.id === itemId);
       if (!item) return;
+
+      // Block changes to items reviewed by supervisor
+      if (item.checkStatus === "accepted") {
+        toast.error("This item has been reviewed by a supervisor and cannot be changed");
+        return;
+      }
 
       const clientId = uuidv4();
       const onHand = item.onHand ?? 0;
@@ -801,6 +807,10 @@ export default function CountingPage() {
 
   // ---------- Recount via full ActiveItemCard ----------
   const startRecount = useCallback((item: CountItem) => {
+    if (item.checkStatus === "accepted") {
+      toast.error("This item has been reviewed by a supervisor and cannot be changed");
+      return;
+    }
     setRecountItem(item);
     setQtyValue(item.countedQty != null ? String(item.countedQty) : String(item.onHand ?? 0));
     setComment("");

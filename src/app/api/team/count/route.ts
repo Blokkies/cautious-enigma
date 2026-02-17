@@ -168,6 +168,14 @@ export async function POST(request: NextRequest) {
     let result;
 
     if (existingCount) {
+      // Block updates to counts accepted/resolved by supervisor
+      if (existingCount.checkStatus === "accepted") {
+        return NextResponse.json(
+          { error: "This item has been reviewed by a supervisor and cannot be changed" },
+          { status: 403 }
+        );
+      }
+
       // Update existing count
       await db.update(counts)
         .set({
@@ -322,6 +330,12 @@ export async function PUT(request: NextRequest) {
         );
 
       if (existingCount) {
+        // Skip items reviewed by supervisor
+        if (existingCount.checkStatus === "accepted") {
+          results.push({ itemId, error: "Reviewed by supervisor" });
+          continue;
+        }
+
         await db.update(counts)
           .set({
             countedQty,

@@ -1793,19 +1793,19 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
                     size="sm"
                     className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
                     onClick={() => onEditUnknownSerial?.(v)}
-                    disabled={isSaving}
+                    disabled={isSaving || v.serialVerificationStatus === "pending"}
                     title="Edit serial number"
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
-                  {!v.serialVerificationStatus && onSerialVerify && (
+                  {v.serialVerificationStatus !== "pending" && onSerialVerify && (
                     <Button
                       variant="outline"
                       size="sm"
                       className="h-6 text-xs px-1.5 text-purple-700 border-purple-300 hover:bg-purple-50"
                       onClick={() => onSerialVerify(v)}
                       disabled={isSaving}
-                      title="Assign verification"
+                      title={v.serialVerificationStatus === "completed" ? "Re-assign verification" : "Assign verification"}
                     >
                       <ClipboardCheck className="h-3 w-3" />
                     </Button>
@@ -1815,7 +1815,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
                     size="sm"
                     className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
                     onClick={() => onApproveUnknownSerial(v)}
-                    disabled={isSaving}
+                    disabled={isSaving || v.serialVerificationStatus === "pending"}
                     title="Approve serial"
                   >
                     <Check className="h-3 w-3" />
@@ -1825,7 +1825,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
                     size="sm"
                     className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
                     onClick={() => onDismissUnknownSerial?.(v)}
-                    disabled={isSaving}
+                    disabled={isSaving || v.serialVerificationStatus === "pending"}
                     title="Dismiss serial"
                   >
                     <XIcon className="h-3 w-3" />
@@ -2017,19 +2017,19 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
                     size="sm"
                     className="h-6 text-xs px-1.5 text-blue-700 border-blue-300 hover:bg-blue-50"
                     onClick={() => onEditUnknownSerial?.(v)}
-                    disabled={isSaving}
+                    disabled={isSaving || v.serialVerificationStatus === "pending"}
                     title="Edit serial number"
                   >
                     <Pencil className="h-3 w-3" />
                   </Button>
-                  {!v.serialVerificationStatus && onSerialVerify && (
+                  {v.serialVerificationStatus !== "pending" && onSerialVerify && (
                     <Button
                       variant="outline"
                       size="sm"
                       className="h-6 text-xs px-1.5 text-purple-700 border-purple-300 hover:bg-purple-50"
                       onClick={() => onSerialVerify(v)}
                       disabled={isSaving}
-                      title="Assign verification"
+                      title={v.serialVerificationStatus === "completed" ? "Re-assign verification" : "Assign verification"}
                     >
                       <ClipboardCheck className="h-3 w-3" />
                     </Button>
@@ -2039,7 +2039,7 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
                     size="sm"
                     className="h-6 text-xs px-1.5 text-green-700 border-green-300 hover:bg-green-50"
                     onClick={() => onApproveUnknownSerial(v)}
-                    disabled={isSaving}
+                    disabled={isSaving || v.serialVerificationStatus === "pending"}
                     title="Approve serial"
                   >
                     <Check className="h-3 w-3" />
@@ -2049,7 +2049,7 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
                     size="sm"
                     className="h-6 text-xs px-1.5 text-red-700 border-red-300 hover:bg-red-50"
                     onClick={() => onDismissUnknownSerial?.(v)}
-                    disabled={isSaving}
+                    disabled={isSaving || v.serialVerificationStatus === "pending"}
                     title="Dismiss serial"
                   >
                     <XIcon className="h-3 w-3" />

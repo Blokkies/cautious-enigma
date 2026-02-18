@@ -86,6 +86,6 @@ export function warehouseFilter(warehouses: string[] | null) {
  */
 export function countsWarehouseFilter(eventId: number, warehouses: string[] | null) {
   if (!warehouses || warehouses.length === 0) return undefined;
-  const whList = warehouses.map((w) => `'${w.replace(/'/g, "''")}'`).join(",");
-  return sql`${counts.itemId} IN (SELECT id FROM items WHERE event_id = ${eventId} AND warehouse IN (${sql.raw(whList)}))`;
+  const whParams = sql.join(warehouses.map((w) => sql`${w}`), sql`, `);
+  return sql`${counts.itemId} IN (SELECT id FROM items WHERE event_id = ${eventId} AND warehouse IN (${whParams}))`;
 }

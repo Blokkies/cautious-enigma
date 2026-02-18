@@ -3,9 +3,20 @@ import { db } from "@/lib/db";
 import { teams, supervisors, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { verifyPin, createToken, getTokenCookieOptions } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit by IP: 10 attempts per minute
+    const ip = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+    const { limited, retryAfterMs } = checkRateLimit(`login:${ip}`, 10, 60_000);
+    if (limited) {
+      return NextResponse.json(
+        { error: "Too many login attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) } }
+      );
+    }
+
     const { type, id, pin, eventId } = await request.json();
 
     if (!type || !id || !pin) {

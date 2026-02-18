@@ -138,6 +138,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Limit file size to 50MB to prevent memory exhaustion
+    const MAX_FILE_SIZE = 50 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: "File too large. Maximum size is 50MB." },
+        { status: 413 }
+      );
+    }
+
     // Verify event exists and is in setup status
     const events = await db
       .select()

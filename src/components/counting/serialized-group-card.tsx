@@ -34,7 +34,10 @@ function loadSavedProgress(
     // Validate that stored IDs match current items
     const storedIdKeys = Object.keys(data.toggles);
     if (storedIdKeys.length !== currentItemIds.size) return null;
-    const mismatch = storedIdKeys.some((k) => !currentItemIds.has(Number(k)));
+    const mismatch = storedIdKeys.some((k) => {
+      const num = Number(k);
+      return isNaN(num) || !currentItemIds.has(num);
+    });
     if (mismatch) return null;
     return data;
   } catch {

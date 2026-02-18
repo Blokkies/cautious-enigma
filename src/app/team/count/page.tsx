@@ -165,7 +165,13 @@ export default function CountingPage() {
     try {
       const stored = sessionStorage.getItem(sessionKey);
       if (!stored) return;
-      const { binName, timestamp } = JSON.parse(stored);
+      const parsed = JSON.parse(stored);
+      const binName = parsed?.binName;
+      const timestamp = parsed?.timestamp;
+      if (!binName || typeof timestamp !== "number") {
+        sessionStorage.removeItem(sessionKey);
+        return;
+      }
       const fourHoursMs = 4 * 60 * 60 * 1000;
       if (Date.now() - timestamp > fourHoursMs) {
         sessionStorage.removeItem(sessionKey);

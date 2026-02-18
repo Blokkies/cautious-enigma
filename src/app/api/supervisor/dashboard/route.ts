@@ -12,14 +12,19 @@ export async function GET(request: NextRequest) {
 
   let eventId = user.eventId;
 
-  // Admin has eventId=0, find the latest event
+  // Admin has eventId=0 — allow explicit eventId param, fallback to latest
   if (!eventId || eventId === 0) {
-    const [latest] = await db
-      .select()
-      .from(stocktakeEvents)
-      .orderBy(sql`id DESC`)
-      .limit(1);
-    if (latest) eventId = latest.id;
+    const paramEventId = request.nextUrl.searchParams.get("eventId");
+    if (paramEventId) {
+      eventId = Number(paramEventId);
+    } else {
+      const [latest] = await db
+        .select()
+        .from(stocktakeEvents)
+        .orderBy(sql`id DESC`)
+        .limit(1);
+      if (latest) eventId = latest.id;
+    }
   }
 
   const warehouses = await getEventWarehouses(eventId);

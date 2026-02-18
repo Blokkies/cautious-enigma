@@ -17,11 +17,18 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { itemId, countedQty, isMatch, comment, clientId, verificationId } = body;
+    const { itemId, countedQty, comment, clientId, verificationId } = body;
 
     if (itemId === undefined || countedQty === undefined) {
       return NextResponse.json(
         { error: "itemId and countedQty are required" },
+        { status: 400 }
+      );
+    }
+
+    if (typeof countedQty !== "number" || isNaN(countedQty)) {
+      return NextResponse.json(
+        { error: "countedQty must be a valid number" },
         { status: 400 }
       );
     }
@@ -63,54 +70,56 @@ export async function POST(request: NextRequest) {
       const varianceValue = variance * (item.avgCost || 0);
       const computedIsMatch = variance === 0;
 
-      // Insert a new verification count (never upsert)
-      const [{ id: insertedId }] = await db
-        .insert(counts)
-        .values({
-          itemId,
-          teamId: user.id,
-          eventId: user.eventId,
-          countedQty,
-          variance,
-          varianceValue,
-          isMatch: computedIsMatch,
-          comment: comment || null,
-          countedAt: new Date().toISOString(),
-          syncedAt: new Date().toISOString(),
-          clientId: clientId || null,
-          countType: "verification",
-          verificationId,
-        })
-        .returning({ id: counts.id });
-
-      // Update verification assignment status
-      await db.update(verificationAssignments)
-        .set({
-          status: "completed",
-          completedAt: new Date().toISOString(),
-        })
-        .where(eq(verificationAssignments.id, verificationId));
-
-      const [result] = await db
-        .select()
-        .from(counts)
-        .where(eq(counts.id, insertedId));
-
-      // Audit log
-      await db.insert(auditLog)
-        .values({
-          eventId: user.eventId,
-          userId: user.id,
-          userType: "team",
-          action: "verification_count",
-          tableName: "counts",
-          recordId: insertedId,
-          newValue: JSON.stringify({
+      // Insert verification count + update assignment in a transaction
+      const result = await db.transaction(async (tx) => {
+        const [{ id: insertedId }] = await tx
+          .insert(counts)
+          .values({
+            itemId,
+            teamId: user.id,
+            eventId: user.eventId,
             countedQty,
             variance,
+            varianceValue,
+            isMatch: computedIsMatch,
+            comment: comment || null,
+            countedAt: new Date().toISOString(),
+            syncedAt: new Date().toISOString(),
+            clientId: clientId || null,
+            countType: "verification",
             verificationId,
-          }),
-        });
+          })
+          .returning({ id: counts.id });
+
+        await tx.update(verificationAssignments)
+          .set({
+            status: "completed",
+            completedAt: new Date().toISOString(),
+          })
+          .where(eq(verificationAssignments.id, verificationId));
+
+        const [inserted] = await tx
+          .select()
+          .from(counts)
+          .where(eq(counts.id, insertedId));
+
+        await tx.insert(auditLog)
+          .values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "team",
+            action: "verification_count",
+            tableName: "counts",
+            recordId: insertedId,
+            newValue: JSON.stringify({
+              countedQty,
+              variance,
+              verificationId,
+            }),
+          });
+
+        return inserted;
+      });
 
       return NextResponse.json({ success: true, count: result });
     }
@@ -153,12 +162,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check for duplicate sync (clientId dedup)
+    // Check for duplicate sync (clientId dedup - scoped to this team)
     if (clientId) {
       const [existing] = await db
         .select()
         .from(counts)
-        .where(eq(counts.clientId, clientId));
+        .where(and(eq(counts.clientId, clientId), eq(counts.teamId, user.id)));
 
       if (existing) {
         return NextResponse.json({
@@ -171,6 +180,7 @@ export async function POST(request: NextRequest) {
 
     const variance = countedQty - (item.onHand || 0);
     const varianceValue = variance * (item.avgCost || 0);
+    const computedIsMatch = variance === 0;
 
     // Check if already counted (initial counts only) - update if so
     const [existingCount] = await db
@@ -201,7 +211,7 @@ export async function POST(request: NextRequest) {
           countedQty,
           variance,
           varianceValue,
-          isMatch: isMatch || false,
+          isMatch: computedIsMatch,
           comment: comment || existingCount.comment,
           countedAt: new Date().toISOString(),
           syncedAt: new Date().toISOString(),
@@ -241,7 +251,7 @@ export async function POST(request: NextRequest) {
           countedQty,
           variance,
           varianceValue,
-          isMatch: isMatch || false,
+          isMatch: computedIsMatch,
           comment: comment || null,
           countedAt: new Date().toISOString(),
           syncedAt: new Date().toISOString(),
@@ -264,7 +274,7 @@ export async function POST(request: NextRequest) {
           action: "create_count",
           tableName: "counts",
           recordId: insertedId,
-          newValue: JSON.stringify({ countedQty, variance, isMatch }),
+          newValue: JSON.stringify({ countedQty, variance, isMatch: computedIsMatch }),
         });
     }
 
@@ -303,14 +313,20 @@ export async function PUT(request: NextRequest) {
     const results = [];
 
     for (const entry of countBatch) {
-      const { itemId, countedQty, isMatch, comment, clientId } = entry;
+      const { itemId, countedQty, comment, clientId } = entry;
 
-      // Dedup check
+      // Validate countedQty is a number
+      if (typeof countedQty !== "number" || isNaN(countedQty)) {
+        results.push({ itemId, error: "countedQty must be a number" });
+        continue;
+      }
+
+      // Dedup check (scoped to this team)
       if (clientId) {
         const [existing] = await db
           .select()
           .from(counts)
-          .where(eq(counts.clientId, clientId));
+          .where(and(eq(counts.clientId, clientId), eq(counts.teamId, user.id)));
 
         if (existing) {
           results.push({ itemId, deduplicated: true });
@@ -353,6 +369,7 @@ export async function PUT(request: NextRequest) {
 
       const variance = countedQty - (item.onHand || 0);
       const varianceValue = variance * (item.avgCost || 0);
+      const computedIsMatch = variance === 0;
 
       const [existingCount] = await db
         .select()
@@ -377,7 +394,7 @@ export async function PUT(request: NextRequest) {
             countedQty,
             variance,
             varianceValue,
-            isMatch: isMatch || false,
+            isMatch: computedIsMatch,
             comment: comment || existingCount.comment,
             countedAt: new Date().toISOString(),
             syncedAt: new Date().toISOString(),
@@ -393,7 +410,7 @@ export async function PUT(request: NextRequest) {
             countedQty,
             variance,
             varianceValue,
-            isMatch: isMatch || false,
+            isMatch: computedIsMatch,
             comment: comment || null,
             countedAt: new Date().toISOString(),
             syncedAt: new Date().toISOString(),

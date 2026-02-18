@@ -1,8 +1,10 @@
 import { SignJWT, jwtVerify } from "jose";
 
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || "stocktake-secret-key-change-in-production-2026"
-);
+const jwtSecretValue = process.env.JWT_SECRET || "stocktake-secret-key-change-in-production-2026";
+if (!process.env.JWT_SECRET) {
+  console.warn("[SECURITY] JWT_SECRET not set — using default. Set JWT_SECRET in .env.local for production.");
+}
+const JWT_SECRET = new TextEncoder().encode(jwtSecretValue);
 
 const TOKEN_EXPIRY = "72h";
 

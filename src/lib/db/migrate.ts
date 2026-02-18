@@ -235,6 +235,19 @@ ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_completed
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verified_serials TEXT;
 `;
 
+const compositeIndexes = `
+CREATE INDEX IF NOT EXISTS idx_items_event_team ON items(event_id, team_id);
+CREATE INDEX IF NOT EXISTS idx_items_event_bin ON items(event_id, bin_number);
+CREATE INDEX IF NOT EXISTS idx_counts_event_team ON counts(event_id, team_id);
+CREATE INDEX IF NOT EXISTS idx_counts_event_match ON counts(event_id, is_match);
+CREATE INDEX IF NOT EXISTS idx_counts_item_type ON counts(item_id, count_type);
+CREATE INDEX IF NOT EXISTS idx_counts_event_type ON counts(event_id, count_type);
+CREATE INDEX IF NOT EXISTS idx_verification_event_status ON verification_assignments(event_id, status);
+CREATE INDEX IF NOT EXISTS idx_serial_disc_event_status ON serial_discrepancies(event_id, status);
+CREATE INDEX IF NOT EXISTS idx_queries_event_status ON queries(event_id, status);
+CREATE INDEX IF NOT EXISTS idx_breakdowns_event_status ON breakdowns(event_id, approval_status);
+`;
+
 // DO block must be executed as a single statement (contains semicolons)
 const membersMigration = `
 DO $$ BEGIN
@@ -276,6 +289,16 @@ async function migrate() {
 
   // Migrate member1/member2 → members (runs as single DO block)
   await sql.unsafe(membersMigration);
+
+  // Execute composite indexes for query performance
+  const ciStatements = compositeIndexes
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  for (const stmt of ciStatements) {
+    await sql.unsafe(stmt + ";");
+  }
 
   // Seed default admin if admins table is empty
   const result = await sql`SELECT COUNT(*) as count FROM admins`;

@@ -237,7 +237,7 @@ export async function GET(request: NextRequest) {
         const serialVerResult = parsedVerifiedSerials?.find((v) => v.serial === unknowns[i]);
 
         enrichedVariances.push({
-          countId: -(disc.id * 1000 + i), // synthetic negative ID
+          countId: -(disc.id * 100000 + i), // synthetic negative ID
           itemCode: disc.itemCode,
           description: disc.description,
           brand: null,
@@ -331,7 +331,7 @@ export async function GET(request: NextRequest) {
       for (let i = 0; i < approved.length; i++) {
         const varianceValue = 1 * avgCost;
         enrichedVariances.push({
-          countId: -(disc.id * 1000 + 500 + i), // synthetic negative ID (offset to avoid collision)
+          countId: -(disc.id * 100000 + 50000 + i), // synthetic negative ID (offset to avoid collision)
           itemCode: disc.itemCode,
           description: disc.description,
           brand: null,
@@ -491,8 +491,8 @@ export async function PATCH(request: NextRequest) {
       }
 
       const absId = Math.abs(countId);
-      const discrepancyId = Math.floor(absId / 1000);
-      const serialIndex = absId % 1000;
+      const discrepancyId = Math.floor(absId / 100000);
+      const serialIndex = absId % 100000;
 
       const [disc] = await db
         .select()
@@ -556,10 +556,10 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "Serial number cannot be empty" }, { status: 400 });
       }
 
-      // Approved serials use synthetic countId: -(disc.id * 1000 + 500 + i)
+      // Approved serials use synthetic countId: -(disc.id * 100000 + 50000 + i)
       const absId = Math.abs(countId);
-      const discrepancyId = Math.floor(absId / 1000);
-      const approvedIndex = (absId % 1000) - 500;
+      const discrepancyId = Math.floor(absId / 100000);
+      const approvedIndex = (absId % 100000) - 50000;
 
       const [disc] = await db
         .select()
@@ -611,8 +611,8 @@ export async function PATCH(request: NextRequest) {
 
       // Extract discrepancy ID and serial index from synthetic countId
       const absId = Math.abs(countId);
-      const discrepancyId = Math.floor(absId / 1000);
-      const serialIndex = absId % 1000;
+      const discrepancyId = Math.floor(absId / 100000);
+      const serialIndex = absId % 100000;
 
       // Fetch the discrepancy
       const [disc] = await db

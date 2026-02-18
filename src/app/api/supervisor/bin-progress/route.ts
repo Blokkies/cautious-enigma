@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
 
   const eventWarehouses = await getEventWarehouses(eid);
   const whFragment = eventWarehouses
-    ? sql` AND i.warehouse IN (${sql.raw(eventWarehouses.map(w => `'${w.replace(/'/g, "''")}'`).join(","))})`
+    ? sql` AND i.warehouse IN (${sql.join(eventWarehouses.map(w => sql`${w}`), sql`, `)})`
     : sql``;
   const brandFragment = brand
     ? sql` AND i.brand = ${brand}`

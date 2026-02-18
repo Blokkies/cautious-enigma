@@ -130,11 +130,12 @@ export async function GET(request: NextRequest) {
     )
     .orderBy(serialDiscrepancies.createdAt);
 
-  // Parse unknownSerials JSON for each task
-  const parsedSerialTasks = serialVerificationTasks.map((task) => ({
-    ...task,
-    unknownSerials: JSON.parse(task.unknownSerials) as string[],
-  }));
+  // Parse unknownSerials JSON for each task (with safe fallback)
+  const parsedSerialTasks = serialVerificationTasks.map((task) => {
+    let unknowns: string[] = [];
+    try { unknowns = JSON.parse(task.unknownSerials) as string[]; } catch { /* malformed JSON, default to empty */ }
+    return { ...task, unknownSerials: unknowns };
+  });
 
   // Fetch team members
   const [team] = await db

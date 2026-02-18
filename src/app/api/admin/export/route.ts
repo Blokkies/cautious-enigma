@@ -3,9 +3,14 @@ import { db } from "@/lib/db";
 import { items, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import * as XLSX from "xlsx";
-import { getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   const eventId = request.nextUrl.searchParams.get("eventId");
   if (!eventId) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });

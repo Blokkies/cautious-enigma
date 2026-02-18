@@ -39,9 +39,9 @@ export async function GET(request: NextRequest) {
   const eventWarehouses = await getEventWarehouses(eid);
   const brand = request.nextUrl.searchParams.get("brand");
 
-  // Build warehouse SQL fragment
+  // Build warehouse SQL fragment (parameterized)
   const whFragment = eventWarehouses
-    ? sql` AND warehouse IN (${sql.raw(eventWarehouses.map(w => `'${w.replace(/'/g, "''")}'`).join(","))})`
+    ? sql` AND warehouse IN (${sql.join(eventWarehouses.map(w => sql`${w}`), sql`, `)})`
     : sql``;
 
   // Build unassigned bins query
@@ -310,24 +310,27 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // If clearing counts, delete all counts for items in these bins
-    if (countedCount > 0 && clearCounts) {
-      await db.execute(
-        sql`DELETE FROM counts WHERE id IN (
-          SELECT c.id FROM counts c
-          JOIN items i ON i.id = c.item_id
-          WHERE i.event_id = ${eid} AND i.team_id = ${Number(fromTeamId)}
-          AND i.bin_number IN (${binList})
-        )`
-      );
-    }
+    // Delete counts + move items in a transaction to prevent partial state
+    const result = await db.transaction(async (tx) => {
+      if (countedCount > 0 && clearCounts) {
+        await tx.execute(
+          sql`DELETE FROM counts WHERE id IN (
+            SELECT c.id FROM counts c
+            JOIN items i ON i.id = c.item_id
+            WHERE i.event_id = ${eid} AND i.team_id = ${Number(fromTeamId)}
+            AND i.bin_number IN (${binList})
+          )`
+        );
+      }
 
-    // Move items
-    const result = await db.execute(
-      sql`UPDATE items SET team_id = ${Number(toTeamId)}
-          WHERE event_id = ${eid} AND team_id = ${Number(fromTeamId)}
-          AND bin_number IN (${binList}) RETURNING id`
-    );
+      const moved = await tx.execute(
+        sql`UPDATE items SET team_id = ${Number(toTeamId)}
+            WHERE event_id = ${eid} AND team_id = ${Number(fromTeamId)}
+            AND bin_number IN (${binList}) RETURNING id`
+      );
+
+      return moved;
+    });
 
     return NextResponse.json({ success: true, movedCount: result.length, clearedCounts: countedCount > 0 ? countedCount : 0 });
   } catch (error) {

@@ -3,11 +3,25 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { admins } from "@/lib/db/schema";
 import { createToken, getTokenCookieOptions } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin2026";
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn("[SECURITY] ADMIN_PASSWORD not set — using default. Set ADMIN_PASSWORD in .env.local for production.");
+}
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit by IP: 5 attempts per minute for admin login
+    const ip = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+    const { limited, retryAfterMs } = checkRateLimit(`admin-login:${ip}`, 5, 60_000);
+    if (limited) {
+      return NextResponse.json(
+        { error: "Too many login attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) } }
+      );
+    }
+
     const { password } = await request.json();
 
     if (!password) {

@@ -1001,6 +1001,7 @@ export default function VariancesPage() {
             showEditButton={false}
             showCheckbox={false}
             groupsCollapsed
+            isResolvedTab
           />
           <div className="text-sm text-muted-foreground mt-2">
             {filteredResolved.length} resolved
@@ -1441,6 +1442,7 @@ function VarianceTable({
   showAcceptButton,
   showReopenButton,
   groupsCollapsed,
+  isResolvedTab,
   onEdit,
   selectedCountIds,
   onToggleSelect,
@@ -1461,6 +1463,7 @@ function VarianceTable({
   showAcceptButton?: boolean;
   showReopenButton?: boolean;
   groupsCollapsed?: boolean;
+  isResolvedTab?: boolean;
   onEdit?: (item: VarianceItem) => void;
   selectedCountIds?: Set<number>;
   onToggleSelect?: (countId: number) => void;
@@ -1554,6 +1557,7 @@ function VarianceTable({
                       showCheckbox,
                       showAcceptButton,
                       showReopenButton,
+                      isResolvedTab,
                       onEdit,
                       selectedCountIds,
                       onToggleSelect,
@@ -1618,7 +1622,7 @@ function VarianceTable({
                         <TableCell className="text-right">{row.totalOnHand}</TableCell>
                         <TableCell className="text-right font-semibold">{row.totalCounted}</TableCell>
                         <TableCell className="text-right">
-                          {showEditButton ? (
+                          {!isResolvedTab ? (
                             <Badge
                               variant={Math.abs(row.totalVariance) > 10 ? "destructive" : "outline"}
                               className={Math.abs(row.totalVariance) <= 10 ? "border-amber-400 text-amber-700" : ""}
@@ -1663,6 +1667,7 @@ function VarianceTable({
                         showCheckbox,
                         showAcceptButton,
                         showReopenButton,
+                        isResolvedTab,
                         onEdit,
                         selectedCountIds,
                         onToggleSelect,
@@ -1694,6 +1699,7 @@ interface RowProps {
   showCheckbox: boolean;
   showAcceptButton?: boolean;
   showReopenButton?: boolean;
+  isResolvedTab?: boolean;
   onEdit?: (item: VarianceItem) => void;
   selectedCountIds?: Set<number>;
   onToggleSelect?: (countId: number) => void;
@@ -1709,7 +1715,7 @@ interface RowProps {
 }
 
 function renderSingleRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, isResolvedTab, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1756,7 +1762,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
       <TableCell className="text-right">{v.onHand}</TableCell>
       <TableCell className="text-right font-semibold">{v.countedQty}</TableCell>
       <TableCell className="text-right">
-        {showEditButton ? (
+        {!isResolvedTab ? (
           <Badge
             variant={Math.abs(v.variance) > 10 ? "destructive" : "outline"}
             className={Math.abs(v.variance) <= 10 ? "border-amber-400 text-amber-700" : ""}
@@ -1953,7 +1959,7 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
 }
 
 function renderSubRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, isResolvedTab, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1996,7 +2002,7 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
       <TableCell className="text-right">{v.onHand}</TableCell>
       <TableCell className="text-right font-semibold">{v.countedQty}</TableCell>
       <TableCell className="text-right">
-        {showEditButton ? (
+        {!isResolvedTab ? (
           <Badge
             variant={Math.abs(v.variance) > 10 ? "destructive" : "outline"}
             className={Math.abs(v.variance) <= 10 ? "border-amber-400 text-amber-700" : ""}

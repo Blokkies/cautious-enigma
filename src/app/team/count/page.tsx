@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
+import { saveCountLocally, markCountSynced } from "@/stores/offline-db";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
 
@@ -561,8 +562,23 @@ export default function CountingPage() {
       const onHand = item.onHand ?? 0;
       const variance = qty - onHand;
       const isMatch = variance === 0;
+      const countedAt = new Date().toISOString();
 
-      // Optimistic update
+      // Save to IndexedDB FIRST so data survives network failures / browser close
+      try {
+        await saveCountLocally({
+          clientId,
+          itemId,
+          countedQty: qty,
+          isMatch,
+          comment: countComment || null,
+          countedAt,
+        });
+      } catch {
+        // IndexedDB unavailable — continue with server POST anyway
+      }
+
+      // Optimistic UI update
       setItems((prev) =>
         prev.map((i) =>
           i.id === itemId
@@ -573,7 +589,7 @@ export default function CountingPage() {
                 variance,
                 isMatch,
                 comment: countComment || i.comment,
-                countedAt: new Date().toISOString(),
+                countedAt,
               }
             : i
         )
@@ -589,6 +605,7 @@ export default function CountingPage() {
         }));
       }
 
+      // Try to sync to server immediately
       try {
         const res = await fetch("/api/team/count", {
           method: "POST",
@@ -605,6 +622,14 @@ export default function CountingPage() {
         if (!res.ok) throw new Error("Failed to save");
 
         const data = await res.json();
+
+        // Mark as synced in IndexedDB
+        try {
+          await markCountSynced(clientId);
+        } catch {
+          // IndexedDB unavailable — server has the data, acceptable
+        }
+
         if (data.count) {
           setItems((prev) =>
             prev.map((i) =>
@@ -627,7 +652,8 @@ export default function CountingPage() {
           toast.warning(`Variance: ${variance > 0 ? "+" : ""}${variance}`);
         }
       } catch {
-        if (!silent) toast.error("Count saved locally, will sync when online");
+        // Network failed — count is safely in IndexedDB, useSync will retry
+        if (!silent) toast.info("Saved offline — will sync when back online");
       }
     },
     [items]

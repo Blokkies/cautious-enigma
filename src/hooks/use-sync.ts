@@ -24,10 +24,12 @@ export function useSync() {
     preloaded: false,
   });
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingCountRef = useRef(0);
 
   const updatePendingCount = useCallback(async () => {
     try {
       const count = await getPendingSyncCount();
+      pendingCountRef.current = count;
       setState((prev) => ({ ...prev, pendingCount: count }));
     } catch {
       // IndexedDB not available
@@ -90,6 +92,17 @@ export function useSync() {
     const interval = setInterval(updatePendingCount, 5000);
     return () => clearInterval(interval);
   }, [updatePendingCount]);
+
+  // Warn user before closing tab if there are unsynced counts
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (pendingCountRef.current > 0) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
 
   return {
     ...state,

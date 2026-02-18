@@ -26,7 +26,7 @@ export interface OfflineCount {
   isMatch: boolean;
   comment: string | null;
   countedAt: string;
-  synced: boolean;
+  synced: number; // 0 = unsynced, 1 = synced (number for IndexedDB indexing)
 }
 
 export interface SyncMeta {
@@ -42,10 +42,23 @@ class StocktakeOfflineDB extends Dexie {
   constructor() {
     super("stocktake-offline");
 
+    // v1: original schema
     this.version(1).stores({
       items: "id, binNumber, itemCode, brand",
       counts: "clientId, itemId, synced",
       meta: "key",
+    });
+
+    // v2: synced changed from boolean to number (0/1) for reliable IndexedDB indexing
+    // No schema change needed (same indexes), just data migration
+    this.version(2).stores({
+      items: "id, binNumber, itemCode, brand",
+      counts: "clientId, itemId, synced",
+      meta: "key",
+    }).upgrade(tx => {
+      return tx.table("counts").toCollection().modify(count => {
+        count.synced = count.synced ? 1 : 0;
+      });
     });
   }
 }
@@ -95,18 +108,24 @@ export async function preloadItems(): Promise<number> {
 }
 
 // ─── Save a count locally ───────────────────────────────────────────────────
-export async function saveCountLocally(count: OfflineCount): Promise<void> {
-  await offlineDb.counts.put(count);
+export async function saveCountLocally(count: Omit<OfflineCount, "synced">): Promise<void> {
+  await offlineDb.counts.put({ ...count, synced: 0 });
 
   // Update the local item record
+  const localItem = await offlineDb.items.get(count.itemId);
   await offlineDb.items.update(count.itemId, {
-    countId: -1, // placeholder
+    countId: -1, // placeholder until server confirms
     countedQty: count.countedQty,
-    variance: count.countedQty - ((await offlineDb.items.get(count.itemId))?.onHand || 0),
+    variance: count.countedQty - (localItem?.onHand || 0),
     isMatch: count.isMatch,
     comment: count.comment,
     countedAt: count.countedAt,
   });
+}
+
+// ─── Mark a single count as synced ──────────────────────────────────────────
+export async function markCountSynced(clientId: string): Promise<void> {
+  await offlineDb.counts.update(clientId, { synced: 1 });
 }
 
 // ─── Get unsynced counts ────────────────────────────────────────────────────
@@ -116,10 +135,11 @@ export async function getUnsyncedCounts(): Promise<OfflineCount[]> {
 
 // ─── Mark counts as synced ──────────────────────────────────────────────────
 export async function markSynced(clientIds: string[]): Promise<void> {
+  if (clientIds.length === 0) return;
   await offlineDb.counts
     .where("clientId")
     .anyOf(clientIds)
-    .modify({ synced: true });
+    .modify({ synced: 1 });
 }
 
 // ─── Sync queue - push unsynced counts to server ────────────────────────────
@@ -147,12 +167,15 @@ export async function syncToServer(): Promise<{
 
     if (res.ok) {
       const data = await res.json();
-      const successIds = data.results
-        .filter(
-          (r: { success?: boolean; deduplicated?: boolean }) =>
-            r.success || r.deduplicated
-        )
-        .map((_: unknown, i: number) => unsynced[i].clientId);
+      // Match results by index (server returns in same order as input)
+      const successIds: string[] = [];
+      (data.results as Array<{ success?: boolean; deduplicated?: boolean }>).forEach(
+        (r, i) => {
+          if (r.success || r.deduplicated) {
+            successIds.push(unsynced[i].clientId);
+          }
+        }
+      );
 
       await markSynced(successIds);
 

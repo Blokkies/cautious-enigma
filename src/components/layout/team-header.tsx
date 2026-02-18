@@ -35,8 +35,8 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
         <div className="flex items-center gap-2">
           {isOnline ? (
             pendingSyncs > 0 ? (
-              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                Connecting
+              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full animate-pulse">
+                Syncing {pendingSyncs}
               </span>
             ) : (
               <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
@@ -44,9 +44,15 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
               </span>
             )
           ) : (
-            <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
-              Offline
-            </span>
+            pendingSyncs > 0 ? (
+              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                Offline · {pendingSyncs} pending
+              </span>
+            ) : (
+              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                Offline
+              </span>
+            )
           )}
           <Button variant="ghost" size="sm" onClick={handleLogout} className="touch-target">
             <LogOut className="h-4 w-4" />

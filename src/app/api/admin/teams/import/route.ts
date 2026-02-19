@@ -89,6 +89,7 @@ export async function POST(request: NextRequest) {
         name: team.name,
         members: team.members.length > 0 ? JSON.stringify(team.members) : null,
         pinHash: await hashPin(team.pin),
+        pinPlain: team.pin,
       }))
     );
 

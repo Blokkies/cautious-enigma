@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
     return {
       ...team,
       pinHash: undefined, // Don't send hash to client
+      pinPlain: (user.type === "supervisor" || user.type === "admin") ? team.pinPlain : undefined,
       assignedItems: assignedCount?.count || 0,
     };
   }));
@@ -54,11 +55,17 @@ export async function GET(request: NextRequest) {
       id: supervisors.id,
       name: supervisors.name,
       role: supervisors.role,
+      pinPlain: supervisors.pinPlain,
     })
     .from(supervisors)
     .where(eq(supervisors.eventId, eid));
 
-  return NextResponse.json({ teams: enriched, supervisors: supervisorList });
+  const supervisorListSafe = supervisorList.map((s) => ({
+    ...s,
+    pinPlain: (user.type === "supervisor" || user.type === "admin") ? s.pinPlain : undefined,
+  }));
+
+  return NextResponse.json({ teams: enriched, supervisors: supervisorListSafe });
 }
 
 export async function POST(request: NextRequest) {
@@ -88,6 +95,7 @@ export async function POST(request: NextRequest) {
           eventId: eid,
           name,
           pinHash: pinHashed,
+          pinPlain: pin,
           role: type === "auditor" ? "auditor" : (role || "supervisor"),
         })
         .returning({ id: supervisors.id });
@@ -107,6 +115,7 @@ export async function POST(request: NextRequest) {
         name,
         members: members ? JSON.stringify(members) : null,
         pinHash: pinHashed,
+        pinPlain: pin,
       })
       .returning({ id: teams.id });
 
@@ -148,13 +157,14 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const updateData: { name: string; members: string | null; pinHash?: string } = {
+    const updateData: { name: string; members: string | null; pinHash?: string; pinPlain?: string } = {
       name,
       members: members ? JSON.stringify(members) : null,
     };
 
     if (pin && pin.length >= 4) {
       updateData.pinHash = await hashPin(pin);
+      updateData.pinPlain = pin;
     }
 
     await db.update(teams)

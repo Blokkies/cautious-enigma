@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X, Eye, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X, Eye, EyeOff, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { generateTeamTemplate } from "@/lib/team-excel";
@@ -29,12 +29,14 @@ interface TeamInfo {
   name: string;
   members: string | null;
   assignedItems: number;
+  pinPlain?: string | null;
 }
 
 interface SupervisorInfo {
   id: number;
   name: string;
   role: string;
+  pinPlain?: string | null;
 }
 
 export default function SupervisorTeamsPage() {
@@ -45,12 +47,15 @@ export default function SupervisorTeamsPage() {
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([]);
   const [supervisorsList, setSupervisorsList] = useState<SupervisorInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showPins, setShowPins] = useState(false);
 
   // Team form
+  const [addTeamOpen, setAddTeamOpen] = useState(false);
   const [teamForm, setTeamForm] = useState({ name: "", pin: "" });
   const [teamMembers, setTeamMembers] = useState<string[]>([""]);
 
   // Supervisor form
+  const [addSupOpen, setAddSupOpen] = useState(false);
   const [supForm, setSupForm] = useState({
     name: "",
     pin: "",
@@ -164,6 +169,7 @@ export default function SupervisorTeamsPage() {
         toast.success("Team created");
         setTeamForm({ name: "", pin: "" });
         setTeamMembers([""]);
+        setAddTeamOpen(false);
         loadTeams();
       }
     } catch {
@@ -190,6 +196,7 @@ export default function SupervisorTeamsPage() {
       if (res.ok) {
         toast.success("Supervisor created");
         setSupForm({ name: "", pin: "" });
+        setAddSupOpen(false);
         loadTeams();
       }
     } catch {
@@ -321,10 +328,23 @@ export default function SupervisorTeamsPage() {
       {/* Teams List */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Teams ({teamsList.length})
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Teams ({teamsList.length})
+            </CardTitle>
+            {!isAuditor && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowPins((v) => !v)}
+                className="gap-1.5 text-muted-foreground"
+              >
+                {showPins ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showPins ? "Hide PINs" : "Show PINs"}
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {teamsList.length > 0 ? (
@@ -341,6 +361,11 @@ export default function SupervisorTeamsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    {showPins && team.pinPlain && (
+                      <Badge variant="outline" className="font-mono text-xs">
+                        PIN: {team.pinPlain}
+                      </Badge>
+                    )}
                     <Badge variant="secondary">
                       {team.assignedItems} items
                     </Badge>
@@ -377,62 +402,14 @@ export default function SupervisorTeamsPage() {
             <>
               <Separator className="my-4" />
 
-              {/* Add Single Team */}
-              <div className="space-y-3">
-                <h3 className="font-medium">Add Team</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <Input
-                    placeholder="Team name"
-                    value={teamForm.name}
-                    onChange={(e) =>
-                      setTeamForm((p) => ({ ...p, name: e.target.value }))
-                    }
-                  />
-                  <Input
-                    placeholder="4-digit PIN"
-                    type="password"
-                    maxLength={6}
-                    value={teamForm.pin}
-                    onChange={(e) =>
-                      setTeamForm((p) => ({
-                        ...p,
-                        pin: e.target.value.replace(/\D/g, ""),
-                      }))
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">Members</div>
-                  {teamMembers.map((member, i) => (
-                    <div key={i} className="flex gap-2">
-                      <Input
-                        placeholder={`Member ${i + 1}`}
-                        value={member}
-                        onChange={(e) => setTeamMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
-                      />
-                      {teamMembers.length > 1 && (
-                        <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTeamMembers(prev => prev.filter((_, j) => j !== i))}>
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                  <Button variant="outline" size="sm" onClick={() => setTeamMembers(prev => [...prev, ""])} className="gap-1">
-                    <Plus className="h-3 w-3" /> Add Member
-                  </Button>
-                </div>
-                <Button onClick={createTeam} className="gap-1">
+              <div className="flex gap-2 flex-wrap">
+                <Button onClick={() => { setAddTeamOpen(true); setTeamForm({ name: "", pin: "" }); setTeamMembers([""]); }} className="gap-1">
                   <Plus className="h-4 w-4" />
                   Add Team
                 </Button>
-              </div>
-
-              <Separator className="my-4" />
-
-              <div className="flex gap-2">
                 <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
                   <Plus className="h-4 w-4" />
-                  Bulk Create Teams
+                  Bulk Create
                 </Button>
                 <Button onClick={() => { setImportOpen(true); setImportFile(null); setImportResult(null); }} variant="outline" className="gap-1">
                   <Upload className="h-4 w-4" />
@@ -443,6 +420,62 @@ export default function SupervisorTeamsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Add Team Dialog */}
+      <Dialog open={addTeamOpen} onOpenChange={(open) => { if (!open) setAddTeamOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Team</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Team name"
+              value={teamForm.name}
+              onChange={(e) =>
+                setTeamForm((p) => ({ ...p, name: e.target.value }))
+              }
+            />
+            <Input
+              placeholder="4-digit PIN"
+              type="password"
+              maxLength={6}
+              value={teamForm.pin}
+              onChange={(e) =>
+                setTeamForm((p) => ({
+                  ...p,
+                  pin: e.target.value.replace(/\D/g, ""),
+                }))
+              }
+            />
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Members</div>
+              {teamMembers.map((member, i) => (
+                <div key={i} className="flex gap-2">
+                  <Input
+                    placeholder={`Member ${i + 1}`}
+                    value={member}
+                    onChange={(e) => setTeamMembers(prev => prev.map((m, j) => j === i ? e.target.value : m))}
+                  />
+                  {teamMembers.length > 1 && (
+                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTeamMembers(prev => prev.filter((_, j) => j !== i))}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <Button variant="outline" size="sm" onClick={() => setTeamMembers(prev => [...prev, ""])} className="gap-1">
+                <Plus className="h-3 w-3" /> Add Member
+              </Button>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setAddTeamOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={createTeam}>Create Team</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Team Dialog */}
       <Dialog open={!!editTeam} onOpenChange={(open) => !open && setEditTeam(null)}>
@@ -671,51 +704,69 @@ export default function SupervisorTeamsPage() {
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
                 >
                   <div className="font-medium">{sup.name}</div>
+                  {showPins && sup.pinPlain && (
+                    <Badge variant="outline" className="font-mono text-xs">
+                      PIN: {sup.pinPlain}
+                    </Badge>
+                  )}
                 </div>
               ))}
             </div>
           )}
 
           {!isAuditor && (
-            <div className="space-y-3">
-              <h3 className="font-medium">Add Supervisor</h3>
-              <div className="grid grid-cols-2 gap-3">
-                <Input
-                  placeholder="Supervisor name"
-                  value={supForm.name}
-                  onChange={(e) =>
-                    setSupForm((p) => ({ ...p, name: e.target.value }))
-                  }
-                />
-                <Input
-                  placeholder="4-digit PIN"
-                  type="password"
-                  maxLength={6}
-                  value={supForm.pin}
-                  onChange={(e) =>
-                    setSupForm((p) => ({
-                      ...p,
-                      pin: e.target.value.replace(/\D/g, ""),
-                    }))
-                  }
-                />
-              </div>
-              <Button onClick={createSupervisor} className="gap-1">
-                <Plus className="h-4 w-4" />
-                Add Supervisor
-              </Button>
-            </div>
+            <Button onClick={() => { setAddSupOpen(true); setSupForm({ name: "", pin: "" }); }} className="gap-1">
+              <Plus className="h-4 w-4" />
+              Add Supervisor
+            </Button>
           )}
         </CardContent>
       </Card>
 
+      {/* Add Supervisor Dialog */}
+      <Dialog open={addSupOpen} onOpenChange={(open) => { if (!open) setAddSupOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Supervisor</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Supervisor name"
+              value={supForm.name}
+              onChange={(e) =>
+                setSupForm((p) => ({ ...p, name: e.target.value }))
+              }
+            />
+            <Input
+              placeholder="4-digit PIN"
+              type="password"
+              maxLength={6}
+              value={supForm.pin}
+              onChange={(e) =>
+                setSupForm((p) => ({
+                  ...p,
+                  pin: e.target.value.replace(/\D/g, ""),
+                }))
+              }
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setAddSupOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={createSupervisor}>Create Supervisor</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Auditors */}
-      <AuditorSection eventId={eventId} isAuditor={isAuditor} supervisorsList={supervisorsList} onCreated={loadTeams} />
+      <AuditorSection eventId={eventId} isAuditor={isAuditor} supervisorsList={supervisorsList} onCreated={loadTeams} showPins={showPins} />
     </div>
   );
 }
 
-function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated }: { eventId?: number; isAuditor: boolean; supervisorsList: SupervisorInfo[]; onCreated: () => void }) {
+function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated, showPins }: { eventId?: number; isAuditor: boolean; supervisorsList: SupervisorInfo[]; onCreated: () => void; showPins: boolean }) {
+  const [addAuditorOpen, setAddAuditorOpen] = useState(false);
   const [auditorForm, setAuditorForm] = useState({ name: "", pin: "" });
   const auditors = supervisorsList.filter(s => s.role === "auditor");
 
@@ -742,6 +793,7 @@ function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated }: { ev
       if (res.ok) {
         toast.success("Auditor created");
         setAuditorForm({ name: "", pin: "" });
+        setAddAuditorOpen(false);
         onCreated();
       } else {
         toast.error("Failed to create auditor");
@@ -752,58 +804,77 @@ function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated }: { ev
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Eye className="h-5 w-5" />
-          Auditors ({auditors.length})
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {auditors.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {auditors.map((aud) => (
-              <div
-                key={aud.id}
-                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-              >
-                <div className="font-medium">{aud.name}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {!isAuditor && (
-          <div className="space-y-3">
-            <h3 className="font-medium">Add Auditor</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                placeholder="Auditor name"
-                value={auditorForm.name}
-                onChange={(e) =>
-                  setAuditorForm((p) => ({ ...p, name: e.target.value }))
-                }
-              />
-              <Input
-                placeholder="4-digit PIN"
-                type="password"
-                maxLength={6}
-                value={auditorForm.pin}
-                onChange={(e) =>
-                  setAuditorForm((p) => ({
-                    ...p,
-                    pin: e.target.value.replace(/\D/g, ""),
-                  }))
-                }
-              />
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Eye className="h-5 w-5" />
+            Auditors ({auditors.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {auditors.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {auditors.map((aud) => (
+                <div
+                  key={aud.id}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                >
+                  <div className="font-medium">{aud.name}</div>
+                  {showPins && aud.pinPlain && (
+                    <Badge variant="outline" className="font-mono text-xs">
+                      PIN: {aud.pinPlain}
+                    </Badge>
+                  )}
+                </div>
+              ))}
             </div>
-            <Button onClick={createAuditor} className="gap-1">
+          )}
+
+          {!isAuditor && (
+            <Button onClick={() => { setAddAuditorOpen(true); setAuditorForm({ name: "", pin: "" }); }} className="gap-1">
               <Plus className="h-4 w-4" />
               Add Auditor
             </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Add Auditor Dialog */}
+      <Dialog open={addAuditorOpen} onOpenChange={(open) => { if (!open) setAddAuditorOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Auditor</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Auditor name"
+              value={auditorForm.name}
+              onChange={(e) =>
+                setAuditorForm((p) => ({ ...p, name: e.target.value }))
+              }
+            />
+            <Input
+              placeholder="4-digit PIN"
+              type="password"
+              maxLength={6}
+              value={auditorForm.pin}
+              onChange={(e) =>
+                setAuditorForm((p) => ({
+                  ...p,
+                  pin: e.target.value.replace(/\D/g, ""),
+                }))
+              }
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setAddAuditorOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={createAuditor}>Create Auditor</Button>
+            </div>
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

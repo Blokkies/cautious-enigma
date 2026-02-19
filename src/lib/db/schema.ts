@@ -29,6 +29,7 @@ export const teams = pgTable("teams", {
   name: text("name").notNull(),
   members: text("members"), // JSON array of member names e.g. ["Alice","Bob","Charlie"]
   pinHash: text("pin_hash").notNull(),
+  pinPlain: text("pin_plain"), // Stored so supervisors can view assigned PINs
   createdAt: text("created_at")
     .notNull()
     .default(sql`now()`),
@@ -42,6 +43,7 @@ export const supervisors = pgTable("supervisors", {
     .references(() => stocktakeEvents.id),
   name: text("name").notNull(),
   pinHash: text("pin_hash").notNull(),
+  pinPlain: text("pin_plain"), // Stored so supervisors can view assigned PINs
   role: text("role").default("supervisor"),
   createdAt: text("created_at")
     .notNull()

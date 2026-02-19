@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Trash2, Users, Shield, Pencil, ArrowLeft, Loader2, X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowLeft, Loader2, X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { generateTeamTemplate } from "@/lib/team-excel";
@@ -36,12 +36,14 @@ interface TeamInfo {
   name: string;
   members: string | null;
   assignedItems: number;
+  pinPlain?: string | null;
 }
 
 interface SupervisorInfo {
   id: number;
   name: string;
   role: string;
+  pinPlain?: string | null;
 }
 
 interface EventOption {
@@ -59,6 +61,7 @@ export default function TeamsPage() {
   const [teamsList, setTeamsList] = useState<TeamInfo[]>([]);
   const [supervisorsList, setSupervisorsList] = useState<SupervisorInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showPins, setShowPins] = useState(false);
 
   // Team form
   const [teamForm, setTeamForm] = useState({ name: "", pin: "" });
@@ -375,10 +378,21 @@ export default function TeamsPage() {
       {/* Teams List */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Teams ({teamsList.length})
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Teams ({teamsList.length})
+            </CardTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowPins((v) => !v)}
+              className="gap-1.5 text-muted-foreground"
+            >
+              {showPins ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {showPins ? "Hide PINs" : "Show PINs"}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {teamsList.length > 0 ? (
@@ -397,6 +411,11 @@ export default function TeamsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
+                      {showPins && team.pinPlain && (
+                        <Badge variant="outline" className="font-mono text-xs">
+                          PIN: {team.pinPlain}
+                        </Badge>
+                      )}
                       <Badge variant="secondary">
                         {team.assignedItems} items
                       </Badge>
@@ -720,14 +739,21 @@ export default function TeamsPage() {
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
                 >
                   <div className="font-medium">{sup.name}</div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDelete(sup.id, "supervisor")}
-                    className="text-destructive hover:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    {showPins && sup.pinPlain && (
+                      <Badge variant="outline" className="font-mono text-xs">
+                        PIN: {sup.pinPlain}
+                      </Badge>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(sup.id, "supervisor")}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -233,6 +233,8 @@ ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_assigned_
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_status TEXT;
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_completed_at TEXT;
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verified_serials TEXT;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS pin_plain TEXT;
+ALTER TABLE supervisors ADD COLUMN IF NOT EXISTS pin_plain TEXT;
 `;
 
 const compositeIndexes = `

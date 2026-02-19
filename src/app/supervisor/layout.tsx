@@ -65,6 +65,8 @@ export default function SupervisorLayout({
     return 0;
   };
 
+  const execMessageCount = counts.execMessages ?? 0;
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
@@ -87,6 +89,23 @@ export default function SupervisorLayout({
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
+        {/* Persistent executive message banner — visible from every screen */}
+        {execMessageCount > 0 && pathname !== "/supervisor/messages" && (
+          <Link
+            href="/supervisor/messages"
+            className="flex items-center gap-3 px-4 py-2.5 bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          >
+            <span className="relative flex h-3 w-3 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-white" />
+            </span>
+            <Mail className="h-4 w-4 shrink-0" />
+            <span className="text-sm font-medium flex-1">
+              {execMessageCount} new message{execMessageCount !== 1 ? "s" : ""} from management
+            </span>
+            <span className="text-xs font-semibold bg-white/20 px-2 py-0.5 rounded">View</span>
+          </Link>
+        )}
       </header>
       {/* Bottom nav for mobile */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t md:hidden">

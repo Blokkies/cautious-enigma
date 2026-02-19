@@ -11,6 +11,10 @@ import {
   TrendingDown,
   AlertTriangle,
   ScanBarcode,
+  MessageSquare,
+  Package,
+  ClipboardCheck,
+  ScrollText,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -132,8 +136,9 @@ export default function ExportPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            All items with count results, variances, team assignments, and
-            comments. Includes unknown and approved serials. Suitable for NetSuite import.
+            All items with count results, variances, team assignments, comments,
+            check status, count type, and serialized flag.
+            Includes unknown and approved serials.
           </p>
           <div className="flex gap-3">
             <Button
@@ -171,25 +176,7 @@ export default function ExportPage() {
             <p className="text-sm text-muted-foreground">
               Non-serialized items where counted quantity exceeds on-hand (surplus).
             </p>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                onClick={() => handleDownload("variances_nonserialized_up", "xlsx")}
-                className="gap-1.5"
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                Excel
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleDownload("variances_nonserialized_up", "csv")}
-                className="gap-1.5"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                CSV
-              </Button>
-            </div>
+            <ExportButtons type="variances_nonserialized_up" onDownload={handleDownload} />
           </CardContent>
         </Card>
 
@@ -205,25 +192,7 @@ export default function ExportPage() {
             <p className="text-sm text-muted-foreground">
               Non-serialized items where counted quantity is less than on-hand (shortage).
             </p>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                onClick={() => handleDownload("variances_nonserialized_down", "xlsx")}
-                className="gap-1.5"
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                Excel
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleDownload("variances_nonserialized_down", "csv")}
-                className="gap-1.5"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                CSV
-              </Button>
-            </div>
+            <ExportButtons type="variances_nonserialized_down" onDownload={handleDownload} />
           </CardContent>
         </Card>
 
@@ -242,25 +211,7 @@ export default function ExportPage() {
             <p className="text-sm text-muted-foreground">
               Unknown serials reported during count (not in system). Includes approved serials.
             </p>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                onClick={() => handleDownload("variances_serialized_up", "xlsx")}
-                className="gap-1.5"
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                Excel
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleDownload("variances_serialized_up", "csv")}
-                className="gap-1.5"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                CSV
-              </Button>
-            </div>
+            <ExportButtons type="variances_serialized_up" onDownload={handleDownload} />
           </CardContent>
         </Card>
 
@@ -279,25 +230,7 @@ export default function ExportPage() {
             <p className="text-sm text-muted-foreground">
               Expected serialized items that were not found during the count.
             </p>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                onClick={() => handleDownload("variances_serialized_down", "xlsx")}
-                className="gap-1.5"
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                Excel
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleDownload("variances_serialized_down", "csv")}
-                className="gap-1.5"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                CSV
-              </Button>
-            </div>
+            <ExportButtons type="variances_serialized_down" onDownload={handleDownload} />
           </CardContent>
         </Card>
       </div>
@@ -313,7 +246,7 @@ export default function ExportPage() {
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
             All items with discrepancies — serialized and non-serialized, up and
-            down. Includes unknown and approved serials.
+            down. Includes check status and count type.
           </p>
           <div className="flex gap-3">
             <Button
@@ -334,6 +267,143 @@ export default function ExportPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Serial Export */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ScanBarcode className="h-5 w-5" />
+            Serial Number Report
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Complete serial number audit — every expected serial with found/not-found status,
+            plus all unknown and approved serials. Includes full item metadata, verification
+            results, and discrepancy resolution details.
+          </p>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => handleDownload("serials", "xlsx")}
+              className="gap-2"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Excel (.xlsx)
+            </Button>
+            <Button
+              onClick={() => handleDownload("serials", "csv")}
+              variant="outline"
+              className="gap-2"
+            >
+              <FileText className="h-4 w-4" />
+              CSV
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Record-keeping exports */}
+      <h2 className="text-lg font-semibold pt-2">Record Keeping</h2>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Queries */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MessageSquare className="h-5 w-5 text-blue-600" />
+              Queries
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              All team-to-supervisor queries with full conversation history,
+              status, and resolution timestamps.
+            </p>
+            <ExportButtons type="queries" onDownload={handleDownload} />
+          </CardContent>
+        </Card>
+
+        {/* Breakdowns */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Package className="h-5 w-5 text-purple-600" />
+              Breakdowns
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              All stock movement / breakdown requests with approval status,
+              client names, PO numbers, and conversation history.
+            </p>
+            <ExportButtons type="breakdowns" onDownload={handleDownload} />
+          </CardContent>
+        </Card>
+
+        {/* Verification Assignments */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ClipboardCheck className="h-5 w-5 text-emerald-600" />
+              Verification Assignments
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              All recount assignments — original count, verification count,
+              assigned team, status, and completion details.
+            </p>
+            <ExportButtons type="verifications" onDownload={handleDownload} />
+          </CardContent>
+        </Card>
+
+        {/* Audit Log */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ScrollText className="h-5 w-5 text-gray-600" />
+              Audit Log
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Complete audit trail of all supervisor actions — edits,
+              approvals, assignments, and status changes with timestamps.
+            </p>
+            <ExportButtons type="audit_log" onDownload={handleDownload} />
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function ExportButtons({
+  type,
+  onDownload,
+}: {
+  type: string;
+  onDownload: (type: string, format: string) => void;
+}) {
+  return (
+    <div className="flex gap-2">
+      <Button
+        size="sm"
+        onClick={() => onDownload(type, "xlsx")}
+        className="gap-1.5"
+      >
+        <FileSpreadsheet className="h-3.5 w-3.5" />
+        Excel
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => onDownload(type, "csv")}
+        className="gap-1.5"
+      >
+        <FileText className="h-3.5 w-3.5" />
+        CSV
+      </Button>
     </div>
   );
 }

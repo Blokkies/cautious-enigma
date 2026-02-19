@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageSquare, RotateCcw, ChevronRight, ChevronDown } from "lucide-react";
 import { SuccessFlash } from "./success-flash";
+import { useSettings } from "@/contexts/settings-context";
 
 export interface CountItem {
   id: number;
@@ -160,6 +161,38 @@ export function getStockStatusStyle(status: string | null): string {
   return "bg-slate-100 text-slate-700 border-slate-300";
 }
 
+/** Compute live variance color state */
+function getVarianceState(qtyValue: string, onHand: number): "empty" | "match" | "small" | "large" {
+  if (!qtyValue) return "empty";
+  const qty = Number(qtyValue);
+  if (isNaN(qty)) return "empty";
+  const v = qty - onHand;
+  if (v === 0) return "match";
+  if (Math.abs(v) <= 5) return "small";
+  return "large";
+}
+
+const varianceInputStyles = {
+  empty: "",
+  match: "border-green-400 ring-2 ring-green-200",
+  small: "border-amber-400 ring-2 ring-amber-200",
+  large: "border-red-400 ring-2 ring-red-200",
+};
+
+const varianceBgStyles = {
+  empty: "bg-muted/30",
+  match: "bg-green-50",
+  small: "bg-amber-50",
+  large: "bg-red-50",
+};
+
+const varianceBarStyles = {
+  empty: "bg-white",
+  match: "bg-green-50",
+  small: "bg-amber-50",
+  large: "bg-red-50",
+};
+
 export function ActiveItemCard({
   item,
   qtyValue,
@@ -174,163 +207,189 @@ export function ActiveItemCard({
   onFlashComplete,
   isVerification,
 }: ActiveItemCardProps) {
+  const { settings } = useSettings();
+  const er = settings.easyRead;
   const isSerialized = item.isSerialized === true || item.isSerialized === 1;
   const [localShowComment, setLocalShowComment] = useState(false);
 
-  const isMatchValue = qtyValue === String(item.onHand ?? 0);
+  const onHand = item.onHand ?? 0;
+  const isMatchValue = qtyValue === String(onHand);
+  const vState = getVarianceState(qtyValue, onHand);
+  const liveVariance = qtyValue ? Number(qtyValue) - onHand : null;
 
   return (
-    <Card className={`border-2 relative ${isVerification ? "border-purple-400" : "border-primary/30"}`}>
-      {showSuccessFlash && onFlashComplete && (
-        <SuccessFlash onComplete={onFlashComplete} />
-      )}
-      <CardContent className="p-4 space-y-4">
-        {/* Verification badge */}
-        {isVerification && (
-          <Badge className="bg-purple-100 text-purple-800 border-purple-300 text-xs">
-            Verification Count
-          </Badge>
+    <>
+      <Card className={`${er ? "border-[3px]" : "border-2"} relative ${isVerification ? "border-purple-400" : "border-primary/30"}`}>
+        {showSuccessFlash && onFlashComplete && (
+          <SuccessFlash onComplete={onFlashComplete} />
         )}
+        <CardContent className={`p-4 ${er ? "space-y-5" : "space-y-4"} pb-48`}>
+          {/* Verification badge */}
+          {isVerification && (
+            <Badge className={`bg-purple-100 text-purple-800 border-purple-300 ${er ? "text-sm" : "text-xs"}`}>
+              Verification Count
+            </Badge>
+          )}
 
-        {/* Bin number — prominent on card */}
-        {item.binNumber && (
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-2">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
-            <span className="font-mono font-bold text-base">{item.binNumber}</span>
-          </div>
-        )}
+          {/* Bin number */}
+          {item.binNumber && (
+            <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : "py-2"}`}>
+              <span className={`${er ? "text-sm" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
+              <span className={`font-mono font-bold ${er ? "text-lg" : "text-base"}`}>{item.binNumber}</span>
+            </div>
+          )}
 
-        {/* Item Code — labeled */}
-        <div className="space-y-1">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Item Code</div>
-          <div className="font-mono font-bold text-xl tracking-tight">
-            {item.itemCode}
-          </div>
-        </div>
-
-        {/* Description — labeled */}
-        {item.description && (
-          <div className="space-y-0.5">
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Description</div>
-            <div className="text-sm leading-snug">
-              {item.description}
+          {/* Item Code */}
+          <div className="space-y-1">
+            <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
+            <div className={`font-mono font-bold ${er ? "text-2xl" : "text-xl"} tracking-tight`}>
+              {item.itemCode}
             </div>
           </div>
-        )}
 
-        {/* Metadata row */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {item.brand && (
-            <Badge variant="secondary" className="text-xs">
-              {item.brand}
-            </Badge>
+          {/* Description */}
+          {item.description && (
+            <div className="space-y-0.5">
+              <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
+              <div className={`${er ? "text-base" : "text-sm"} leading-snug`}>
+                {item.description}
+              </div>
+            </div>
           )}
-          {item.stockStatus && (
-            <Badge className={`text-xs ${getStockStatusStyle(item.stockStatus)}`}>
-              {item.stockStatus}
-            </Badge>
-          )}
-          {isSerialized && (
-            <Badge className="text-xs bg-purple-100 text-purple-800 border-purple-300">
-              Serialized
-            </Badge>
-          )}
-        </div>
-        {isSerialized && item.serialNumber && (
-          <div className="text-xs font-mono text-purple-700 bg-purple-50 px-2 py-1 rounded">
-            S/N: {item.serialNumber}
+
+          {/* Metadata row */}
+          <div className={`flex flex-wrap items-center ${er ? "gap-2" : "gap-1.5"}`}>
+            {item.brand && (
+              <Badge variant="secondary" className={er ? "text-sm" : "text-xs"}>
+                {item.brand}
+              </Badge>
+            )}
+            {item.stockStatus && (
+              <Badge className={`${er ? "text-sm" : "text-xs"} ${getStockStatusStyle(item.stockStatus)}`}>
+                {item.stockStatus}
+              </Badge>
+            )}
+            {isSerialized && (
+              <Badge className={`${er ? "text-sm" : "text-xs"} bg-purple-100 text-purple-800 border-purple-300`}>
+                Serialized
+              </Badge>
+            )}
           </div>
-        )}
+          {isSerialized && item.serialNumber && (
+            <div className={`${er ? "text-sm" : "text-xs"} font-mono text-purple-700 bg-purple-50 px-2 py-1 rounded`}>
+              S/N: {item.serialNumber}
+            </div>
+          )}
 
-        {/* On-hand quantity */}
-        <div className="text-center py-2 bg-muted/30 rounded-lg">
-          <div className="text-xs font-medium text-muted-foreground mb-1">On Hand</div>
-          <div className="text-3xl font-bold">{item.onHand ?? 0}</div>
+          {/* On-hand quantity (with variance tint) */}
+          <div className={`text-center py-2 rounded-lg ${varianceBgStyles[vState]}`}>
+            <div className={`${er ? "text-sm" : "text-xs"} font-medium text-muted-foreground mb-1`}>On Hand</div>
+            <div className={`${er ? "text-4xl" : "text-3xl"} font-bold`}>{onHand}</div>
+          </div>
+
+          {/* Skip + Add note */}
+          <div className="flex items-center justify-between border-t pt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className={er ? "text-sm" : "text-xs"}
+              onClick={onSkip}
+            >
+              Skip
+            </Button>
+            <button
+              type="button"
+              onClick={() => setLocalShowComment((v) => !v)}
+              className={`${er ? "text-sm" : "text-xs"} text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors`}
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              {localShowComment ? "Hide note" : "Add note"}
+            </button>
+          </div>
+
+          {/* Comment textarea */}
+          {localShowComment && (
+            <Textarea
+              value={comment}
+              onChange={(e) => onCommentChange(e.target.value)}
+              placeholder="Add a note about this item..."
+              className={er ? "text-base" : "text-sm"}
+              rows={2}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Sticky Action Zone — fixed at bottom */}
+      <div className={`fixed bottom-16 left-0 right-0 z-40 border-t shadow-lg ${varianceBarStyles[vState]} safe-area-bottom`}>
+        <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
+          {/* Input row: On-hand | Input | Live variance */}
+          <div className="flex items-center gap-2">
+            <div className="flex flex-col items-center flex-shrink-0 min-w-[3rem]">
+              <span className="text-[10px] text-muted-foreground font-medium">OH</span>
+              <span className={`${er ? "text-lg" : "text-base"} font-bold`}>{onHand}</span>
+            </div>
+            <Input
+              ref={inputRef}
+              type="number"
+              inputMode="decimal"
+              value={qtyValue}
+              onChange={(e) => onQtyChange(e.target.value)}
+              placeholder="Qty"
+              className={`${er ? "h-16 text-3xl" : "h-14 text-2xl"} text-center font-semibold flex-1 ${varianceInputStyles[vState]}`}
+              disabled={isSubmitting}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onSubmit();
+                }
+              }}
+            />
+            <div className="flex flex-col items-center flex-shrink-0 min-w-[3rem]">
+              <span className="text-[10px] text-muted-foreground font-medium">Var</span>
+              {liveVariance !== null && !isNaN(liveVariance) ? (
+                <span className={`${er ? "text-base" : "text-sm"} font-bold px-2 py-0.5 rounded-full ${
+                  vState === "match" ? "text-green-700 bg-green-100" :
+                  vState === "small" ? "text-amber-700 bg-amber-100" :
+                  vState === "large" ? "text-red-700 bg-red-100" : ""
+                }`}>
+                  {liveVariance === 0 ? "MATCH" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground">—</span>
+              )}
+            </div>
+          </div>
+
+          {/* Submit button */}
+          {isMatchValue ? (
+            <Button
+              onClick={onSubmit}
+              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white ${
+                isVerification
+                  ? "bg-purple-600 hover:bg-purple-700"
+                  : "bg-green-600 hover:bg-green-700"
+              }`}
+              disabled={isSubmitting}
+            >
+              {isVerification ? "Submit Verification" : "MATCH"}
+            </Button>
+          ) : (
+            <Button
+              onClick={onSubmit}
+              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white ${
+                isVerification
+                  ? "bg-purple-600 hover:bg-purple-700"
+                  : "bg-amber-500 hover:bg-amber-600"
+              }`}
+              disabled={!qtyValue || isSubmitting}
+            >
+              {isVerification ? "Submit Verification" : "Submit Variance"}
+            </Button>
+          )}
         </div>
-
-        {/* Quantity input */}
-        <Input
-          ref={inputRef}
-          type="number"
-          inputMode="decimal"
-          value={qtyValue}
-          onChange={(e) => onQtyChange(e.target.value)}
-          placeholder="Enter quantity"
-          className="h-20 text-4xl text-center font-semibold"
-          disabled={isSubmitting}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onSubmit();
-            }
-          }}
-        />
-
-        {/* Skip + Add note — above submit so they're visible */}
-        <div className="flex items-center justify-between border-t pt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs"
-            onClick={onSkip}
-          >
-            Skip
-          </Button>
-
-          <button
-            type="button"
-            onClick={() => setLocalShowComment((v) => !v)}
-            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            {localShowComment ? "Hide note" : "Add note"}
-          </button>
-        </div>
-
-        {/* Comment textarea — collapsed by default */}
-        {localShowComment && (
-          <Textarea
-            value={comment}
-            onChange={(e) => onCommentChange(e.target.value)}
-            placeholder="Add a note about this item..."
-            className="text-sm"
-            rows={2}
-          />
-        )}
-
-        {/* MATCH / Submit button */}
-        {isMatchValue ? (
-          <Button
-            onClick={onSubmit}
-            className={`w-full h-14 text-lg font-bold text-white ${
-              isVerification
-                ? "bg-purple-600 hover:bg-purple-700"
-                : "bg-green-600 hover:bg-green-700"
-            }`}
-            disabled={isSubmitting}
-          >
-            {isVerification ? "Submit Verification" : "MATCH"}
-          </Button>
-        ) : (
-          <Button
-            onClick={onSubmit}
-            className={`w-full h-14 text-lg font-bold text-white ${
-              isVerification
-                ? "bg-purple-600 hover:bg-purple-700"
-                : "bg-amber-500 hover:bg-amber-600"
-            }`}
-            disabled={!qtyValue || isSubmitting}
-          >
-            {isVerification ? "Submit Verification" : "Submit Variance"}
-          </Button>
-        )}
-
-        {/* Keyboard hints */}
-        <div className="text-xs text-muted-foreground text-center">
-          Enter = submit · Esc = go back
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </>
   );
 }
 
@@ -380,8 +439,17 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
   const isMatch = variance === 0;
   const isCounted = item.countId !== null;
 
+  // Left border stripe color
+  const borderColor = !isCounted
+    ? "border-l-gray-300"
+    : isMatch
+      ? "border-l-green-500"
+      : Math.abs(variance) <= 5
+        ? "border-l-amber-500"
+        : "border-l-red-500";
+
   return (
-    <div className={`px-4 py-3 border-b last:border-b-0 ${
+    <div className={`px-4 py-3 border-b last:border-b-0 border-l-4 ${borderColor} ${
       !isCounted ? "bg-amber-50/50" : isMatch ? "" : "bg-red-50/30"
     }`}>
       {/* Row 1: Item code + variance badge + recount */}
@@ -397,17 +465,17 @@ export function CountedItemRow({ item, onRecount }: CountedItemRowProps) {
         <div className="flex-1" />
         {isCounted ? (
           <>
-            <Badge
-              className={`text-xs ${
+            <span
+              className={`text-base font-bold px-2.5 py-0.5 rounded-full ${
                 isMatch
-                  ? "bg-green-100 text-green-800 border-green-300"
+                  ? "bg-green-100 text-green-800"
                   : Math.abs(variance) > 5
-                    ? "bg-red-100 text-red-800 border-red-300"
-                    : "bg-amber-100 text-amber-800 border-amber-300"
+                    ? "bg-red-100 text-red-800"
+                    : "bg-amber-100 text-amber-800"
               }`}
             >
               {isMatch ? "Match" : `${variance > 0 ? "+" : ""}${variance}`}
-            </Badge>
+            </span>
             {item.checkStatus === "accepted" && (
               <Badge className="text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
                 Locked

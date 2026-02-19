@@ -1,9 +1,10 @@
 "use client";
 
 import { useAuth } from "@/contexts/auth-context";
+import { useSettings } from "@/contexts/settings-context";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { LogOut, Eye, EyeOff, Smartphone } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface TeamHeaderProps {
@@ -12,6 +13,7 @@ interface TeamHeaderProps {
 
 export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
   const { user, logout } = useAuth();
+  const { settings, toggleEasyRead, toggleHaptic } = useSettings();
   const isOnline = useOnlineStatus();
   const router = useRouter();
 
@@ -54,6 +56,24 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
               </span>
             )
           )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleEasyRead}
+            className={`touch-target ${settings.easyRead ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
+            title="Easy Read"
+          >
+            {settings.easyRead ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleHaptic}
+            className={`touch-target ${settings.hapticFeedback ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
+            title="Haptic Feedback"
+          >
+            <Smartphone className="h-4 w-4" />
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleLogout} className="touch-target">
             <LogOut className="h-4 w-4" />
           </Button>

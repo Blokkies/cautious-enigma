@@ -4,6 +4,7 @@ import { TeamHeader } from "@/components/layout/team-header";
 import { TeamNav } from "@/components/layout/team-nav";
 import { useSync } from "@/hooks/use-sync";
 import { useServiceWorker } from "@/hooks/use-service-worker";
+import { useSettings } from "@/contexts/settings-context";
 
 export default function TeamLayout({
   children,
@@ -12,9 +13,10 @@ export default function TeamLayout({
 }) {
   const sync = useSync();
   useServiceWorker();
+  const { settings } = useSettings();
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50" data-easy-read={settings.easyRead ? "true" : "false"}>
       <TeamHeader pendingSyncs={sync.pendingCount} />
       <main className="pb-20">{children}</main>
       <TeamNav />

@@ -20,12 +20,14 @@ import {
 import { SerializedGroupCard, type SerialGroupResult } from "@/components/counting/serialized-group-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode, Users } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode, Users, LayoutGrid, LayoutList } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
+import { useSettings } from "@/contexts/settings-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
 import { saveCountLocally, markCountSynced, saveDiscrepancyLocally, markDiscrepancySynced } from "@/stores/offline-db";
+import { feedbackMatch, feedbackVariance, feedbackBinComplete } from "@/lib/feedback";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
 
@@ -80,8 +82,27 @@ function naturalCompare(a: string, b: string): number {
   return 0;
 }
 
+/** SVG circular progress indicator */
+function CircularProgress({ percent, size = 28 }: { percent: number; size?: number }) {
+  const strokeWidth = 3;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (percent / 100) * circumference;
+  return (
+    <svg width={size} height={size} className="flex-shrink-0">
+      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-gray-200" />
+      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-blue-500" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" className="fill-current text-muted-foreground" style={{ fontSize: "8px" }}>
+        {percent}%
+      </text>
+    </svg>
+  );
+}
+
 export default function CountingPage() {
   const { user } = useAuth();
+  const { settings, updateSettings } = useSettings();
+  const er = settings.easyRead;
   const sessionKey = `stocktake-last-bin-${user?.id ?? "unknown"}`;
 
   useEffect(() => {
@@ -675,12 +696,18 @@ export default function CountingPage() {
 
     isSubmittingRef.current = true;
     setIsSubmitting(true);
+    const isMatch = qty === (currentItem.onHand ?? 0);
     handleCount(currentItem.id, qty, comment || undefined).finally(() => {
       setShowFlash(true);
       isSubmittingRef.current = false;
       setIsSubmitting(false);
+      if (isMatch) {
+        feedbackMatch(settings.hapticFeedback);
+      } else {
+        feedbackVariance(settings.hapticFeedback);
+      }
     });
-  }, [currentItem, qtyValue, comment, handleCount]);
+  }, [currentItem, qtyValue, comment, handleCount, settings.hapticFeedback]);
 
   const handleFlashComplete = useCallback(() => {
     setShowFlash(false);
@@ -1112,8 +1139,9 @@ export default function CountingPage() {
     setSelectedBin(null);
     setPageState("bin-selection");
     setCurrentIndex(0);
+    feedbackBinComplete(settings.hapticFeedback);
     try { sessionStorage.removeItem(sessionKey); } catch { /* ignore */ }
-  }, []);
+  }, [settings.hapticFeedback]);
 
   // ---------- Recount via full ActiveItemCard ----------
   const startRecount = useCallback((item: CountItem) => {
@@ -1179,24 +1207,23 @@ export default function CountingPage() {
       return (
         <button
           key={bin}
-          className="text-left px-3 py-2.5 rounded-lg border border-blue-200 hover:border-blue-300 hover:shadow-sm transition-all bg-white"
+          className={`text-left px-3 py-2.5 rounded-lg border border-blue-200 hover:border-blue-300 hover:shadow-sm transition-all bg-blue-50`}
           onClick={() => selectBin(bin)}
         >
           <div className="flex items-center gap-1">
-            <span className="font-mono font-bold text-sm truncate">{bin}</span>
+            <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"} truncate`}>{bin}</span>
             {hasSerialized && (
               <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
             )}
           </div>
           <div className="flex items-center justify-between mt-1">
             {!isSingleItem && (
-              <span className="text-[10px] text-muted-foreground">{bStats.pending} left</span>
+              <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground`}>{bStats.pending} left</span>
             )}
-            <span className="text-[10px] font-semibold text-blue-600 ml-auto">{percent}%</span>
+            <CircularProgress percent={percent} />
           </div>
-          <Progress value={percent} className="h-1 mt-1" />
           {bStats.supervisorEdited > 0 && (
-            <span className="text-[10px] font-medium text-indigo-700 mt-1 block">
+            <span className={`${er ? "text-xs" : "text-[10px]"} font-medium text-indigo-700 mt-1 block`}>
               Supervisor edited
             </span>
           )}
@@ -1209,14 +1236,14 @@ export default function CountingPage() {
       return (
         <button
           key={bin}
-          className={`text-left px-3 py-2.5 rounded-lg border hover:shadow-sm transition-all bg-white ${
-            hasVariances ? "border-amber-200 hover:border-amber-300" : "border-green-200 hover:border-green-300"
+          className={`text-left px-3 py-2.5 rounded-lg border hover:shadow-sm transition-all ${
+            hasVariances ? "bg-amber-50 border-amber-200 hover:border-amber-300" : "bg-green-50 border-green-200 hover:border-green-300"
           }`}
           onClick={() => selectBin(bin)}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1 min-w-0">
-              <span className="font-mono font-bold text-sm truncate">{bin}</span>
+              <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"} truncate`}>{bin}</span>
               {hasSerialized && (
                 <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
               )}
@@ -1228,15 +1255,15 @@ export default function CountingPage() {
             )}
           </div>
           {!isSingleItem && (
-            <div className="text-[10px] text-muted-foreground mt-1">{bStats.total} items</div>
+            <div className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground mt-1`}>{bStats.total} items</div>
           )}
           {hasVariances && (
-            <span className="text-[10px] font-medium text-amber-700 mt-0.5 block">
+            <span className={`${er ? "text-xs" : "text-[10px]"} font-medium text-amber-700 mt-0.5 block`}>
               {bStats.variances} variance{bStats.variances !== 1 ? "s" : ""}
             </span>
           )}
           {bStats.supervisorEdited > 0 && (
-            <span className="text-[10px] font-medium text-indigo-700 mt-0.5 block">
+            <span className={`${er ? "text-xs" : "text-[10px]"} font-medium text-indigo-700 mt-0.5 block`}>
               Supervisor edited
             </span>
           )}
@@ -1252,14 +1279,63 @@ export default function CountingPage() {
         onClick={() => selectBin(bin)}
       >
         <div className="flex items-center gap-1">
-          <span className="font-mono font-bold text-sm truncate">{bin}</span>
+          <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"} truncate`}>{bin}</span>
           {hasSerialized && (
             <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
           )}
         </div>
         {!isSingleItem && (
-          <div className="text-[10px] text-muted-foreground mt-1">
+          <div className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground mt-1`}>
             {bStats.total} items
+          </div>
+        )}
+      </button>
+    );
+  }
+
+  function renderBinListItem(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }, variant: "not-started" | "in-progress" | "completed") {
+    const hasSerialized = bStats.serialized > 0;
+    const percent = bStats.total > 0 ? Math.round((bStats.counted / bStats.total) * 100) : 0;
+    const hasVariances = bStats.variances > 0;
+
+    const bgClass = variant === "in-progress"
+      ? "bg-blue-50 border-blue-200"
+      : variant === "completed"
+        ? hasVariances ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"
+        : "bg-white border-border";
+
+    return (
+      <button
+        key={bin}
+        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg border hover:shadow-sm transition-all text-left ${bgClass}`}
+        onClick={() => variant === "completed" ? selectBin(bin) : selectBin(bin)}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"}`}>{bin}</span>
+            {hasSerialized && (
+              <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
+            )}
+          </div>
+          <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground`}>
+            {bStats.total} item{bStats.total !== 1 ? "s" : ""}
+            {variant === "in-progress" && ` · ${bStats.pending} left`}
+            {variant === "completed" && hasVariances && ` · ${bStats.variances} variance${bStats.variances !== 1 ? "s" : ""}`}
+          </span>
+        </div>
+        {variant === "in-progress" && (
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Progress value={percent} className="h-2 w-20" />
+            <span className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-blue-600 min-w-[2rem] text-right`}>{percent}%</span>
+          </div>
+        )}
+        {variant === "completed" && (
+          <div className="flex-shrink-0">
+            {hasVariances ? (
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+            )}
           </div>
         )}
       </button>
@@ -1271,6 +1347,7 @@ export default function CountingPage() {
     variant: "not-started" | "in-progress" | "completed"
   ) {
     const hasMultipleGroups = groups.length > 1;
+    const isListMode = settings.binViewMode === "list";
 
     return groups.map((group) => {
       const isCollapsed = collapsedAisles.has(`${variant}-${group.prefix}`);
@@ -1294,9 +1371,15 @@ export default function CountingPage() {
             </button>
           )}
           {!isCollapsed && (
-            <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-              {group.bins.map(([bin, bStats]) => renderBinButton(bin, bStats, variant))}
-            </div>
+            isListMode ? (
+              <div className="space-y-2">
+                {group.bins.map(([bin, bStats]) => renderBinListItem(bin, bStats, variant))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                {group.bins.map(([bin, bStats]) => renderBinButton(bin, bStats, variant))}
+              </div>
+            )
           )}
         </div>
       );
@@ -1364,8 +1447,8 @@ export default function CountingPage() {
           </div>
         </div>
 
-        {/* Main content */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Main content — extra pb for sticky action bar */}
+        <div className="flex-1 overflow-y-auto p-4 pb-52 space-y-4">
           <div className="max-w-lg mx-auto">
             {currentVerificationEntry.type === "serialized-group" ? (
               <SerializedGroupCard
@@ -1686,8 +1769,8 @@ export default function CountingPage() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <Progress value={stats.progressPercent} className="h-3 flex-1" />
-            <span className="text-sm font-semibold text-primary min-w-[3rem] text-right">
+            <Progress value={stats.progressPercent} className={`${er ? "h-4" : "h-3"} flex-1`} />
+            <span className={`${er ? "text-base" : "text-sm"} font-semibold text-primary min-w-[3rem] text-right`}>
               {stats.progressPercent}%
             </span>
           </div>
@@ -1781,8 +1864,15 @@ export default function CountingPage() {
         {/* Tabs (hidden during search) */}
         {!search.trim() && (
           <div className="border-b bg-muted/30">
-            <div className="px-4 pt-3 pb-1">
-              <h1 className="text-lg font-semibold">Select a Bin</h1>
+            <div className="px-4 pt-3 pb-1 flex items-center justify-between">
+              <h1 className={`${er ? "text-xl" : "text-lg"} font-semibold`}>Select a Bin</h1>
+              <button
+                onClick={() => updateSettings({ binViewMode: settings.binViewMode === "grid" ? "list" : "grid" })}
+                className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title={settings.binViewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
+              >
+                {settings.binViewMode === "grid" ? <LayoutList className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
+              </button>
             </div>
             <div className="flex gap-2 px-4 pb-2 overflow-x-auto">
               {([
@@ -2087,7 +2177,7 @@ export default function CountingPage() {
         </div>
 
         {/* Main content — same ActiveItemCard as initial counting */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 pb-52 space-y-4">
           <div className="max-w-lg mx-auto">
             <ActiveItemCard
               item={recountItem}
@@ -2255,8 +2345,8 @@ export default function CountingPage() {
         <Progress value={scopedStats.percent} className="h-2" />
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Main content — extra pb for sticky action bar */}
+      <div className="flex-1 overflow-y-auto p-4 pb-52 space-y-4">
         {/* Active item or serialized group */}
         <div className="max-w-lg mx-auto">
           {currentEntry.type === "serialized-group" ? (

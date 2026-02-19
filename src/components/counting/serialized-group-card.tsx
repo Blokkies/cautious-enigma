@@ -9,6 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageSquare, ScanBarcode, X, Check, RotateCcw, ChevronDown, ChevronUp, Search } from "lucide-react";
 import { SuccessFlash } from "./success-flash";
 import { getStockStatusStyle, type QueueEntry } from "./item-card";
+import { useSettings } from "@/contexts/settings-context";
+import { feedbackScan } from "@/lib/feedback";
 
 const EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -73,6 +75,8 @@ export function SerializedGroupCard({
   comment,
   onCommentChange,
 }: SerializedGroupCardProps) {
+  const { settings } = useSettings();
+  const er = settings.easyRead;
   const storageKey = `serial-progress-${entry.items[0]?.id}`;
   const currentItemIds = React.useMemo(
     () => new Set(entry.items.map((i) => i.id)),
@@ -191,6 +195,7 @@ export function SerializedGroupCard({
         setToggles((prev) => ({ ...prev, [matchedItem.id]: "found" }));
         setHighlightedItemId(matchedItem.id);
         setScanMessage({ text: `${matchedItem.serialNumber} — matched!`, type: "success" });
+        feedbackScan(settings.hapticFeedback);
       }
     } else {
       // Not in this group — check if it belongs to another bin
@@ -252,296 +257,298 @@ export function SerializedGroupCard({
   }
 
   return (
-    <Card className="border-2 relative border-purple-400">
-      {showSuccessFlash && onFlashComplete && (
-        <SuccessFlash onComplete={onFlashComplete} />
-      )}
-      <CardContent className="p-4 space-y-4">
-        {/* Bin number — prominent on card */}
-        {entry.items[0]?.binNumber && (
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-2">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
-            <span className="font-mono font-bold text-base">{entry.items[0].binNumber}</span>
-          </div>
+    <>
+      <Card className={`${er ? "border-[3px]" : "border-2"} relative border-purple-400`}>
+        {showSuccessFlash && onFlashComplete && (
+          <SuccessFlash onComplete={onFlashComplete} />
         )}
-
-        {/* Item Code — labeled */}
-        <div className="space-y-1">
-          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Item Code</div>
-          <div className="font-mono font-bold text-xl tracking-tight">
-            {entry.itemCode}
-          </div>
-        </div>
-
-        {/* Description — labeled */}
-        {entry.description && (
-          <div className="space-y-0.5">
-            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Description</div>
-            <div className="text-sm leading-snug">
-              {entry.description}
+        <CardContent className={`p-4 ${er ? "space-y-5" : "space-y-4"} pb-52`}>
+          {/* Bin number */}
+          {entry.items[0]?.binNumber && (
+            <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : "py-2"}`}>
+              <span className={`${er ? "text-sm" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
+              <span className={`font-mono font-bold ${er ? "text-lg" : "text-base"}`}>{entry.items[0].binNumber}</span>
             </div>
-          </div>
-        )}
-
-        {/* Metadata badges */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {entry.brand && (
-            <Badge variant="secondary" className="text-xs">
-              {entry.brand}
-            </Badge>
           )}
-          {entry.stockStatus && (
-            <Badge className={`text-xs ${getStockStatusStyle(entry.stockStatus)}`}>
-              {entry.stockStatus}
-            </Badge>
-          )}
-          <Badge className="text-xs bg-purple-100 text-purple-800 border-purple-300">
-            Serialized
-          </Badge>
-          <Badge variant="outline" className="text-xs">
-            {entry.items.length} serial{entry.items.length !== 1 ? "s" : ""}
-          </Badge>
-        </div>
 
-        {/* Scanner instructions */}
-        <div className="text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5">
-          Scan found serials, then submit. Unscanned = Not Found
-        </div>
-
-        {/* Scanner input */}
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              ref={scanInputRef}
-              value={scanInput}
-              onChange={(e) => setScanInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleScan();
-                }
-              }}
-              placeholder="Scan or type serial number..."
-              className="pl-9 h-10"
-            />
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-10 w-10 flex-shrink-0"
-            onClick={handleScan}
-            disabled={!scanInput.trim()}
-          >
-            <Check className="h-4 w-4" />
-          </Button>
-        </div>
-        {scanMessage && (
-          <div className={`text-xs font-medium px-3 py-1.5 rounded-md ${
-            scanMessage.type === "success"
-              ? "text-green-800 bg-green-100 border border-green-200"
-              : scanMessage.type === "cross-bin"
-                ? "text-amber-800 bg-amber-100 border border-amber-200"
-                : scanMessage.type === "unknown"
-                  ? "text-red-800 bg-red-100 border border-red-200"
-                  : "text-amber-800 bg-amber-100 border border-amber-200"
-          }`}>
-            {scanMessage.type === "success" ? "\u2713" : scanMessage.type === "unknown" ? "\u2717" : "\u2022"} {scanMessage.text}
-          </div>
-        )}
-
-        {/* Unknown serials list */}
-        {unknownSerials.length > 0 && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
-            <div className="text-xs font-medium text-amber-800">
-              Unknown serials ({unknownSerials.length}) — will be sent to supervisor
-            </div>
-            <div className="space-y-1">
-              {unknownSerials.map((serial, idx) => (
-                <div
-                  key={`${serial}-${idx}`}
-                  className="flex items-center gap-2 text-sm font-mono text-amber-900 bg-amber-100/50 px-2 py-1 rounded"
-                >
-                  <span className="flex-1 truncate">{serial}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeUnknownSerial(idx)}
-                    className="text-amber-600 hover:text-amber-800 flex-shrink-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
+          {/* Item Code */}
+          <div className="space-y-1">
+            <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
+            <div className={`font-mono font-bold ${er ? "text-2xl" : "text-xl"} tracking-tight`}>
+              {entry.itemCode}
             </div>
           </div>
-        )}
 
-        {/* Collapsible serial number list */}
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={() => setShowList((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors"
-          >
-            <span className="text-sm font-medium">
-              {showList ? "Hide" : "Show"} serial list
-            </span>
-            <div className="flex items-center gap-2">
-              {foundCount > 0 && (
-                <span className="text-xs text-green-700 bg-green-100 px-1.5 py-0.5 rounded">
-                  {foundCount} found
-                </span>
-              )}
-              {notFoundCount > 0 && (
-                <span className="text-xs text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
-                  {notFoundCount} not found
-                </span>
-              )}
-              {showList ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            </div>
-          </button>
-
-          {showList && (
-            <div className="space-y-2">
-              {/* Filter input */}
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  placeholder="Filter serials..."
-                  className="pl-9 h-8 text-sm"
-                />
+          {/* Description */}
+          {entry.description && (
+            <div className="space-y-0.5">
+              <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
+              <div className={`${er ? "text-base" : "text-sm"} leading-snug`}>
+                {entry.description}
               </div>
+            </div>
+          )}
 
-              <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
-                {filteredItems.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-3">
-                    No serials match &ldquo;{filterText}&rdquo;
+          {/* Metadata badges */}
+          <div className={`flex flex-wrap items-center ${er ? "gap-2" : "gap-1.5"}`}>
+            {entry.brand && (
+              <Badge variant="secondary" className={er ? "text-sm" : "text-xs"}>
+                {entry.brand}
+              </Badge>
+            )}
+            {entry.stockStatus && (
+              <Badge className={`${er ? "text-sm" : "text-xs"} ${getStockStatusStyle(entry.stockStatus)}`}>
+                {entry.stockStatus}
+              </Badge>
+            )}
+            <Badge className={`${er ? "text-sm" : "text-xs"} bg-purple-100 text-purple-800 border-purple-300`}>
+              Serialized
+            </Badge>
+            <Badge variant="outline" className={er ? "text-sm" : "text-xs"}>
+              {entry.items.length} serial{entry.items.length !== 1 ? "s" : ""}
+            </Badge>
+          </div>
+
+          {/* Scanner instructions */}
+          <div className={`${er ? "text-sm" : "text-xs"} text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5`}>
+            Scan found serials, then submit. Unscanned = Not Found
+          </div>
+
+          {/* Scanner input */}
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                ref={scanInputRef}
+                value={scanInput}
+                onChange={(e) => setScanInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleScan();
+                  }
+                }}
+                placeholder="Scan or type serial number..."
+                className={`pl-9 ${er ? "h-12 text-base" : "h-10"}`}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className={`${er ? "h-12 w-12" : "h-10 w-10"} flex-shrink-0`}
+              onClick={handleScan}
+              disabled={!scanInput.trim()}
+            >
+              <Check className="h-4 w-4" />
+            </Button>
+          </div>
+          {scanMessage && (
+            <div className={`${er ? "text-sm" : "text-xs"} font-medium px-3 py-1.5 rounded-md ${
+              scanMessage.type === "success"
+                ? "text-green-800 bg-green-100 border border-green-200"
+                : scanMessage.type === "cross-bin"
+                  ? "text-amber-800 bg-amber-100 border border-amber-200"
+                  : scanMessage.type === "unknown"
+                    ? "text-red-800 bg-red-100 border border-red-200"
+                    : "text-amber-800 bg-amber-100 border border-amber-200"
+            }`}>
+              {scanMessage.type === "success" ? "\u2713" : scanMessage.type === "unknown" ? "\u2717" : "\u2022"} {scanMessage.text}
+            </div>
+          )}
+
+          {/* Unknown serials list */}
+          {unknownSerials.length > 0 && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+              <div className={`${er ? "text-sm" : "text-xs"} font-medium text-amber-800`}>
+                Unknown serials ({unknownSerials.length}) — will be sent to supervisor
+              </div>
+              <div className="space-y-1">
+                {unknownSerials.map((serial, idx) => (
+                  <div
+                    key={`${serial}-${idx}`}
+                    className="flex items-center gap-2 text-sm font-mono text-amber-900 bg-amber-100/50 px-2 py-1 rounded"
+                  >
+                    <span className="flex-1 truncate">{serial}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeUnknownSerial(idx)}
+                      className="text-amber-600 hover:text-amber-800 flex-shrink-0"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                ) : (
-                  filteredItems.map((item) => (
-                    <SerialRow
-                      key={item.id}
-                      item={item}
-                      status={toggles[item.id]}
-                      onToggle={() => toggleItem(item.id)}
-                      isHighlighted={highlightedItemId === item.id}
-                    />
-                  ))
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Collapsible serial number list */}
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowList((v) => !v)}
+              className={`w-full flex items-center justify-between px-3 ${er ? "py-3" : "py-2"} rounded-lg border bg-muted/50 hover:bg-muted transition-colors`}
+            >
+              <span className={`${er ? "text-base" : "text-sm"} font-medium`}>
+                {showList ? "Hide" : "Show"} serial list
+              </span>
+              <div className="flex items-center gap-2">
+                {foundCount > 0 && (
+                  <span className="text-xs text-green-700 bg-green-100 px-1.5 py-0.5 rounded">
+                    {foundCount} found
+                  </span>
+                )}
+                {notFoundCount > 0 && (
+                  <span className="text-xs text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
+                    {notFoundCount} not found
+                  </span>
+                )}
+                {showList ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </div>
+            </button>
+
+            {showList && (
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    value={filterText}
+                    onChange={(e) => setFilterText(e.target.value)}
+                    placeholder="Filter serials..."
+                    className="pl-9 h-8 text-sm"
+                  />
+                </div>
+
+                <div className="space-y-1.5 max-h-[300px] overflow-y-auto">
+                  {filteredItems.length === 0 ? (
+                    <div className="text-xs text-muted-foreground text-center py-3">
+                      No serials match &ldquo;{filterText}&rdquo;
+                    </div>
+                  ) : (
+                    filteredItems.map((item) => (
+                      <SerialRow
+                        key={item.id}
+                        item={item}
+                        status={toggles[item.id]}
+                        onToggle={() => toggleItem(item.id)}
+                        isHighlighted={highlightedItemId === item.id}
+                      />
+                    ))
+                  )}
+                </div>
+                {filterText && filteredItems.length < entry.items.length && (
+                  <div className="text-xs text-muted-foreground text-center">
+                    Showing {filteredItems.length} of {entry.items.length} serials
+                  </div>
                 )}
               </div>
-              {filterText && filteredItems.length < entry.items.length && (
-                <div className="text-xs text-muted-foreground text-center">
-                  Showing {filteredItems.length} of {entry.items.length} serials
-                </div>
-              )}
+            )}
+          </div>
+
+          {/* Skip + Add note */}
+          <div className="flex items-center justify-between border-t pt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className={er ? "text-sm" : "text-xs"}
+              onClick={onSkip}
+            >
+              Skip
+            </Button>
+            <button
+              type="button"
+              onClick={() => setShowComment((v) => !v)}
+              className={`${er ? "text-sm" : "text-xs"} text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors`}
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              {showComment ? "Hide note" : "Add note"}
+            </button>
+          </div>
+
+          {/* Comment textarea */}
+          {showComment && (
+            <Textarea
+              value={comment}
+              onChange={(e) => onCommentChange(e.target.value)}
+              placeholder="Add a note about this group..."
+              className={er ? "text-base" : "text-sm"}
+              rows={2}
+            />
+          )}
+
+          {restoredProgress && (
+            <div className="flex items-center justify-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-1.5">
+              <RotateCcw className="h-3 w-3" />
+              Progress restored from previous session
             </div>
           )}
-        </div>
+        </CardContent>
+      </Card>
 
-        {/* Summary + Submit button */}
-        <div className="text-center text-sm text-muted-foreground">
-          {foundCount} found · {notFoundCount} not found
-        </div>
-        {restoredProgress && (
-          <div className="flex items-center justify-center gap-1.5 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-1.5">
-            <RotateCcw className="h-3 w-3" />
-            Progress restored from previous session
+      {/* Sticky Action Zone — fixed at bottom */}
+      <div className="fixed bottom-16 left-0 right-0 z-40 border-t shadow-lg bg-white safe-area-bottom">
+        <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
+          {/* Summary */}
+          <div className={`text-center ${er ? "text-base" : "text-sm"} text-muted-foreground`}>
+            {foundCount} found · {notFoundCount} not found
           </div>
-        )}
-        {/* Skip + Add note — above submit so they're visible */}
-        <div className="flex items-center justify-between border-t pt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs"
-            onClick={onSkip}
-          >
-            Skip
-          </Button>
 
-          <button
-            type="button"
-            onClick={() => setShowComment((v) => !v)}
-            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            {showComment ? "Hide note" : "Add note"}
-          </button>
-        </div>
-
-        {/* Comment textarea */}
-        {showComment && (
-          <Textarea
-            value={comment}
-            onChange={(e) => onCommentChange(e.target.value)}
-            placeholder="Add a note about this group..."
-            className="text-sm"
-            rows={2}
-          />
-        )}
-
-        {/* Confirmation banner */}
-        {showConfirm && notFoundCount > 0 && (
-          <div className="rounded-lg border border-red-300 bg-red-50 p-3 space-y-2">
-            <div className="text-sm font-medium text-red-800">
-              {notFoundCount} serial{notFoundCount !== 1 ? "s" : ""} will be marked as Not Found
+          {/* Confirmation banner */}
+          {showConfirm && notFoundCount > 0 && (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-3 space-y-2">
+              <div className="text-sm font-medium text-red-800">
+                {notFoundCount} serial{notFoundCount !== 1 ? "s" : ""} will be marked as Not Found
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={doSubmit}
+                  size="sm"
+                  className="bg-red-600 hover:bg-red-700 text-white"
+                  disabled={isSubmitting}
+                >
+                  Confirm Submit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowConfirm(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <Button
-                onClick={doSubmit}
-                size="sm"
-                className="bg-red-600 hover:bg-red-700 text-white"
-                disabled={isSubmitting}
-              >
-                Confirm Submit
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowConfirm(false)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
+          )}
 
-        {/* Submit button */}
-        {allFound ? (
-          <Button
-            onClick={handleSubmitClick}
-            className="w-full h-14 text-lg font-bold text-white bg-green-600 hover:bg-green-700"
-            disabled={isSubmitting}
-          >
-            All Match
-          </Button>
-        ) : allNotFound ? (
-          <Button
-            onClick={handleSubmitClick}
-            className="w-full h-14 text-lg font-bold text-white bg-red-600 hover:bg-red-700"
-            disabled={isSubmitting}
-          >
-            Submit All Not Found
-          </Button>
-        ) : (
-          <Button
-            onClick={handleSubmitClick}
-            className="w-full h-14 text-lg font-bold text-white bg-amber-500 hover:bg-amber-600"
-            disabled={isSubmitting}
-          >
-            Submit — {foundCount} Found, {notFoundCount} Not Found
-          </Button>
-        )}
-
-        {/* Keyboard hints */}
-        <div className="text-xs text-muted-foreground text-center">
-          Esc = go back
+          {/* Submit button */}
+          {allFound ? (
+            <Button
+              onClick={handleSubmitClick}
+              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white bg-green-600 hover:bg-green-700`}
+              disabled={isSubmitting}
+            >
+              All Match
+            </Button>
+          ) : allNotFound ? (
+            <Button
+              onClick={handleSubmitClick}
+              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white bg-red-600 hover:bg-red-700`}
+              disabled={isSubmitting}
+            >
+              Submit All Not Found
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSubmitClick}
+              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white bg-amber-500 hover:bg-amber-600`}
+              disabled={isSubmitting}
+            >
+              Submit — {foundCount} Found, {notFoundCount} Not Found
+            </Button>
+          )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </>
   );
 }
 

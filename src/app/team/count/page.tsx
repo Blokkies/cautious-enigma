@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
-import { saveCountLocally, markCountSynced } from "@/stores/offline-db";
+import { saveCountLocally, markCountSynced, saveDiscrepancyLocally, markDiscrepancySynced } from "@/stores/offline-db";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
 
@@ -702,21 +702,37 @@ export default function CountingPage() {
 
         // Send unknown serials as a single discrepancy record to supervisor
         if (unknownSerials && unknownSerials.length > 0 && currentEntry?.type === "serialized-group") {
+          const discClientId = crypto.randomUUID();
+          const discData = {
+            itemCode: currentEntry.itemCode,
+            description: currentEntry.description || null,
+            binNumber: selectedBin === "No Bin" ? null : selectedBin,
+            binInternalId: currentEntry.items[0]?.binInternalId || null,
+            unknownSerials,
+          };
+
+          // Save to IndexedDB first so data survives offline/browser close
           try {
-            await fetch("/api/team/serial-discrepancies", {
+            await saveDiscrepancyLocally({
+              clientId: discClientId,
+              ...discData,
+              createdAt: new Date().toISOString(),
+            });
+          } catch {
+            // IndexedDB unavailable — continue with POST
+          }
+
+          try {
+            const res = await fetch("/api/team/serial-discrepancies", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                itemCode: currentEntry.itemCode,
-                description: currentEntry.description || null,
-                binNumber: selectedBin === "No Bin" ? null : selectedBin,
-                binInternalId: currentEntry.items[0]?.binInternalId || null,
-                unknownSerials,
-              }),
+              body: JSON.stringify(discData),
             });
+            if (!res.ok) throw new Error("Failed");
+            try { await markDiscrepancySynced(discClientId); } catch { /* ok */ }
             toast.info(`${unknownSerials.length} unknown serial(s) sent to supervisor for review`);
           } catch {
-            toast.error("Failed to send unknown serials to supervisor");
+            toast.info(`${unknownSerials.length} unknown serial(s) saved — will send to supervisor when online`);
           }
         }
 
@@ -926,21 +942,37 @@ export default function CountingPage() {
 
         // Send unknown serials as discrepancy
         if (unknownSerials && unknownSerials.length > 0) {
+          const discClientId = crypto.randomUUID();
+          const discData = {
+            itemCode: currentEntry.itemCode,
+            description: currentEntry.description || null,
+            binNumber: selectedVerificationBin === "No Bin" ? null : selectedVerificationBin,
+            binInternalId: null,
+            unknownSerials,
+          };
+
+          // Save to IndexedDB first so data survives offline/browser close
           try {
-            await fetch("/api/team/serial-discrepancies", {
+            await saveDiscrepancyLocally({
+              clientId: discClientId,
+              ...discData,
+              createdAt: new Date().toISOString(),
+            });
+          } catch {
+            // IndexedDB unavailable — continue with POST
+          }
+
+          try {
+            const res = await fetch("/api/team/serial-discrepancies", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                itemCode: currentEntry.itemCode,
-                description: currentEntry.description || null,
-                binNumber: selectedVerificationBin === "No Bin" ? null : selectedVerificationBin,
-                binInternalId: null,
-                unknownSerials,
-              }),
+              body: JSON.stringify(discData),
             });
+            if (!res.ok) throw new Error("Failed");
+            try { await markDiscrepancySynced(discClientId); } catch { /* ok */ }
             toast.info(`${unknownSerials.length} unknown serial(s) sent to supervisor for review`);
           } catch {
-            toast.error("Failed to send unknown serials to supervisor");
+            toast.info(`${unknownSerials.length} unknown serial(s) saved — will send to supervisor when online`);
           }
         }
 

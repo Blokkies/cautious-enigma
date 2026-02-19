@@ -29,6 +29,17 @@ export interface OfflineCount {
   synced: number; // 0 = unsynced, 1 = synced (number for IndexedDB indexing)
 }
 
+export interface OfflineSerialDiscrepancy {
+  clientId: string; // UUID for dedup
+  itemCode: string;
+  description: string | null;
+  binNumber: string | null;
+  binInternalId: string | null;
+  unknownSerials: string[];
+  createdAt: string;
+  synced: number; // 0 = unsynced, 1 = synced
+}
+
 export interface SyncMeta {
   key: string;
   value: string;
@@ -37,6 +48,7 @@ export interface SyncMeta {
 class StocktakeOfflineDB extends Dexie {
   items!: Table<OfflineItem, number>;
   counts!: Table<OfflineCount, string>;
+  serialDiscrepancies!: Table<OfflineSerialDiscrepancy, string>;
   meta!: Table<SyncMeta, string>;
 
   constructor() {
@@ -50,7 +62,6 @@ class StocktakeOfflineDB extends Dexie {
     });
 
     // v2: synced changed from boolean to number (0/1) for reliable IndexedDB indexing
-    // No schema change needed (same indexes), just data migration
     this.version(2).stores({
       items: "id, binNumber, itemCode, brand",
       counts: "clientId, itemId, synced",
@@ -59,6 +70,14 @@ class StocktakeOfflineDB extends Dexie {
       return tx.table("counts").toCollection().modify(count => {
         count.synced = count.synced ? 1 : 0;
       });
+    });
+
+    // v3: add serialDiscrepancies table for offline unknown serial queuing
+    this.version(3).stores({
+      items: "id, binNumber, itemCode, brand",
+      counts: "clientId, itemId, synced",
+      serialDiscrepancies: "clientId, synced",
+      meta: "key",
     });
   }
 }
@@ -142,53 +161,98 @@ export async function markSynced(clientIds: string[]): Promise<void> {
     .modify({ synced: 1 });
 }
 
+// ─── Save a serial discrepancy locally ──────────────────────────────────────
+export async function saveDiscrepancyLocally(
+  discrepancy: Omit<OfflineSerialDiscrepancy, "synced">
+): Promise<void> {
+  await offlineDb.serialDiscrepancies.put({ ...discrepancy, synced: 0 });
+}
+
+// ─── Mark a single discrepancy as synced ────────────────────────────────────
+export async function markDiscrepancySynced(clientId: string): Promise<void> {
+  await offlineDb.serialDiscrepancies.update(clientId, { synced: 1 });
+}
+
 // ─── Sync queue - push unsynced counts to server ────────────────────────────
 export async function syncToServer(): Promise<{
   synced: number;
   failed: number;
 }> {
-  const unsynced = await getUnsyncedCounts();
-  if (unsynced.length === 0) return { synced: 0, failed: 0 };
+  let totalSynced = 0;
+  let totalFailed = 0;
 
-  try {
-    const res = await fetch("/api/team/count", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        counts: unsynced.map((c) => ({
-          itemId: c.itemId,
-          countedQty: c.countedQty,
-          isMatch: c.isMatch,
-          comment: c.comment,
-          clientId: c.clientId,
-        })),
-      }),
-    });
+  // ── Sync counts ──
+  const unsyncedCounts = await getUnsyncedCounts();
+  if (unsyncedCounts.length > 0) {
+    try {
+      const res = await fetch("/api/team/count", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          counts: unsyncedCounts.map((c) => ({
+            itemId: c.itemId,
+            countedQty: c.countedQty,
+            isMatch: c.isMatch,
+            comment: c.comment,
+            clientId: c.clientId,
+          })),
+        }),
+      });
 
-    if (res.ok) {
-      const data = await res.json();
-      // Match results by index (server returns in same order as input)
-      const successIds: string[] = [];
-      (data.results as Array<{ success?: boolean; deduplicated?: boolean }>).forEach(
-        (r, i) => {
-          if (r.success || r.deduplicated) {
-            successIds.push(unsynced[i].clientId);
+      if (res.ok) {
+        const data = await res.json();
+        const successIds: string[] = [];
+        (data.results as Array<{ success?: boolean; deduplicated?: boolean }>).forEach(
+          (r, i) => {
+            if (r.success || r.deduplicated) {
+              successIds.push(unsyncedCounts[i].clientId);
+            }
           }
-        }
-      );
+        );
 
-      await markSynced(successIds);
-
-      return {
-        synced: successIds.length,
-        failed: unsynced.length - successIds.length,
-      };
+        await markSynced(successIds);
+        totalSynced += successIds.length;
+        totalFailed += unsyncedCounts.length - successIds.length;
+      } else {
+        totalFailed += unsyncedCounts.length;
+      }
+    } catch {
+      totalFailed += unsyncedCounts.length;
     }
-
-    return { synced: 0, failed: unsynced.length };
-  } catch {
-    return { synced: 0, failed: unsynced.length };
   }
+
+  // ── Sync serial discrepancies ──
+  const unsyncedDisc = await offlineDb.serialDiscrepancies
+    .where("synced")
+    .equals(0)
+    .toArray();
+
+  for (const disc of unsyncedDisc) {
+    try {
+      const res = await fetch("/api/team/serial-discrepancies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          itemCode: disc.itemCode,
+          description: disc.description,
+          binNumber: disc.binNumber,
+          binInternalId: disc.binInternalId,
+          unknownSerials: disc.unknownSerials,
+        }),
+      });
+
+      if (res.ok) {
+        await markDiscrepancySynced(disc.clientId);
+        totalSynced++;
+      } else {
+        totalFailed++;
+      }
+    } catch {
+      totalFailed++;
+    }
+  }
+
+  return { synced: totalSynced, failed: totalFailed };
 }
 
 // ─── Get local items (for offline mode) ─────────────────────────────────────
@@ -198,12 +262,15 @@ export async function getLocalItems(): Promise<OfflineItem[]> {
 
 // ─── Get pending sync count ─────────────────────────────────────────────────
 export async function getPendingSyncCount(): Promise<number> {
-  return offlineDb.counts.where("synced").equals(0).count();
+  const pendingCounts = await offlineDb.counts.where("synced").equals(0).count();
+  const pendingDisc = await offlineDb.serialDiscrepancies.where("synced").equals(0).count();
+  return pendingCounts + pendingDisc;
 }
 
 // ─── Clear all offline data ─────────────────────────────────────────────────
 export async function clearOfflineData(): Promise<void> {
   await offlineDb.items.clear();
   await offlineDb.counts.clear();
+  await offlineDb.serialDiscrepancies.clear();
   await offlineDb.meta.clear();
 }

@@ -50,7 +50,11 @@ export default function SupervisorMessages() {
   useEffect(() => {
     fetchMessages();
     markNotificationSeen("supervisorExecMessages");
-    const interval = setInterval(fetchMessages, 5000);
+    const interval = setInterval(() => {
+      fetchMessages();
+      // Keep marking as seen while on this page so banner stays dismissed
+      markNotificationSeen("supervisorExecMessages");
+    }, 5000);
     return () => clearInterval(interval);
   }, [fetchMessages]);
 

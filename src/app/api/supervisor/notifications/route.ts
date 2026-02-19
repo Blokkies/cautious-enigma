@@ -68,31 +68,15 @@ export async function GET(request: NextRequest) {
   const serialsCountVal = Number((serialsResult[0] as Record<string, unknown>)?.count ?? 0);
 
   // Count exec messages from executives/admins since lastSeen
-  // Use two strategies: lastSeen-based AND "awaiting reply" (last message is from exec/admin)
+  // Cast to timestamptz to avoid text comparison issues between ISO and PG formats
   const execMessagesResult = await db.execute(
     sql`SELECT COUNT(*) as count
         FROM exec_messages
         WHERE supervisor_id = ${user.id}
           AND sender_type IN ('executive', 'admin')
-          AND created_at > ${lastSeenExecMessages}`
+          AND created_at::timestamptz > ${lastSeenExecMessages}::timestamptz`
   );
-  const execMessagesLastSeenCount = Number((execMessagesResult[0] as Record<string, unknown>)?.count ?? 0);
-
-  // Also check if the most recent message in any thread is from an exec/admin (awaiting reply)
-  const awaitingReplyResult = await db.execute(
-    sql`SELECT COUNT(*) as count FROM exec_messages em1
-        WHERE em1.supervisor_id = ${user.id}
-          AND em1.sender_type IN ('executive', 'admin')
-          AND em1.id = (
-            SELECT id FROM exec_messages em2
-            WHERE em2.supervisor_id = em1.supervisor_id
-            ORDER BY em2.created_at DESC LIMIT 1
-          )`
-  );
-  const awaitingReplyCount = Number((awaitingReplyResult[0] as Record<string, unknown>)?.count ?? 0);
-
-  // Use the higher of the two — ensures banner shows even if lastSeen timestamp was set
-  const execMessagesCountVal = Math.max(execMessagesLastSeenCount, awaitingReplyCount);
+  const execMessagesCountVal = Number((execMessagesResult[0] as Record<string, unknown>)?.count ?? 0);
 
   return NextResponse.json({
     queries: queriesCountVal,

@@ -327,7 +327,7 @@ export function ActiveItemCard({
           <div className="flex items-center gap-3">
             <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5rem]" : "min-w-[4.5rem]"}`}>
               <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>OH</span>
-              <span className={`${er ? "text-5xl" : "text-3xl"} font-bold`}>{onHand}</span>
+              <span className={`${er ? "text-4xl" : "text-3xl"} font-bold`}>{onHand}</span>
             </div>
             <Input
               ref={inputRef}
@@ -336,7 +336,7 @@ export function ActiveItemCard({
               value={qtyValue}
               onChange={(e) => onQtyChange(e.target.value)}
               placeholder="Qty"
-              className={`${er ? "h-32 text-7xl md:text-7xl" : "h-24 text-6xl md:text-6xl"} text-center font-bold flex-1 ${varianceInputStyles[vState]}`}
+              className={`${er ? "h-24 text-5xl md:text-5xl" : "h-20 text-4xl md:text-4xl"} text-center font-bold flex-1 ${varianceInputStyles[vState]}`}
               disabled={isSubmitting}
               onWheel={(e) => e.currentTarget.blur()}
               onKeyDown={(e) => {
@@ -349,7 +349,7 @@ export function ActiveItemCard({
             <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5rem]" : "min-w-[4.5rem]"}`}>
               <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>Var</span>
               {liveVariance !== null && !isNaN(liveVariance) ? (
-                <span className={`${er ? "text-5xl" : "text-3xl"} font-bold px-2 py-0.5 rounded-full ${
+                <span className={`${er ? "text-4xl" : "text-3xl"} font-bold px-2 py-0.5 rounded-full ${
                   vState === "match" ? "text-green-700 bg-green-100" :
                   vState === "small" ? "text-amber-700 bg-amber-100" :
                   vState === "large" ? "text-red-700 bg-red-100" : ""
@@ -357,7 +357,7 @@ export function ActiveItemCard({
                   {liveVariance === 0 ? "MATCH" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
                 </span>
               ) : (
-                <span className={`${er ? "text-5xl" : "text-3xl"} text-muted-foreground`}>—</span>
+                <span className={`${er ? "text-4xl" : "text-3xl"} text-muted-foreground`}>—</span>
               )}
             </div>
           </div>

@@ -20,7 +20,7 @@ import {
 import { SerializedGroupCard, type SerialGroupResult } from "@/components/counting/serialized-group-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode, Users, LayoutGrid, LayoutList } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode, Users, LayoutGrid, LayoutList, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
@@ -133,6 +133,7 @@ export default function CountingPage() {
   const [binTab, setBinTab] = useState<BinTab>("not-started");
   const [completedFilter, setCompletedFilter] = useState<"all" | "variances" | "matched">("all");
   const [serializedOnly, setSerializedOnly] = useState(false);
+  const [multiItemOnly, setMultiItemOnly] = useState(false);
 
   // Verification
   const [verificationItems, setVerificationItems] = useState<VerificationItem[]>([]);
@@ -232,11 +233,12 @@ export default function CountingPage() {
   const binStats = useMemo(() => {
     const map = new Map<
       string,
-      { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }
+      { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number; lineItems: number }
     >();
+    const binItemCodes = new Map<string, Set<string>>();
     for (const item of items) {
       const bin = item.binNumber || "No Bin";
-      const entry = map.get(bin) || { total: 0, pending: 0, counted: 0, matches: 0, variances: 0, supervisorEdited: 0, serialized: 0 };
+      const entry = map.get(bin) || { total: 0, pending: 0, counted: 0, matches: 0, variances: 0, supervisorEdited: 0, serialized: 0, lineItems: 0 };
       entry.total++;
       if (item.isSerialized === 1 || item.isSerialized === true) {
         entry.serialized++;
@@ -255,7 +257,15 @@ export default function CountingPage() {
         }
       }
       map.set(bin, entry);
+      // Track unique item codes per bin for line item count
+      if (!binItemCodes.has(bin)) binItemCodes.set(bin, new Set());
+      binItemCodes.get(bin)!.add(item.itemCode);
     }
+    // Set lineItems count from unique item codes
+    binItemCodes.forEach((codes, bin) => {
+      const entry = map.get(bin);
+      if (entry) entry.lineItems = codes.size;
+    });
     const entries = Array.from(map.entries());
     entries.sort(([a, aStats], [b, bStats]) => {
       const aComplete = aStats.pending === 0 ? 1 : 0;
@@ -343,16 +353,16 @@ export default function CountingPage() {
 
   // ---------- Split bins into not-started / in-progress / completed ----------
   const notStartedBins = useMemo(
-    () => binStats.filter(([, s]) => s.counted === 0 && (!serializedOnly || s.serialized > 0)),
-    [binStats, serializedOnly]
+    () => binStats.filter(([, s]) => s.counted === 0 && (!serializedOnly || s.serialized > 0) && (!multiItemOnly || s.lineItems > 1)),
+    [binStats, serializedOnly, multiItemOnly]
   );
   const inProgressBins = useMemo(
-    () => binStats.filter(([, s]) => s.counted > 0 && s.pending > 0 && (!serializedOnly || s.serialized > 0)),
-    [binStats, serializedOnly]
+    () => binStats.filter(([, s]) => s.counted > 0 && s.pending > 0 && (!serializedOnly || s.serialized > 0) && (!multiItemOnly || s.lineItems > 1)),
+    [binStats, serializedOnly, multiItemOnly]
   );
   const completedBins = useMemo(
-    () => binStats.filter(([, s]) => s.pending === 0 && (!serializedOnly || s.serialized > 0)),
-    [binStats, serializedOnly]
+    () => binStats.filter(([, s]) => s.pending === 0 && (!serializedOnly || s.serialized > 0) && (!multiItemOnly || s.lineItems > 1)),
+    [binStats, serializedOnly, multiItemOnly]
   );
   const filteredCompletedBins = useMemo(() => {
     if (completedFilter === "variances") return completedBins.filter(([, s]) => s.variances > 0);
@@ -1221,8 +1231,7 @@ export default function CountingPage() {
   }, []);
 
   // ---------- Render helpers ----------
-  function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }, variant: "not-started" | "in-progress" | "completed") {
-    const isSingleItem = bStats.total === 1;
+  function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number; lineItems: number }, variant: "not-started" | "in-progress" | "completed") {
     const hasSerialized = bStats.serialized > 0;
 
     if (variant === "in-progress") {
@@ -1239,10 +1248,10 @@ export default function CountingPage() {
               <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
             )}
           </div>
-          <div className="flex items-center justify-between mt-1">
-            {!isSingleItem && (
-              <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground`}>{bStats.pending} left</span>
-            )}
+          <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
+            {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""} · {bStats.pending} left
+          </div>
+          <div className="flex items-center justify-end mt-1">
             <CircularProgress percent={percent} />
           </div>
           {bStats.supervisorEdited > 0 && (
@@ -1277,9 +1286,9 @@ export default function CountingPage() {
               <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
             )}
           </div>
-          {!isSingleItem && (
-            <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>{bStats.total} items</div>
-          )}
+          <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
+            {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""}
+          </div>
           {hasVariances && (
             <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-amber-700 mt-0.5 block`}>
               {bStats.variances} variance{bStats.variances !== 1 ? "s" : ""}
@@ -1307,16 +1316,14 @@ export default function CountingPage() {
             <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
           )}
         </div>
-        {!isSingleItem && (
-          <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
-            {bStats.total} items
-          </div>
-        )}
+        <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
+          {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""}
+        </div>
       </button>
     );
   }
 
-  function renderBinListItem(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }, variant: "not-started" | "in-progress" | "completed") {
+  function renderBinListItem(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number; lineItems: number }, variant: "not-started" | "in-progress" | "completed") {
     const hasSerialized = bStats.serialized > 0;
     const percent = bStats.total > 0 ? Math.round((bStats.counted / bStats.total) * 100) : 0;
     const hasVariances = bStats.variances > 0;
@@ -1341,7 +1348,7 @@ export default function CountingPage() {
             )}
           </div>
           <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
-            {bStats.total} item{bStats.total !== 1 ? "s" : ""}
+            {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""}
             {variant === "in-progress" && ` · ${bStats.pending} left`}
             {variant === "completed" && hasVariances && ` · ${bStats.variances} variance${bStats.variances !== 1 ? "s" : ""}`}
           </span>
@@ -1935,8 +1942,8 @@ export default function CountingPage() {
                 </button>
               ))}
             </div>
-            {binStats.some(([, s]) => s.serialized > 0) && (
-              <div className="px-4 pb-3">
+            <div className="px-4 pb-3 flex flex-wrap gap-2">
+              {binStats.some(([, s]) => s.serialized > 0) && (
                 <button
                   onClick={() => setSerializedOnly((v) => !v)}
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
@@ -1948,8 +1955,19 @@ export default function CountingPage() {
                   <ScanBarcode className="h-3 w-3" />
                   Serialized only
                 </button>
-              </div>
-            )}
+              )}
+              <button
+                onClick={() => setMultiItemOnly((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  multiItemOnly
+                    ? "bg-blue-600 text-white"
+                    : "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                }`}
+              >
+                <Layers className="h-3 w-3" />
+                Multi-item only
+              </button>
+            </div>
           </div>
         )}
 

@@ -27,7 +27,7 @@ export function extractAislePrefix(binCode: string): string {
   return binCode;
 }
 
-export type BinEntry = [string, { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }];
+export type BinEntry = [string, { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number; lineItems: number }];
 
 export interface AisleGroup {
   prefix: string;

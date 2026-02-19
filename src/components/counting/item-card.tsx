@@ -325,8 +325,8 @@ export function ActiveItemCard({
         <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
           {/* Input row: On-hand | Input | Live variance */}
           <div className="flex items-center gap-3">
-            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5rem]" : "min-w-[4.5rem]"}`}>
-              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>OH</span>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5.5rem]" : "min-w-[5rem]"}`}>
+              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>On Hand</span>
               <span className={`${er ? "text-4xl" : "text-3xl"} font-bold`}>{onHand}</span>
             </div>
             <Input
@@ -346,15 +346,15 @@ export function ActiveItemCard({
                 }
               }}
             />
-            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5rem]" : "min-w-[4.5rem]"}`}>
-              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>Var</span>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5.5rem]" : "min-w-[5rem]"}`}>
+              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>Variance</span>
               {liveVariance !== null && !isNaN(liveVariance) ? (
                 <span className={`${er ? "text-4xl" : "text-3xl"} font-bold px-2 py-0.5 rounded-full ${
                   vState === "match" ? "text-green-700 bg-green-100" :
                   vState === "small" ? "text-amber-700 bg-amber-100" :
                   vState === "large" ? "text-red-700 bg-red-100" : ""
                 }`}>
-                  {liveVariance === 0 ? "MATCH" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
+                  {liveVariance === 0 ? "0" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
                 </span>
               ) : (
                 <span className={`${er ? "text-4xl" : "text-3xl"} text-muted-foreground`}>—</span>

@@ -338,6 +338,7 @@ export function ActiveItemCard({
               placeholder="Qty"
               className={`${er ? "h-20 text-4xl" : "h-14 text-2xl"} text-center font-semibold flex-1 ${varianceInputStyles[vState]}`}
               disabled={isSubmitting}
+              onWheel={(e) => e.currentTarget.blur()}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();

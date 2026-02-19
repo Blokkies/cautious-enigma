@@ -10,6 +10,7 @@ import {
   LogOut,
   ClipboardCheck,
   UserCog,
+  FileSpreadsheet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const navItems = [
   { href: "/admin/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/admin/setup", icon: Settings, label: "Events" },
   { href: "/admin/summary", icon: ClipboardCheck, label: "Summary" },
+  { href: "/admin/files", icon: FileSpreadsheet, label: "Files" },
   { href: "/admin/settings", icon: UserCog, label: "Settings" },
 ];
 

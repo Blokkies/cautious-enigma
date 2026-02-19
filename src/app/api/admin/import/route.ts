@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, stocktakeEvents } from "@/lib/db/schema";
+import { items, stocktakeEvents, uploads } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
 import { getApiUser } from "@/lib/api-auth";
@@ -110,9 +110,16 @@ export async function PUT(request: NextRequest) {
       .filter((w): w is string => !!w && w.trim().length > 0)
       .sort();
 
-    await db.update(stocktakeEvents)
-      .set({ warehouses: JSON.stringify(warehouses) })
-      .where(eq(stocktakeEvents.id, Number(targetEventId)));
+    // Link same upload file if source event has one
+    if (sourceEvent.uploadId) {
+      await db.update(stocktakeEvents)
+        .set({ warehouses: JSON.stringify(warehouses), uploadId: sourceEvent.uploadId })
+        .where(eq(stocktakeEvents.id, Number(targetEventId)));
+    } else {
+      await db.update(stocktakeEvents)
+        .set({ warehouses: JSON.stringify(warehouses) })
+        .where(eq(stocktakeEvents.id, Number(targetEventId)));
+    }
 
     // Summary stats
     const [totalImported] = await db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
@@ -227,6 +234,21 @@ export async function POST(request: NextRequest) {
         );
     }
 
+    // Store uploaded file in database
+    const fileBase64 = Buffer.from(buffer).toString("base64");
+    const [upload] = await db.insert(uploads).values({
+      filename: file.name,
+      fileSize: file.size,
+      fileData: fileBase64,
+      mimeType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      uploadedBy: user.id ? Number(user.id) : null,
+    }).returning({ id: uploads.id });
+
+    // Link upload to event
+    await db.update(stocktakeEvents)
+      .set({ uploadId: upload.id })
+      .where(eq(stocktakeEvents.id, Number(eventId)));
+
     // Get import summary
     const [totalImported] = await db
       .select({ count: sql<number>`count(*)` })
@@ -266,6 +288,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      uploadId: upload.id,
       summary: {
         totalItems: totalImported?.count || 0,
         uniqueBins: uniqueBins?.count || 0,

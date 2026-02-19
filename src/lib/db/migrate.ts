@@ -263,6 +263,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_counts_client_id_team
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_counts_verification_id
   ON counts(verification_id) WHERE verification_id IS NOT NULL AND count_type = 'verification';
+
+CREATE TABLE IF NOT EXISTS uploads (
+  id SERIAL PRIMARY KEY,
+  filename TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  file_data TEXT NOT NULL,
+  mime_type TEXT,
+  uploaded_by INTEGER,
+  created_at TEXT NOT NULL DEFAULT now()
+);
+
+ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS upload_id INTEGER REFERENCES uploads(id);
+CREATE INDEX IF NOT EXISTS idx_events_upload ON stocktake_events(upload_id);
 `;
 
 const compositeIndexes = `

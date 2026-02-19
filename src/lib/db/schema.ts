@@ -18,6 +18,7 @@ export const stocktakeEvents = pgTable("stocktake_events", {
     .notNull()
     .default(sql`now()`),
   warehouses: text("warehouses"), // JSON array of selected warehouse names, null = all
+  uploadId: integer("upload_id").references(() => uploads.id),
 });
 
 // ─── Teams ──────────────────────────────────────────────────────────────────
@@ -287,6 +288,19 @@ export const serialDiscrepancies = pgTable("serial_discrepancies", {
     .default(sql`now()`),
 });
 
+// ─── Uploads (stored files) ─────────────────────────────────────────────────
+export const uploads = pgTable("uploads", {
+  id: serial("id").primaryKey(),
+  filename: text("filename").notNull(),
+  fileSize: integer("file_size").notNull(),
+  fileData: text("file_data").notNull(), // base64-encoded file content
+  mimeType: text("mime_type"),
+  uploadedBy: integer("uploaded_by"), // admin id, nullable for legacy
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`now()`),
+});
+
 // ─── Executives ────────────────────────────────────────────────────────────
 export const executives = pgTable("executives", {
   id: serial("id").primaryKey(),
@@ -342,3 +356,5 @@ export type Executive = typeof executives.$inferSelect;
 export type NewExecutive = typeof executives.$inferInsert;
 export type ExecMessage = typeof execMessages.$inferSelect;
 export type NewExecMessage = typeof execMessages.$inferInsert;
+export type Upload = typeof uploads.$inferSelect;
+export type NewUpload = typeof uploads.$inferInsert;

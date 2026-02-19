@@ -780,7 +780,7 @@ export default function CountingPage() {
         const found = results.filter((r) => r.qty > 0).length;
         const notFound = results.filter((r) => r.qty === 0).length;
         if (notFound > 0) {
-          toast.warning(`${found} found, ${notFound} not found (${notFound > found ? "-" : "+"}${Math.abs(found - results.length)} variance)`);
+          toast.warning(`${found} found, ${notFound} not found (-${notFound} variance)`);
         } else {
           toast.success(`All ${found} serials matched`);
         }

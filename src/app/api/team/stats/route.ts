@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     .select({ count: sql<number>`count(*)` })
     .from(counts)
     .where(
-      and(eq(counts.eventId, user.eventId), eq(counts.teamId, user.id), countsWarehouseFilter(user.eventId, warehouses))
+      and(eq(counts.eventId, user.eventId), eq(counts.teamId, user.id), eq(counts.countType, "initial"), countsWarehouseFilter(user.eventId, warehouses))
     );
 
   const [matchedItems] = await db
@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
       and(
         eq(counts.eventId, user.eventId),
         eq(counts.teamId, user.id),
+        eq(counts.countType, "initial"),
         eq(counts.isMatch, true),
         countsWarehouseFilter(user.eventId, warehouses)
       )
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
       and(
         eq(counts.eventId, user.eventId),
         eq(counts.teamId, user.id),
+        eq(counts.countType, "initial"),
         eq(counts.isMatch, false),
         countsWarehouseFilter(user.eventId, warehouses)
       )

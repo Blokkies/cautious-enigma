@@ -68,45 +68,48 @@ export async function PUT(request: NextRequest) {
     const sourceItems = await db.select().from(items).where(eq(items.eventId, Number(sourceEventId)));
     if (sourceItems.length === 0) return NextResponse.json({ error: "Source event has no items" }, { status: 400 });
 
-    // Clear existing items and all dependent records in target event
-    await db.delete(execMessages).where(eq(execMessages.eventId, Number(targetEventId)));
-    await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, Number(targetEventId)));
-    await db.delete(auditLog).where(eq(auditLog.eventId, Number(targetEventId)));
-    await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, Number(targetEventId)));
-    await db.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${Number(targetEventId)})`);
-    await db.delete(breakdowns).where(eq(breakdowns.eventId, Number(targetEventId)));
-    await db.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${Number(targetEventId)})`);
-    await db.delete(queries).where(eq(queries.eventId, Number(targetEventId)));
-    await db.delete(counts).where(eq(counts.eventId, Number(targetEventId)));
-    await db.delete(teamAssignments).where(eq(teamAssignments.eventId, Number(targetEventId)));
-    await db.delete(items).where(eq(items.eventId, Number(targetEventId)));
+    // Clear existing items and all dependent records, then copy items — all in one transaction
+    const eid = Number(targetEventId);
+    await db.transaction(async (tx) => {
+      await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
+      await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
+      await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
+      await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
+      await tx.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${eid})`);
+      await tx.delete(breakdowns).where(eq(breakdowns.eventId, eid));
+      await tx.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${eid})`);
+      await tx.delete(queries).where(eq(queries.eventId, eid));
+      await tx.delete(counts).where(eq(counts.eventId, eid));
+      await tx.delete(teamAssignments).where(eq(teamAssignments.eventId, eid));
+      await tx.delete(items).where(eq(items.eventId, eid));
 
-    // Copy items in batches (without team assignments)
-    const BATCH_SIZE = 500;
-    for (let i = 0; i < sourceItems.length; i += BATCH_SIZE) {
-      const batch = sourceItems.slice(i, i + BATCH_SIZE);
-      await db.insert(items).values(
-        batch.map((item) => ({
-          eventId: Number(targetEventId),
-          internalId: item.internalId,
-          itemCode: item.itemCode,
-          description: item.description,
-          brand: item.brand,
-          category: item.category,
-          binNumber: item.binNumber,
-          binInternalId: item.binInternalId,
-          warehouse: item.warehouse,
-          division: item.division,
-          onHand: item.onHand,
-          avgCost: item.avgCost,
-          totalValue: item.totalValue,
-          stockStatus: item.stockStatus,
-          serialNumber: item.serialNumber,
-          isSerialized: item.isSerialized,
-          teamId: null, // Don't copy team assignments
-        }))
-      );
-    }
+      // Copy items in batches (without team assignments)
+      const BATCH_SIZE = 500;
+      for (let i = 0; i < sourceItems.length; i += BATCH_SIZE) {
+        const batch = sourceItems.slice(i, i + BATCH_SIZE);
+        await tx.insert(items).values(
+          batch.map((item) => ({
+            eventId: Number(targetEventId),
+            internalId: item.internalId,
+            itemCode: item.itemCode,
+            description: item.description,
+            brand: item.brand,
+            category: item.category,
+            binNumber: item.binNumber,
+            binInternalId: item.binInternalId,
+            warehouse: item.warehouse,
+            division: item.division,
+            onHand: item.onHand,
+            avgCost: item.avgCost,
+            totalValue: item.totalValue,
+            stockStatus: item.stockStatus,
+            serialNumber: item.serialNumber,
+            isSerialized: item.isSerialized,
+            teamId: null, // Don't copy team assignments
+          }))
+        );
+      }
+    });
 
     // Copy warehouse config from source
     const warehouseRows = await db
@@ -214,45 +217,48 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Clear existing items and all dependent records for this event
-    await db.delete(execMessages).where(eq(execMessages.eventId, Number(eventId)));
-    await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, Number(eventId)));
-    await db.delete(auditLog).where(eq(auditLog.eventId, Number(eventId)));
-    await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, Number(eventId)));
-    await db.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${Number(eventId)})`);
-    await db.delete(breakdowns).where(eq(breakdowns.eventId, Number(eventId)));
-    await db.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${Number(eventId)})`);
-    await db.delete(queries).where(eq(queries.eventId, Number(eventId)));
-    await db.delete(counts).where(eq(counts.eventId, Number(eventId)));
-    await db.delete(teamAssignments).where(eq(teamAssignments.eventId, Number(eventId)));
-    await db.delete(items).where(eq(items.eventId, Number(eventId)));
+    // Clear existing items and all dependent records, then insert — all in one transaction
+    const eid = Number(eventId);
+    await db.transaction(async (tx) => {
+      await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
+      await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
+      await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
+      await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
+      await tx.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${eid})`);
+      await tx.delete(breakdowns).where(eq(breakdowns.eventId, eid));
+      await tx.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${eid})`);
+      await tx.delete(queries).where(eq(queries.eventId, eid));
+      await tx.delete(counts).where(eq(counts.eventId, eid));
+      await tx.delete(teamAssignments).where(eq(teamAssignments.eventId, eid));
+      await tx.delete(items).where(eq(items.eventId, eid));
 
-    // Batch insert items
-    const BATCH_SIZE = 500;
-    for (let i = 0; i < parsed.items.length; i += BATCH_SIZE) {
-      const batch = parsed.items.slice(i, i + BATCH_SIZE);
-      await db.insert(items)
-        .values(
-          batch.map((item) => ({
-            eventId: Number(eventId),
-            internalId: item.internalId || null,
-            itemCode: item.itemCode,
-            description: item.description || null,
-            brand: item.brand || null,
-            category: item.category || null,
-            binNumber: item.binNumber || null,
-            binInternalId: item.binInternalId || null,
-            warehouse: item.warehouse || null,
-            division: item.division || null,
-            onHand: item.onHand || 0,
-            avgCost: item.avgCost || 0,
-            totalValue: item.totalValue || 0,
-            stockStatus: item.stockStatus || null,
-            serialNumber: item.serialNumber || null,
-            isSerialized: !!item.serialNumber,
-          }))
-        );
-    }
+      // Batch insert items
+      const BATCH_SIZE = 500;
+      for (let i = 0; i < parsed.items.length; i += BATCH_SIZE) {
+        const batch = parsed.items.slice(i, i + BATCH_SIZE);
+        await tx.insert(items)
+          .values(
+            batch.map((item) => ({
+              eventId: eid,
+              internalId: item.internalId || null,
+              itemCode: item.itemCode,
+              description: item.description || null,
+              brand: item.brand || null,
+              category: item.category || null,
+              binNumber: item.binNumber || null,
+              binInternalId: item.binInternalId || null,
+              warehouse: item.warehouse || null,
+              division: item.division || null,
+              onHand: item.onHand || 0,
+              avgCost: item.avgCost || 0,
+              totalValue: item.totalValue || 0,
+              stockStatus: item.stockStatus || null,
+              serialNumber: item.serialNumber || null,
+              isSerialized: !!item.serialNumber,
+            }))
+          );
+      }
+    });
 
     // Store uploaded file in database
     const fileBase64 = Buffer.from(buffer).toString("base64");

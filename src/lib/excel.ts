@@ -147,8 +147,9 @@ function normalizeColumnName(col: string): string {
 
 /** Strip leading formula-injection characters from imported cell values */
 function sanitizeCellValue(val: string): string {
-  // Prevent Excel formula injection: strip leading =, +, -, @, tab, CR
-  return val.replace(/^[=+\-@\t\r]+/, "");
+  // Prevent Excel formula injection: strip leading =, @, tab, CR
+  // Do NOT strip - or + as they are legitimate data characters (item codes, serial numbers)
+  return val.replace(/^[=@\t\r]+/, "");
 }
 
 export function parseExcel(buffer: ArrayBuffer): {

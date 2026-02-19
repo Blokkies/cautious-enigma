@@ -200,13 +200,19 @@ export async function syncToServer(): Promise<{
 
   // ── Sync counts ──
   const unsyncedCounts = await getUnsyncedCounts();
-  if (unsyncedCounts.length > 0) {
+
+  // Separate verification counts (must go via POST individually) from normal counts (batch PUT)
+  const normalCounts = unsyncedCounts.filter((c) => !c.verificationId);
+  const verificationCounts = unsyncedCounts.filter((c) => !!c.verificationId);
+
+  // Batch sync normal counts via PUT
+  if (normalCounts.length > 0) {
     try {
       const res = await fetch("/api/team/count", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          counts: unsyncedCounts.map((c) => ({
+          counts: normalCounts.map((c) => ({
             itemId: c.itemId,
             countedQty: c.countedQty,
             isMatch: c.isMatch,
@@ -223,22 +229,51 @@ export async function syncToServer(): Promise<{
         (data.results as Array<{ success?: boolean; deduplicated?: boolean }>).forEach(
           (r, i) => {
             if (r.success || r.deduplicated) {
-              successIds.push(unsyncedCounts[i].clientId);
+              successIds.push(normalCounts[i].clientId);
             }
           }
         );
 
         await markSynced(successIds);
         totalSynced += successIds.length;
-        totalFailed += unsyncedCounts.length - successIds.length;
+        totalFailed += normalCounts.length - successIds.length;
       } else if (res.status === 401) {
         authExpired = true;
         return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
-        totalFailed += unsyncedCounts.length;
+        totalFailed += normalCounts.length;
       }
     } catch {
-      totalFailed += unsyncedCounts.length;
+      totalFailed += normalCounts.length;
+    }
+  }
+
+  // Sync verification counts individually via POST (handles verification-specific logic)
+  for (const vc of verificationCounts) {
+    try {
+      const res = await fetch("/api/team/count", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          itemId: vc.itemId,
+          countedQty: vc.countedQty,
+          comment: vc.comment,
+          clientId: vc.clientId,
+          verificationId: vc.verificationId,
+        }),
+      });
+
+      if (res.ok) {
+        await markCountSynced(vc.clientId);
+        totalSynced++;
+      } else if (res.status === 401) {
+        authExpired = true;
+        return { synced: totalSynced, failed: totalFailed, authExpired };
+      } else {
+        totalFailed++;
+      }
+    } catch {
+      totalFailed++;
     }
   }
 

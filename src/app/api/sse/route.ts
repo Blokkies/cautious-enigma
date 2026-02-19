@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { counts, items, teams, stocktakeEvents } from "@/lib/db/schema";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, isNotNull } from "drizzle-orm";
 import { verifyToken } from "@/lib/token";
 
 export const dynamic = "force-dynamic";
@@ -84,14 +84,15 @@ export async function GET(request: NextRequest) {
 
           if (newCounts.length > 0) {
             sendEvent("counts", newCounts);
-            lastCheckTime = new Date().toISOString();
+            // Use the max countedAt from results to avoid missing slow-committing counts
+            lastCheckTime = newCounts[0].countedAt;
           }
 
-          // Overall progress
+          // Overall progress (only assigned items)
           const [totalItems] = await db
             .select({ count: sql<number>`count(*)` })
             .from(items)
-            .where(eq(items.eventId, eventId));
+            .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)));
 
           const [totalCounted] = await db
             .select({ count: sql<number>`count(*)` })

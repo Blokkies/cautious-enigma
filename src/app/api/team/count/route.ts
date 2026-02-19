@@ -35,22 +35,6 @@ export async function POST(request: NextRequest) {
 
     // Handle verification count submission
     if (verificationId) {
-      const [item] = await db
-        .select()
-        .from(items)
-        .where(eq(items.id, itemId));
-
-      if (!item) {
-        return NextResponse.json(
-          { error: "Item not found" },
-          { status: 404 }
-        );
-      }
-
-      const variance = countedQty - (item.onHand || 0);
-      const varianceValue = variance * (item.avgCost || 0);
-      const computedIsMatch = variance === 0;
-
       // Entire verification flow inside a transaction to prevent race conditions
       const result = await db.transaction(async (tx) => {
         // Check assignment is still pending (inside transaction for atomicity)
@@ -70,10 +54,26 @@ export async function POST(request: NextRequest) {
           throw new Error("VERIFICATION_NOT_FOUND");
         }
 
+        // Use the assignment's itemId to prevent client-supplied mismatch
+        const verifiedItemId = va.itemId;
+
+        const [item] = await tx
+          .select()
+          .from(items)
+          .where(and(eq(items.id, verifiedItemId), eq(items.eventId, user.eventId)));
+
+        if (!item) {
+          throw new Error("VERIFICATION_NOT_FOUND");
+        }
+
+        const variance = countedQty - (item.onHand || 0);
+        const varianceValue = variance * (item.avgCost || 0);
+        const computedIsMatch = variance === 0;
+
         const [{ id: insertedId }] = await tx
           .insert(counts)
           .values({
-            itemId,
+            itemId: verifiedItemId,
             teamId: user.id,
             eventId: user.eventId,
             countedQty,

@@ -38,12 +38,12 @@ export async function GET(
     [openSerialsRow],
   ] = await Promise.all([
     db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eventId), isNotNull(items.teamId))),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(eq(counts.eventId, eventId)),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.isMatch, true))),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false))),
-    db.select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false))),
-    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`)),
-    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`)),
+    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"))),
+    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, true))),
+    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false))),
+    db.select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false))),
+    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance > 0`)),
+    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance < 0`)),
     db.select({ count: sql<number>`count(*)` }).from(queries).where(and(eq(queries.eventId, eventId), eq(queries.status, "open"))),
     db.select({ count: sql<number>`count(*)` }).from(breakdowns).where(and(eq(breakdowns.eventId, eventId), eq(breakdowns.approvalStatus, "pending"))),
     db.select({ count: sql<number>`count(*)` }).from(serialDiscrepancies).where(and(eq(serialDiscrepancies.eventId, eventId), eq(serialDiscrepancies.status, "open"))),
@@ -58,8 +58,8 @@ export async function GET(
   const teamProgress = await Promise.all(teamList.map(async (team) => {
     const [[teamTotal], [teamCounted], [teamVariances], [lastCount]] = await Promise.all([
       db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eventId), eq(items.teamId, team.id))),
-      db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id))),
-      db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), eq(counts.isMatch, false))),
+      db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), eq(counts.countType, "initial"))),
+      db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), eq(counts.countType, "initial"), eq(counts.isMatch, false))),
       db.select({ countedAt: counts.countedAt }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id))).orderBy(sql`counted_at DESC`).limit(1),
     ]);
 

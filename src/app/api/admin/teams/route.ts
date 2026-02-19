@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
+import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
@@ -195,7 +195,16 @@ export async function DELETE(request: NextRequest) {
       if (user.type === "supervisor") {
         return NextResponse.json({ error: "Supervisors cannot delete other supervisors" }, { status: 403 });
       }
-      await db.delete(supervisors).where(eq(supervisors.id, id));
+      await db.transaction(async (tx) => {
+        // Clear FK references before deleting supervisor
+        await tx.delete(execMessages).where(eq(execMessages.supervisorId, id));
+        await tx.delete(verificationAssignments).where(eq(verificationAssignments.assignedBy, id));
+        await tx.update(queries).set({ respondedBy: null }).where(eq(queries.respondedBy, id));
+        await tx.update(breakdowns).set({ approvedBy: null }).where(eq(breakdowns.approvedBy, id));
+        await tx.update(serialDiscrepancies).set({ resolvedBy: null }).where(eq(serialDiscrepancies.resolvedBy, id));
+        await tx.update(serialDiscrepancies).set({ verificationAssignedBy: null }).where(eq(serialDiscrepancies.verificationAssignedBy, id));
+        await tx.delete(supervisors).where(eq(supervisors.id, id));
+      });
     } else {
       // Supervisor: verify team belongs to their event
       if (user.type === "supervisor") {

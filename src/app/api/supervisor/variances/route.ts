@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { getApiUser, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 function safeJsonParse<T>(json: string, fallback: T): T {
   try { return JSON.parse(json) as T; } catch { return fallback; }
@@ -399,6 +399,11 @@ export async function PATCH(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "supervisor") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const lockError = await checkEventActive(user.eventId);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 403 });
   }
 
   try {

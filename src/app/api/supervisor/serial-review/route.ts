@@ -198,11 +198,11 @@ export async function PATCH(request: NextRequest) {
       const varianceValue = variance * (item.avgCost ?? 0);
       const isMatch = variance === 0;
 
-      // Check if count already exists
+      // Check if initial count already exists
       const [existingCount] = await db
         .select()
         .from(counts)
-        .where(and(eq(counts.itemId, itemId), eq(counts.eventId, user.eventId)));
+        .where(and(eq(counts.itemId, itemId), eq(counts.eventId, user.eventId), eq(counts.countType, "initial")));
 
       if (existingCount) {
         const oldCountedQty = existingCount.countedQty;

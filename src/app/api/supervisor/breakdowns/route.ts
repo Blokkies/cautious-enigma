@@ -192,18 +192,19 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Breakdown not found" }, { status: 404 });
     }
 
-    await db.delete(breakdownMessages).where(eq(breakdownMessages.breakdownId, breakdownId));
-    await db.delete(breakdowns).where(eq(breakdowns.id, breakdownId));
-
-    await db.insert(auditLog)
-      .values({
-        eventId: user.eventId,
-        userId: user.id,
-        userType: "supervisor",
-        action: "breakdown_deleted",
-        tableName: "breakdowns",
-        recordId: breakdownId,
-      });
+    await db.transaction(async (tx) => {
+      await tx.delete(breakdownMessages).where(eq(breakdownMessages.breakdownId, breakdownId));
+      await tx.delete(breakdowns).where(eq(breakdowns.id, breakdownId));
+      await tx.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "breakdown_deleted",
+          tableName: "breakdowns",
+          recordId: breakdownId,
+        });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

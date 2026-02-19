@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/token";
 
-const PUBLIC_PATHS = ["/", "/api/auth/login", "/api/auth/admin-login", "/api/auth/logout", "/api/auth/list", "/api/auth/me"];
+const PUBLIC_PATHS = ["/", "/api/auth/login", "/api/auth/admin-login", "/api/auth/executive-login", "/api/auth/logout", "/api/auth/list", "/api/auth/me"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -79,6 +79,14 @@ export async function middleware(request: NextRequest) {
     if (!isSupervisorAllowed) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+  }
+  // Protect /executive page routes (executive + admin)
+  if (pathname.startsWith("/executive") && payload.type !== "executive" && payload.type !== "admin") {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+  // Protect /api/executive/* API routes (executive + admin)
+  if (pathname.startsWith("/api/executive/") && payload.type !== "executive" && payload.type !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   // /completed is accessible to supervisors and admins
   if (

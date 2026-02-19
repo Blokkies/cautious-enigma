@@ -287,6 +287,34 @@ export const serialDiscrepancies = pgTable("serial_discrepancies", {
     .default(sql`now()`),
 });
 
+// ─── Executives ────────────────────────────────────────────────────────────
+export const executives = pgTable("executives", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`now()`),
+  createdBy: integer("created_by"),
+});
+
+// ─── Executive Messages (executive/admin ↔ supervisor chat) ───────────────
+export const execMessages = pgTable("exec_messages", {
+  id: serial("id").primaryKey(),
+  senderId: integer("sender_id").notNull(),
+  senderType: text("sender_type").notNull(), // 'executive' | 'supervisor' | 'admin'
+  supervisorId: integer("supervisor_id")
+    .notNull()
+    .references(() => supervisors.id),
+  eventId: integer("event_id")
+    .notNull()
+    .references(() => stocktakeEvents.id),
+  message: text("message").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`now()`),
+});
+
 // ─── Type exports ───────────────────────────────────────────────────────────
 export type StocktakeEvent = typeof stocktakeEvents.$inferSelect;
 export type NewStocktakeEvent = typeof stocktakeEvents.$inferInsert;
@@ -310,3 +338,7 @@ export type VerificationAssignment = typeof verificationAssignments.$inferSelect
 export type NewVerificationAssignment = typeof verificationAssignments.$inferInsert;
 export type SerialDiscrepancy = typeof serialDiscrepancies.$inferSelect;
 export type NewSerialDiscrepancy = typeof serialDiscrepancies.$inferInsert;
+export type Executive = typeof executives.$inferSelect;
+export type NewExecutive = typeof executives.$inferInsert;
+export type ExecMessage = typeof execMessages.$inferSelect;
+export type NewExecMessage = typeof execMessages.$inferInsert;

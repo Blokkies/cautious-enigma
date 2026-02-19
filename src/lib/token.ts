@@ -12,7 +12,7 @@ const TOKEN_EXPIRY = "72h";
 
 export interface TokenPayload {
   id: number;
-  type: "team" | "supervisor" | "admin" | "auditor";
+  type: "team" | "supervisor" | "admin" | "auditor" | "executive";
   name: string;
   eventId: number;
   eventName: string;

@@ -22,6 +22,7 @@ interface SupervisorCounts {
   queries: number;
   breakdowns: number;
   serials: number;
+  execMessages: number;
 }
 
 const POLL_INTERVAL = 30_000; // 30 seconds
@@ -34,6 +35,7 @@ const LS_KEYS = {
   supervisorQueries: "stocktake-lastSeen-supervisor-queries",
   supervisorBreakdowns: "stocktake-lastSeen-supervisor-breakdowns",
   supervisorSerials: "stocktake-lastSeen-supervisor-serials",
+  supervisorExecMessages: "stocktake-lastSeen-supervisor-exec-messages",
 } as const;
 
 type SectionKey = keyof typeof LS_KEYS;
@@ -70,6 +72,7 @@ const SUPERVISOR_SECTION_TO_COUNT: Record<string, keyof SupervisorCounts> = {
   supervisorQueries: "queries",
   supervisorBreakdowns: "breakdowns",
   supervisorSerials: "serials",
+  supervisorExecMessages: "execMessages",
 };
 
 export function useTeamNotifications() {
@@ -130,7 +133,7 @@ export function useTeamNotifications() {
 }
 
 export function useSupervisorNotifications() {
-  const [counts, setCounts] = useState<SupervisorCounts>({ queries: 0, breakdowns: 0, serials: 0 });
+  const [counts, setCounts] = useState<SupervisorCounts>({ queries: 0, breakdowns: 0, serials: 0, execMessages: 0 });
   const mountedRef = useRef(true);
   const isVisible = usePageVisible();
 
@@ -141,6 +144,7 @@ export function useSupervisorNotifications() {
         lastSeenQueries: getLastSeen("supervisorQueries"),
         lastSeenBreakdowns: getLastSeen("supervisorBreakdowns"),
         lastSeenSerials: getLastSeen("supervisorSerials"),
+        lastSeenExecMessages: getLastSeen("supervisorExecMessages"),
       });
       const res = await fetch(`/api/supervisor/notifications?${params}`);
       if (res.ok && mountedRef.current) {
@@ -149,6 +153,7 @@ export function useSupervisorNotifications() {
           queries: data.queries ?? 0,
           breakdowns: data.breakdowns ?? 0,
           serials: data.serials ?? 0,
+          execMessages: data.execMessages ?? 0,
         });
       }
     } catch {

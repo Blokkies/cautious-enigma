@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
   const lastSeenQueries = searchParams.get("lastSeenQueries") || "1970-01-01T00:00:00Z";
   const lastSeenBreakdowns = searchParams.get("lastSeenBreakdowns") || "1970-01-01T00:00:00Z";
   const lastSeenSerials = searchParams.get("lastSeenSerials") || "1970-01-01T00:00:00Z";
+  const lastSeenExecMessages = searchParams.get("lastSeenExecMessages") || "1970-01-01T00:00:00Z";
 
   // Count open queries that have new team messages since lastSeen,
   // UNION with brand-new open queries created since lastSeen
@@ -66,9 +67,20 @@ export async function GET(request: NextRequest) {
   );
   const serialsCountVal = Number((serialsResult[0] as Record<string, unknown>)?.count ?? 0);
 
+  // Count exec messages from executives/admins since lastSeen
+  const execMessagesResult = await db.execute(
+    sql`SELECT COUNT(*) as count
+        FROM exec_messages
+        WHERE supervisor_id = ${user.id}
+          AND sender_type IN ('executive', 'admin')
+          AND created_at > ${lastSeenExecMessages}`
+  );
+  const execMessagesCountVal = Number((execMessagesResult[0] as Record<string, unknown>)?.count ?? 0);
+
   return NextResponse.json({
     queries: queriesCountVal,
     breakdowns: breakdownsCountVal,
     serials: serialsCountVal,
+    execMessages: execMessagesCountVal,
   });
 }

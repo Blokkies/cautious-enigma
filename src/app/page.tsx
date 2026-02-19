@@ -14,9 +14,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ClipboardList, Shield, Lock, ArrowLeft, MapPin, ArrowRight, BarChart3, Users, Package, Eye } from "lucide-react";
+import { ClipboardList, Shield, Lock, ArrowLeft, MapPin, ArrowRight, BarChart3, Users, Package, Eye, Briefcase } from "lucide-react";
 
-type LoginStep = "choose" | "event" | "credentials" | "admin";
+type LoginStep = "choose" | "event" | "credentials" | "admin" | "executive";
 
 interface ListItem {
   id: number;
@@ -35,7 +35,7 @@ interface EventInfo {
 }
 
 export default function LoginPage() {
-  const { user, loading, login, adminLogin } = useAuth();
+  const { user, loading, login, adminLogin, executiveLogin } = useAuth();
   const router = useRouter();
   const [step, setStep] = useState<LoginStep>("choose");
   const [loginType, setLoginType] = useState<"team" | "supervisor" | "auditor">("team");
@@ -45,6 +45,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [listItems, setListItems] = useState<ListItem[]>([]);
   const [adminPassword, setAdminPassword] = useState("");
+  const [executivePassword, setExecutivePassword] = useState("");
   const [events, setEvents] = useState<EventInfo[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [loadingEvents, setLoadingEvents] = useState(false);
@@ -55,6 +56,7 @@ export default function LoginPage() {
       else if (user.type === "supervisor") router.push("/supervisor");
       else if (user.type === "auditor") router.push("/supervisor");
       else if (user.type === "admin") router.push("/admin/dashboard");
+      else if (user.type === "executive") router.push("/executive");
     }
   }, [user, loading, router]);
 
@@ -117,6 +119,15 @@ export default function LoginPage() {
       return;
     }
 
+    if (step === "executive") {
+      const result = await executiveLogin(executivePassword);
+      setSubmitting(false);
+      if (!result.success) {
+        setError(result.error || "Invalid password");
+      }
+      return;
+    }
+
     if (!selectedId) {
       setError(`Please select your ${loginType === "team" ? "team" : "name"}`);
       setSubmitting(false);
@@ -152,6 +163,7 @@ export default function LoginPage() {
     setSelectedId("");
     setError("");
     setAdminPassword("");
+    setExecutivePassword("");
     setEvents([]);
     setSelectedEventId(null);
     setListItems([]);
@@ -312,10 +324,18 @@ export default function LoginPage() {
                 </button>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-2 flex items-center justify-center gap-4">
+                <button
+                  onClick={() => { setStep("executive"); setError(""); }}
+                  className="flex items-center gap-2 py-3 text-sm text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <Briefcase className="h-3.5 w-3.5" />
+                  Executive Dashboard
+                </button>
+                <span className="text-slate-300">|</span>
                 <button
                   onClick={() => { setStep("admin"); setError(""); }}
-                  className="w-full flex items-center justify-center gap-2 py-3 text-sm text-slate-400 hover:text-slate-600 transition-colors"
+                  className="flex items-center gap-2 py-3 text-sm text-slate-400 hover:text-slate-600 transition-colors"
                 >
                   <Lock className="h-3.5 w-3.5" />
                   Admin Setup
@@ -462,6 +482,56 @@ export default function LoginPage() {
                     }
                     placeholder="****"
                     className="h-12 text-2xl text-center tracking-[0.5em] bg-slate-50 border-slate-200"
+                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                  />
+                </div>
+
+                {error && (
+                  <div className="text-red-600 text-center text-sm font-medium bg-red-50 border border-red-100 p-3 rounded-lg">
+                    {error}
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleLogin}
+                  disabled={submitting}
+                  className="w-full h-12 text-base font-medium"
+                  size="lg"
+                >
+                  {submitting ? "Signing in..." : "Sign In"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Executive login */}
+          {step === "executive" && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={resetForm}
+                  className="h-9 w-9 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-white transition-colors"
+                >
+                  <ArrowLeft className="h-4 w-4 text-slate-600" />
+                </button>
+                <div>
+                  <h2 className="text-2xl font-semibold text-slate-900">Executive Login</h2>
+                  <p className="text-slate-500 text-sm">Executive dashboard access</p>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+                <div className="space-y-2">
+                  <Label htmlFor="exec-password" className="text-sm font-medium text-slate-700">
+                    Executive Password
+                  </Label>
+                  <Input
+                    id="exec-password"
+                    type="password"
+                    value={executivePassword}
+                    onChange={(e) => setExecutivePassword(e.target.value)}
+                    placeholder="Enter executive password"
+                    className="h-12 text-base bg-slate-50 border-slate-200"
                     onKeyDown={(e) => e.key === "Enter" && handleLogin()}
                   />
                 </div>

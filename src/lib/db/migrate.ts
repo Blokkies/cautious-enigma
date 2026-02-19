@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   id SERIAL PRIMARY KEY,
   event_id INTEGER REFERENCES stocktake_events(id),
   user_id INTEGER,
-  user_type TEXT CHECK(user_type IN ('team','supervisor','admin')),
+  user_type TEXT CHECK(user_type IN ('team','supervisor','admin','executive')),
   action TEXT NOT NULL,
   table_name TEXT,
   record_id INTEGER,
@@ -235,6 +235,28 @@ ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verification_completed
 ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS verified_serials TEXT;
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS pin_plain TEXT;
 ALTER TABLE supervisors ADD COLUMN IF NOT EXISTS pin_plain TEXT;
+
+CREATE TABLE IF NOT EXISTS executives (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT now(),
+  created_by INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS exec_messages (
+  id SERIAL PRIMARY KEY,
+  sender_id INTEGER NOT NULL,
+  sender_type TEXT NOT NULL CHECK(sender_type IN ('executive','supervisor','admin')),
+  supervisor_id INTEGER NOT NULL REFERENCES supervisors(id),
+  event_id INTEGER NOT NULL REFERENCES stocktake_events(id),
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_exec_messages_supervisor ON exec_messages(supervisor_id);
+CREATE INDEX IF NOT EXISTS idx_exec_messages_event ON exec_messages(event_id);
+CREATE INDEX IF NOT EXISTS idx_exec_messages_created ON exec_messages(created_at);
 `;
 
 const compositeIndexes = `

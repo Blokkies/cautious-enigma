@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 
 interface User {
   id: number;
-  type: "team" | "supervisor" | "admin" | "auditor";
+  type: "team" | "supervisor" | "admin" | "auditor" | "executive";
   name: string;
   eventId?: number;
   eventName?: string;
@@ -15,6 +15,7 @@ interface AuthContextType {
   loading: boolean;
   login: (type: string, id: number, pin: string, eventId?: number) => Promise<{ success: boolean; error?: string }>;
   adminLogin: (password: string) => Promise<{ success: boolean; error?: string }>;
+  executiveLogin: (password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
 
@@ -80,13 +81,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const executiveLogin = async (password: string) => {
+    try {
+      const res = await fetch("/api/auth/executive-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setUser(data.user);
+        return { success: true };
+      }
+      return { success: false, error: data.error };
+    } catch {
+      return { success: false, error: "Network error" };
+    }
+  };
+
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, adminLogin, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, adminLogin, executiveLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

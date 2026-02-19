@@ -15,6 +15,7 @@ import {
   Users,
   Grid3X3,
   BarChart3,
+  Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSupervisorNotifications } from "@/hooks/use-notifications";
@@ -27,6 +28,7 @@ const navItems = [
   { href: "/supervisor/variances", icon: AlertTriangle, label: "Variances", badgeKey: "serials" as const },
   { href: "/supervisor/queries", icon: MessageSquare, label: "Queries", badgeKey: "queries" as const },
   { href: "/supervisor/breakdowns", icon: Package, label: "Breakdowns", badgeKey: "breakdowns" as const },
+  { href: "/supervisor/messages", icon: Mail, label: "Messages", badgeKey: "execMessages" as const },
   { href: "/supervisor/export", icon: Download, label: "Export", badgeKey: null },
   { href: "/supervisor/summary", icon: ClipboardCheck, label: "Summary", badgeKey: null },
 ];

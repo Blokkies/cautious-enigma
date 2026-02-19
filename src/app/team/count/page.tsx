@@ -20,7 +20,7 @@ import {
 import { SerializedGroupCard, type SerialGroupResult } from "@/components/counting/serialized-group-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, PlayCircle, ClipboardCheck, ScanBarcode, Users, LayoutGrid, LayoutList, Layers } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, ChevronUp, PlayCircle, ClipboardCheck, ScanBarcode, Users, LayoutGrid, LayoutList, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
@@ -125,6 +125,7 @@ export default function CountingPage() {
   // Search + Review
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<"contains" | "starts" | "exact" | "bin">("contains");
+  const [searchCollapsed, setSearchCollapsed] = useState(false);
   const [recountItem, setRecountItem] = useState<CountItem | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -1827,45 +1828,62 @@ export default function CountingPage() {
               );
             })()}
           </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              ref={searchInputRef}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={
-                searchMode === "bin"
-                  ? "Search by bin..."
-                  : searchMode === "exact"
-                    ? "Exact match..."
-                    : searchMode === "starts"
-                      ? "Starts with..."
-                      : "Search by part code or description..."
-              }
-              className="pl-9"
-            />
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground mr-1">Mode:</span>
-            {([
-              { key: "contains" as const, label: "Contains" },
-              { key: "starts" as const, label: "Starts with" },
-              { key: "exact" as const, label: "Exact" },
-              { key: "bin" as const, label: "Bin" },
-            ]).map((m) => (
-              <button
-                key={m.key}
-                onClick={() => setSearchMode(m.key)}
-                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                  searchMode === m.key
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/80"
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
+          <button
+            onClick={() => { setSearchCollapsed(!searchCollapsed); if (searchCollapsed) setTimeout(() => searchInputRef.current?.focus(), 100); }}
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span className="font-medium">Search</span>
+            {search && searchCollapsed && (
+              <span className="text-primary text-xs truncate flex-1 text-left">&ldquo;{search}&rdquo;</span>
+            )}
+            <span className="ml-auto">
+              {searchCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+            </span>
+          </button>
+          {!searchCollapsed && (
+            <>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  ref={searchInputRef}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={
+                    searchMode === "bin"
+                      ? "Search by bin..."
+                      : searchMode === "exact"
+                        ? "Exact match..."
+                        : searchMode === "starts"
+                          ? "Starts with..."
+                          : "Search by part code or description..."
+                  }
+                  className="pl-9"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-muted-foreground mr-1">Mode:</span>
+                {([
+                  { key: "contains" as const, label: "Contains" },
+                  { key: "starts" as const, label: "Starts with" },
+                  { key: "exact" as const, label: "Exact" },
+                  { key: "bin" as const, label: "Bin" },
+                ]).map((m) => (
+                  <button
+                    key={m.key}
+                    onClick={() => setSearchMode(m.key)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      searchMode === m.key
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Resume banner */}

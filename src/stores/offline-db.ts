@@ -7,10 +7,15 @@ export interface OfflineItem {
   brand: string | null;
   category: string | null;
   binNumber: string | null;
+  binInternalId: string | null;
   warehouse: string | null;
+  division: string | null;
   onHand: number;
   avgCost: number;
   totalValue: number;
+  stockStatus: string | null;
+  serialNumber: string | null;
+  isSerialized: boolean | number | null;
   countId: number | null;
   countedQty: number | null;
   variance: number | null;
@@ -27,6 +32,9 @@ export interface OfflineCount {
   comment: string | null;
   countedAt: string;
   synced: number; // 0 = unsynced, 1 = synced (number for IndexedDB indexing)
+  verificationId?: number | null; // for verification counts
+  eventId?: number; // prevent cross-session contamination
+  teamId?: number; // prevent cross-session contamination
 }
 
 export interface OfflineSerialDiscrepancy {
@@ -99,10 +107,15 @@ export async function preloadItems(): Promise<number> {
         brand: item.brand as string | null,
         category: item.category as string | null,
         binNumber: item.binNumber as string | null,
+        binInternalId: item.binInternalId as string | null,
         warehouse: item.warehouse as string | null,
+        division: item.division as string | null,
         onHand: (item.onHand as number) || 0,
         avgCost: (item.avgCost as number) || 0,
         totalValue: (item.totalValue as number) || 0,
+        stockStatus: item.stockStatus as string | null,
+        serialNumber: item.serialNumber as string | null,
+        isSerialized: item.isSerialized as boolean | number | null,
         countId: item.countId as number | null,
         countedQty: item.countedQty as number | null,
         variance: item.variance as number | null,
@@ -199,6 +212,7 @@ export async function syncToServer(): Promise<{
             isMatch: c.isMatch,
             comment: c.comment,
             clientId: c.clientId,
+            countedAt: c.countedAt,
           })),
         }),
       });

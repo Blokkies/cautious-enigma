@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     .from(items)
     .leftJoin(
       counts,
-      and(eq(counts.itemId, items.id), eq(counts.teamId, user.id))
+      and(eq(counts.itemId, items.id), eq(counts.teamId, user.id), eq(counts.countType, "initial"))
     )
     .where(
       and(eq(items.eventId, user.eventId), eq(items.teamId, user.id), warehouseFilter(warehouses))

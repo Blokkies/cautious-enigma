@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, stocktakeEvents, uploads } from "@/lib/db/schema";
+import { items, stocktakeEvents, uploads, counts, verificationAssignments, serialDiscrepancies, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, execMessages } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
 import { getApiUser } from "@/lib/api-auth";
@@ -68,7 +68,17 @@ export async function PUT(request: NextRequest) {
     const sourceItems = await db.select().from(items).where(eq(items.eventId, Number(sourceEventId)));
     if (sourceItems.length === 0) return NextResponse.json({ error: "Source event has no items" }, { status: 400 });
 
-    // Clear existing items in target event
+    // Clear existing items and all dependent records in target event
+    await db.delete(execMessages).where(eq(execMessages.eventId, Number(targetEventId)));
+    await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, Number(targetEventId)));
+    await db.delete(auditLog).where(eq(auditLog.eventId, Number(targetEventId)));
+    await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, Number(targetEventId)));
+    await db.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${Number(targetEventId)})`);
+    await db.delete(breakdowns).where(eq(breakdowns.eventId, Number(targetEventId)));
+    await db.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${Number(targetEventId)})`);
+    await db.delete(queries).where(eq(queries.eventId, Number(targetEventId)));
+    await db.delete(counts).where(eq(counts.eventId, Number(targetEventId)));
+    await db.delete(teamAssignments).where(eq(teamAssignments.eventId, Number(targetEventId)));
     await db.delete(items).where(eq(items.eventId, Number(targetEventId)));
 
     // Copy items in batches (without team assignments)
@@ -204,7 +214,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Clear existing items for this event
+    // Clear existing items and all dependent records for this event
+    await db.delete(execMessages).where(eq(execMessages.eventId, Number(eventId)));
+    await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, Number(eventId)));
+    await db.delete(auditLog).where(eq(auditLog.eventId, Number(eventId)));
+    await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, Number(eventId)));
+    await db.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${Number(eventId)})`);
+    await db.delete(breakdowns).where(eq(breakdowns.eventId, Number(eventId)));
+    await db.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${Number(eventId)})`);
+    await db.delete(queries).where(eq(queries.eventId, Number(eventId)));
+    await db.delete(counts).where(eq(counts.eventId, Number(eventId)));
+    await db.delete(teamAssignments).where(eq(teamAssignments.eventId, Number(eventId)));
     await db.delete(items).where(eq(items.eventId, Number(eventId)));
 
     // Batch insert items

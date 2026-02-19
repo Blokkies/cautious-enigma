@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
 
   const warehouses = await getEventWarehouses(eventId);
   const cwf = countsWarehouseFilter(eventId, warehouses);
+  const initialOnly = eq(counts.countType, "initial");
 
   // Overall stats (only assigned items count toward completion)
   const [totalItems] = await db
@@ -46,22 +47,22 @@ export async function GET(request: NextRequest) {
   const [totalCounted] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), cwf));
+    .where(and(eq(counts.eventId, eventId), initialOnly, cwf));
 
   const [totalMatched] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, true), cwf));
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, true), cwf));
 
   const [totalVariances] = await db
     .select({ count: sql<number>`count(*)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), cwf));
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), cwf));
 
   const [totalVarianceValue] = await db
     .select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), cwf));
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), cwf));
 
   const [overStats] = await db
     .select({
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
       total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance > 0`, cwf));
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), sql`variance > 0`, cwf));
 
   const [underStats] = await db
     .select({
@@ -77,7 +78,7 @@ export async function GET(request: NextRequest) {
       total: sql<number>`COALESCE(sum(abs(variance_value)), 0)`,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), sql`variance < 0`, cwf));
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), sql`variance < 0`, cwf));
 
   const summaryOverCount = overStats?.count || 0;
   const summaryOverValue = overStats?.total || 0;
@@ -102,7 +103,7 @@ export async function GET(request: NextRequest) {
     const [teamCounted] = await db
       .select({ count: sql<number>`count(*)` })
       .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), cwf));
+      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), initialOnly, cwf));
 
     const [teamMatched] = await db
       .select({ count: sql<number>`count(*)` })
@@ -111,6 +112,7 @@ export async function GET(request: NextRequest) {
         and(
           eq(counts.eventId, eventId),
           eq(counts.teamId, team.id),
+          initialOnly,
           eq(counts.isMatch, true),
           cwf,
         )
@@ -123,6 +125,7 @@ export async function GET(request: NextRequest) {
         and(
           eq(counts.eventId, eventId),
           eq(counts.teamId, team.id),
+          initialOnly,
           eq(counts.isMatch, false),
           cwf,
         )
@@ -135,6 +138,7 @@ export async function GET(request: NextRequest) {
         and(
           eq(counts.eventId, eventId),
           eq(counts.teamId, team.id),
+          initialOnly,
           eq(counts.isMatch, false),
           cwf,
         )
@@ -150,6 +154,7 @@ export async function GET(request: NextRequest) {
         and(
           eq(counts.eventId, eventId),
           eq(counts.teamId, team.id),
+          initialOnly,
           eq(counts.isMatch, false),
           sql`variance > 0`,
           cwf,
@@ -166,6 +171,7 @@ export async function GET(request: NextRequest) {
         and(
           eq(counts.eventId, eventId),
           eq(counts.teamId, team.id),
+          initialOnly,
           eq(counts.isMatch, false),
           sql`variance < 0`,
           cwf,
@@ -210,7 +216,7 @@ export async function GET(request: NextRequest) {
     .from(counts)
     .innerJoin(items, eq(counts.itemId, items.id))
     .innerJoin(teams, eq(counts.teamId, teams.id))
-    .where(and(eq(counts.eventId, eventId), eq(counts.isMatch, false), warehouseFilter(warehouses)))
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), warehouseFilter(warehouses)))
     .orderBy(sql`abs(variance_value) DESC`)
     .limit(20);
 

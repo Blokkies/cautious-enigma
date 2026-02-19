@@ -616,6 +616,14 @@ export default function CountingPage() {
         // IndexedDB unavailable — continue with server POST anyway
       }
 
+      // Save previous state for potential rollback
+      const prevCountId = item.countId;
+      const prevCountedQty = item.countedQty;
+      const prevVariance = item.variance;
+      const prevIsMatch = item.isMatch;
+      const prevComment = item.comment;
+      const prevCountedAt = item.countedAt;
+
       // Optimistic UI update
       setItems((prev) =>
         prev.map((i) =>
@@ -657,7 +665,37 @@ export default function CountingPage() {
           }),
         });
 
-        if (!res.ok) throw new Error("Failed to save");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          // Revert optimistic update on server rejection
+          setItems((prev) =>
+            prev.map((i) =>
+              i.id === itemId
+                ? {
+                    ...i,
+                    countId: prevCountId,
+                    countedQty: prevCountedQty,
+                    variance: prevVariance,
+                    isMatch: prevIsMatch,
+                    comment: prevComment,
+                    countedAt: prevCountedAt,
+                  }
+                : i
+            )
+          );
+          if (!prevCountId) {
+            setStats((prev) => ({
+              ...prev,
+              counted: Math.max(0, prev.counted - 1),
+              progressPercent:
+                prev.total > 0
+                  ? Math.round((Math.max(0, prev.counted - 1) / prev.total) * 100)
+                  : 0,
+            }));
+          }
+          if (!silent) toast.error(errData.error || "Failed to save count");
+          return;
+        }
 
         const data = await res.json();
 
@@ -895,6 +933,7 @@ export default function CountingPage() {
         isMatch,
         comment: verificationComment || null,
         countedAt: new Date().toISOString(),
+        verificationId: currentVerificationItem.verificationId,
       });
     } catch {
       // IndexedDB unavailable — continue with server POST

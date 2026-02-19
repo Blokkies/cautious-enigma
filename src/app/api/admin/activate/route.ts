@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, teams, supervisors, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
+import { stocktakeEvents, items, teams, supervisors, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
 import { eq, and, sql, isNull } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 
@@ -92,6 +92,7 @@ export async function PUT(request: NextRequest) {
     if (action === "reset") {
       await db.transaction(async (tx) => {
         // Delete operational data in correct order (children first)
+        await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
         await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
         await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
         await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
@@ -157,6 +158,7 @@ export async function DELETE(request: NextRequest) {
 
     // Cascade delete all related data in a transaction for atomicity
     await db.transaction(async (tx) => {
+      await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
       await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
       await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
       await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
@@ -169,6 +171,7 @@ export async function DELETE(request: NextRequest) {
       await tx.delete(items).where(eq(items.eventId, eid));
       await tx.delete(supervisors).where(eq(supervisors.eventId, eid));
       await tx.delete(teams).where(eq(teams.eventId, eid));
+      await tx.update(stocktakeEvents).set({ uploadId: null }).where(eq(stocktakeEvents.id, eid));
       await tx.delete(stocktakeEvents).where(eq(stocktakeEvents.id, eid));
     });
 

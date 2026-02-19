@@ -92,7 +92,8 @@ export async function POST(request: NextRequest) {
         .where(
           and(
             eq(supervisors.id, Number(id)),
-            eq(supervisors.eventId, event.id)
+            eq(supervisors.eventId, event.id),
+            eq(supervisors.role, "supervisor")
           )
         );
 

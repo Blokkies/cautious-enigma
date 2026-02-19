@@ -75,6 +75,7 @@ export async function GET(request: NextRequest) {
             .where(
               and(
                 eq(counts.eventId, eventId),
+                eq(counts.countType, "initial"),
                 sql`counted_at > ${lastCheckTime}`
               )
             )
@@ -95,7 +96,7 @@ export async function GET(request: NextRequest) {
           const [totalCounted] = await db
             .select({ count: sql<number>`count(*)` })
             .from(counts)
-            .where(eq(counts.eventId, eventId));
+            .where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial")));
 
           const total = totalItems?.count || 0;
           const counted = totalCounted?.count || 0;

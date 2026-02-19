@@ -30,8 +30,6 @@ export async function GET(request: NextRequest) {
     .from(supervisors)
     .where(inArray(supervisors.eventId, eventIds));
 
-  const eventMap = new Map(activeEvents.map((e) => [e.id, e.name]));
-
   const groups = activeEvents.map((event) => ({
     eventId: event.id,
     eventName: event.name,

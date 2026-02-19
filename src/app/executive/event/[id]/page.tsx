@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
-  Package,
   CheckCircle2,
   AlertTriangle,
   TrendingUp,

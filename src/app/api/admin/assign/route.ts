@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, teams } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { getEventWarehouses, getApiUser } from "@/lib/api-auth";
 
 function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
@@ -166,6 +166,18 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "assignments array required" }, { status: 400 });
       }
 
+      // Validate all teams belong to this event
+      const teamIds = assignments.map((a: { teamId: number }) => a.teamId);
+      if (teamIds.length > 0) {
+        const validTeams = await db.select({ id: teams.id }).from(teams)
+          .where(and(eq(teams.eventId, eid), inArray(teams.id, teamIds)));
+        const validTeamIds = new Set(validTeams.map((t) => t.id));
+        const invalidTeam = teamIds.find((id: number) => !validTeamIds.has(id));
+        if (invalidTeam) {
+          return NextResponse.json({ error: `Team ${invalidTeam} not found in this event` }, { status: 404 });
+        }
+      }
+
       let totalAssigned = 0;
       await db.transaction(async (tx) => {
         for (const { teamId, bins } of assignments) {
@@ -191,6 +203,14 @@ export async function POST(request: NextRequest) {
     }
 
     const tid = Number(teamId);
+
+    // Validate team belongs to this event
+    const [targetTeam] = await db.select({ id: teams.id }).from(teams)
+      .where(and(eq(teams.id, tid), eq(teams.eventId, eid)));
+    if (!targetTeam) {
+      return NextResponse.json({ error: "Team not found in this event" }, { status: 404 });
+    }
+
     const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
     const result = await db.execute(
       sql`UPDATE items SET team_id = ${tid} WHERE event_id = ${eid} AND bin_number IN (${binList}) AND team_id IS NULL RETURNING id`
@@ -310,9 +330,19 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Delete counts + move items in a transaction to prevent partial state
+    // Delete counts + cleanup verifications + move items in a transaction
     const result = await db.transaction(async (tx) => {
       if (countedCount > 0 && clearCounts) {
+        // Delete orphaned verification assignments that reference these counts
+        await tx.execute(
+          sql`DELETE FROM verification_assignments WHERE count_id IN (
+            SELECT c.id FROM counts c
+            JOIN items i ON i.id = c.item_id
+            WHERE i.event_id = ${eid} AND i.team_id = ${Number(fromTeamId)}
+            AND i.bin_number IN (${binList})
+          )`
+        );
+
         await tx.execute(
           sql`DELETE FROM counts WHERE id IN (
             SELECT c.id FROM counts c

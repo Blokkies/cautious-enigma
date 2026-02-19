@@ -30,7 +30,7 @@ export function getTokenCookieOptions() {
   return {
     name: TOKEN_NAME,
     httpOnly: true,
-    secure: false, // local network, no HTTPS
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax" as const,
     maxAge: 60 * 60 * 72, // 72 hours
     path: "/",

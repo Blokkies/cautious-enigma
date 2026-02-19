@@ -414,81 +414,89 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
-      const [va] = await db
-        .select()
-        .from(verificationAssignments)
-        .where(
-          and(
-            eq(verificationAssignments.id, verificationId),
-            eq(verificationAssignments.eventId, user.eventId)
-          )
-        );
-
-      if (!va) {
-        return NextResponse.json(
-          { error: "Verification assignment not found" },
-          { status: 404 }
-        );
-      }
-
-      if (action === "accept_verification") {
-        // Get the verification count
-        const [verCount] = await db
-          .select({
-            countedQty: counts.countedQty,
-            variance: counts.variance,
-            varianceValue: counts.varianceValue,
-          })
-          .from(counts)
+      // Wrap in transaction to prevent race conditions between concurrent acceptances
+      const txResult = await db.transaction(async (tx) => {
+        const [va] = await tx
+          .select()
+          .from(verificationAssignments)
           .where(
             and(
-              eq(counts.eventId, user.eventId),
-              eq(counts.verificationId, verificationId),
-              eq(counts.countType, "verification")
+              eq(verificationAssignments.id, verificationId),
+              eq(verificationAssignments.eventId, user.eventId)
             )
           );
 
-        if (!verCount) {
-          return NextResponse.json(
-            { error: "Verification count not found" },
-            { status: 404 }
-          );
+        if (!va) {
+          throw new Error("VA_NOT_FOUND");
         }
 
-        // Update the original count with verification values
-        const isMatch = verCount.variance === 0;
-        await db.update(counts)
-          .set({
-            countedQty: verCount.countedQty,
-            variance: verCount.variance,
-            varianceValue: verCount.varianceValue,
-            isMatch,
-            checkStatus: "accepted",
-          })
-          .where(eq(counts.id, va.countId));
-      } else {
-        // accept_original — just mark the original as accepted
-        await db.update(counts)
-          .set({ checkStatus: "accepted" })
-          .where(eq(counts.id, va.countId));
+        // Prevent double-acceptance
+        if (va.status === "accepted") {
+          throw new Error("VA_ALREADY_ACCEPTED");
+        }
+
+        if (action === "accept_verification") {
+          const [verCount] = await tx
+            .select({
+              countedQty: counts.countedQty,
+              variance: counts.variance,
+              varianceValue: counts.varianceValue,
+            })
+            .from(counts)
+            .where(
+              and(
+                eq(counts.eventId, user.eventId),
+                eq(counts.verificationId, verificationId),
+                eq(counts.countType, "verification")
+              )
+            );
+
+          if (!verCount) {
+            throw new Error("VER_COUNT_NOT_FOUND");
+          }
+
+          const isMatch = verCount.variance === 0;
+          await tx.update(counts)
+            .set({
+              countedQty: verCount.countedQty,
+              variance: verCount.variance,
+              varianceValue: verCount.varianceValue,
+              isMatch,
+              checkStatus: "accepted",
+            })
+            .where(eq(counts.id, va.countId));
+        } else {
+          await tx.update(counts)
+            .set({ checkStatus: "accepted" })
+            .where(eq(counts.id, va.countId));
+        }
+
+        await tx.update(verificationAssignments)
+          .set({ status: "accepted" })
+          .where(eq(verificationAssignments.id, verificationId));
+
+        await tx.insert(auditLog)
+          .values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "supervisor",
+            action: `verification_${action}`,
+            tableName: "verification_assignments",
+            recordId: verificationId,
+            newValue: JSON.stringify({ action, countId: va.countId }),
+          });
+
+        return { success: true };
+      }).catch((err) => {
+        if (err.message === "VA_NOT_FOUND") return { error: "Verification assignment not found", status: 404 };
+        if (err.message === "VA_ALREADY_ACCEPTED") return { error: "Verification already accepted", status: 409 };
+        if (err.message === "VER_COUNT_NOT_FOUND") return { error: "Verification count not found", status: 404 };
+        throw err;
+      });
+
+      if ("error" in txResult) {
+        return NextResponse.json({ error: txResult.error }, { status: txResult.status });
       }
-
-      // Update verification assignment status
-      await db.update(verificationAssignments)
-        .set({ status: "accepted" })
-        .where(eq(verificationAssignments.id, verificationId));
-
-      // Audit log
-      await db.insert(auditLog)
-        .values({
-          eventId: user.eventId,
-          userId: user.id,
-          userType: "supervisor",
-          action: `verification_${action}`,
-          tableName: "verification_assignments",
-          recordId: verificationId,
-          newValue: JSON.stringify({ action, countId: va.countId }),
-        });
 
       return NextResponse.json({ success: true, action });
     }

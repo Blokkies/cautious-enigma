@@ -963,7 +963,7 @@ export default function CountingPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting]);
+  }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting, scopedVerificationItems, verificationItems]);
 
   // Submit serialized verification group (uses SerializedGroupCard)
   const submitSerializedVerificationGroup = useCallback(

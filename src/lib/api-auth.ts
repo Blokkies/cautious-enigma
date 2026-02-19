@@ -10,17 +10,20 @@ export interface ApiUser {
   eventId: number;
 }
 
+const VALID_USER_TYPES: ApiUser["type"][] = ["team", "supervisor", "admin", "auditor", "executive"];
+
 export function getApiUser(request: NextRequest): ApiUser | null {
   const id = request.headers.get("x-user-id");
-  const type = request.headers.get("x-user-type") as ApiUser["type"];
+  const type = request.headers.get("x-user-type");
   const name = request.headers.get("x-user-name");
   const eventId = request.headers.get("x-event-id");
 
   if (!id || !type || !name || !eventId) return null;
+  if (!VALID_USER_TYPES.includes(type as ApiUser["type"])) return null;
 
   return {
     id: Number(id),
-    type,
+    type: type as ApiUser["type"],
     name: name || "",
     eventId: Number(eventId),
   };

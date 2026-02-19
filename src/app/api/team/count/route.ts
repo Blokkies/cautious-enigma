@@ -35,25 +35,6 @@ export async function POST(request: NextRequest) {
 
     // Handle verification count submission
     if (verificationId) {
-      const [va] = await db
-        .select()
-        .from(verificationAssignments)
-        .where(
-          and(
-            eq(verificationAssignments.id, verificationId),
-            eq(verificationAssignments.assignedTeamId, user.id),
-            eq(verificationAssignments.eventId, user.eventId),
-            eq(verificationAssignments.status, "pending")
-          )
-        );
-
-      if (!va) {
-        return NextResponse.json(
-          { error: "Verification assignment not found or not assigned to your team" },
-          { status: 404 }
-        );
-      }
-
       const [item] = await db
         .select()
         .from(items)
@@ -70,8 +51,25 @@ export async function POST(request: NextRequest) {
       const varianceValue = variance * (item.avgCost || 0);
       const computedIsMatch = variance === 0;
 
-      // Insert verification count + update assignment in a transaction
+      // Entire verification flow inside a transaction to prevent race conditions
       const result = await db.transaction(async (tx) => {
+        // Check assignment is still pending (inside transaction for atomicity)
+        const [va] = await tx
+          .select()
+          .from(verificationAssignments)
+          .where(
+            and(
+              eq(verificationAssignments.id, verificationId),
+              eq(verificationAssignments.assignedTeamId, user.id),
+              eq(verificationAssignments.eventId, user.eventId),
+              eq(verificationAssignments.status, "pending")
+            )
+          );
+
+        if (!va) {
+          throw new Error("VERIFICATION_NOT_FOUND");
+        }
+
         const [{ id: insertedId }] = await tx
           .insert(counts)
           .values({
@@ -119,7 +117,17 @@ export async function POST(request: NextRequest) {
           });
 
         return inserted;
+      }).catch((err) => {
+        if (err.message === "VERIFICATION_NOT_FOUND") return null;
+        throw err;
       });
+
+      if (!result) {
+        return NextResponse.json(
+          { error: "Verification assignment not found or not assigned to your team" },
+          { status: 404 }
+        );
+      }
 
       return NextResponse.json({ success: true, count: result });
     }

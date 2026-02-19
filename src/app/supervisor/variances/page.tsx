@@ -142,6 +142,8 @@ export default function VariancesPage() {
   const [serialVerifySelectedTeamId, setSerialVerifySelectedTeamId] = useState<number | null>(null);
   const [serialVerifyAssigning, setSerialVerifyAssigning] = useState(false);
 
+  const [execEventsLoaded, setExecEventsLoaded] = useState(!isExecutive);
+
   // Fetch events list for executive event picker
   useEffect(() => {
     if (!isExecutive) return;
@@ -158,13 +160,14 @@ export default function VariancesPage() {
           }
         }
       } catch {}
+      setExecEventsLoaded(true);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExecutive]);
 
   const loadVariances = useCallback(async () => {
-    // Executive must pick an event first
-    if (isExecutive && !execEventId) return;
+    // Executive must wait for event list to load and pick an event
+    if (isExecutive && (!execEventsLoaded || !execEventId)) return;
 
     const eidParam = isExecutive ? `eventId=${execEventId}&` : "";
     try {
@@ -206,7 +209,7 @@ export default function VariancesPage() {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isExecutive, execEventId]);
+  }, [isExecutive, execEventId, execEventsLoaded]);
 
   useEffect(() => {
     loadVariances();

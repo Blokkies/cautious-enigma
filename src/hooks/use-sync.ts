@@ -28,6 +28,8 @@ export function useSync() {
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingCountRef = useRef(0);
   const authExpiredRef = useRef(false);
+  const isOnlineRef = useRef(isOnline);
+  isOnlineRef.current = isOnline;
 
   const updatePendingCount = useCallback(async () => {
     try {
@@ -40,7 +42,7 @@ export function useSync() {
   }, []);
 
   const doSync = useCallback(async () => {
-    if (!isOnline || authExpiredRef.current) return;
+    if (!isOnlineRef.current || authExpiredRef.current) return;
 
     setState((prev) => ({ ...prev, syncing: true }));
     try {
@@ -62,7 +64,8 @@ export function useSync() {
       setState((prev) => ({ ...prev, syncing: false }));
       await updatePendingCount();
     }
-  }, [isOnline, updatePendingCount]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Preload items on mount
   useEffect(() => {

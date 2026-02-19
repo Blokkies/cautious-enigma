@@ -360,6 +360,19 @@ export async function PATCH(request: NextRequest) {
     // Default: resolve
     const { resolution, resolutionType: bodyResolutionType } = body;
 
+    // Block resolve while a verification team is still working
+    const [discForResolve] = await db
+      .select({ verificationStatus: serialDiscrepancies.verificationStatus })
+      .from(serialDiscrepancies)
+      .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
+
+    if (discForResolve?.verificationStatus === "pending") {
+      return NextResponse.json(
+        { error: "Cannot resolve while verification is in progress" },
+        { status: 409 }
+      );
+    }
+
     await db.update(serialDiscrepancies)
       .set({
         status: "resolved",

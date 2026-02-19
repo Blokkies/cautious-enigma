@@ -199,10 +199,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Query not found" }, { status: 404 });
     }
 
-    // Delete messages first (foreign key)
-    await db.delete(queryMessages).where(eq(queryMessages.queryId, queryId));
-    // Delete the query
-    await db.delete(queries).where(eq(queries.id, queryId));
+    // Delete messages + query in a transaction to prevent orphaned records
+    await db.transaction(async (tx) => {
+      await tx.delete(queryMessages).where(eq(queryMessages.queryId, queryId));
+      await tx.delete(queries).where(eq(queries.id, queryId));
+    });
 
     // Audit log
     await db.insert(auditLog)

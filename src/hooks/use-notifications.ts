@@ -112,7 +112,7 @@ export function useTeamNotifications() {
       const countKey = TEAM_SECTION_TO_COUNT[section];
       if (countKey) {
         setCounts((prev) => ({ ...prev, [countKey]: 0 }));
-        setTimeout(fetchCounts, 500);
+        setTimeout(() => { if (mountedRef.current) fetchCounts(); }, 500);
       }
     };
     window.addEventListener(MARK_SEEN_EVENT, handleMarkSeen);
@@ -171,7 +171,7 @@ export function useSupervisorNotifications() {
       const countKey = SUPERVISOR_SECTION_TO_COUNT[section];
       if (countKey) {
         setCounts((prev) => ({ ...prev, [countKey]: 0 }));
-        setTimeout(fetchCounts, 500);
+        setTimeout(() => { if (mountedRef.current) fetchCounts(); }, 500);
       }
     };
     window.addEventListener(MARK_SEEN_EVENT, handleMarkSeen);

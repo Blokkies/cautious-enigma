@@ -257,6 +257,12 @@ CREATE TABLE IF NOT EXISTS exec_messages (
 CREATE INDEX IF NOT EXISTS idx_exec_messages_supervisor ON exec_messages(supervisor_id);
 CREATE INDEX IF NOT EXISTS idx_exec_messages_event ON exec_messages(event_id);
 CREATE INDEX IF NOT EXISTS idx_exec_messages_created ON exec_messages(created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_counts_client_id_team
+  ON counts(client_id, team_id) WHERE client_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_counts_verification_id
+  ON counts(verification_id) WHERE verification_id IS NOT NULL AND count_type = 'verification';
 `;
 
 const compositeIndexes = `

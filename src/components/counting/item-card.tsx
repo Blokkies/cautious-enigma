@@ -324,10 +324,10 @@ export function ActiveItemCard({
       <div className={`fixed bottom-16 left-0 right-0 z-40 border-t shadow-lg ${varianceBarStyles[vState]} safe-area-bottom`}>
         <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
           {/* Input row: On-hand | Input | Live variance */}
-          <div className="flex items-center gap-2">
-            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[4rem]" : "min-w-[3rem]"}`}>
-              <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground font-medium`}>OH</span>
-              <span className={`${er ? "text-2xl" : "text-base"} font-bold`}>{onHand}</span>
+          <div className="flex items-center gap-3">
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5rem]" : "min-w-[4rem]"}`}>
+              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>OH</span>
+              <span className={`${er ? "text-4xl" : "text-2xl"} font-bold`}>{onHand}</span>
             </div>
             <Input
               ref={inputRef}
@@ -346,10 +346,10 @@ export function ActiveItemCard({
                 }
               }}
             />
-            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[4rem]" : "min-w-[3rem]"}`}>
-              <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground font-medium`}>Var</span>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5rem]" : "min-w-[4rem]"}`}>
+              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>Var</span>
               {liveVariance !== null && !isNaN(liveVariance) ? (
-                <span className={`${er ? "text-lg" : "text-sm"} font-bold px-2 py-0.5 rounded-full ${
+                <span className={`${er ? "text-3xl" : "text-2xl"} font-bold px-2 py-0.5 rounded-full ${
                   vState === "match" ? "text-green-700 bg-green-100" :
                   vState === "small" ? "text-amber-700 bg-amber-100" :
                   vState === "large" ? "text-red-700 bg-red-100" : ""
@@ -357,7 +357,7 @@ export function ActiveItemCard({
                   {liveVariance === 0 ? "MATCH" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
                 </span>
               ) : (
-                <span className={`${er ? "text-base" : "text-sm"} text-muted-foreground`}>—</span>
+                <span className={`${er ? "text-3xl" : "text-2xl"} text-muted-foreground`}>—</span>
               )}
             </div>
           </div>

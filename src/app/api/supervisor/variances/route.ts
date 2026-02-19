@@ -4,6 +4,10 @@ import { items, counts, teams, auditLog, verificationAssignments, serialDiscrepa
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
+function safeJsonParse<T>(json: string, fallback: T): T {
+  try { return JSON.parse(json) as T; } catch { return fallback; }
+}
+
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
@@ -183,7 +187,7 @@ export async function GET(request: NextRequest) {
     }
 
     for (const disc of openDiscrepancies) {
-      const unknowns: string[] = JSON.parse(disc.unknownSerials);
+      const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
       if (unknowns.length === 0) continue;
 
       // Look up source item metadata for this itemCode (prefer items in selected warehouses)
@@ -227,7 +231,7 @@ export async function GET(request: NextRequest) {
 
       // Parse verified serials if completed
       const parsedVerifiedSerials = disc.verifiedSerials
-        ? JSON.parse(disc.verifiedSerials) as { serial: string; status: string }[]
+        ? safeJsonParse<{ serial: string; status: string }[]>(disc.verifiedSerials, [])
         : null;
 
       for (let i = 0; i < unknowns.length; i++) {
@@ -289,7 +293,7 @@ export async function GET(request: NextRequest) {
       );
 
     for (const disc of approvedDiscrepancies) {
-      const approved: string[] = JSON.parse(disc.approvedSerials!);
+      const approved: string[] = safeJsonParse<string[]>(disc.approvedSerials!, []);
       if (approved.length === 0) continue;
 
       const [refItem2] = await db
@@ -516,7 +520,7 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
-      const unknowns: string[] = JSON.parse(disc.unknownSerials);
+      const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
 
       if (serialIndex >= unknowns.length) {
         return NextResponse.json({ error: "Serial index out of range" }, { status: 400 });
@@ -575,7 +579,7 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
       }
 
-      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+      const approved: string[] = disc.approvedSerials ? safeJsonParse<string[]>(disc.approvedSerials, []) : [];
 
       if (approvedIndex < 0 || approvedIndex >= approved.length) {
         return NextResponse.json({ error: "Approved serial index out of range" }, { status: 400 });
@@ -637,8 +641,8 @@ export async function PATCH(request: NextRequest) {
         );
       }
 
-      const unknowns: string[] = JSON.parse(disc.unknownSerials);
-      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+      const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
+      const approved: string[] = disc.approvedSerials ? safeJsonParse<string[]>(disc.approvedSerials, []) : [];
 
       if (serialIndex >= unknowns.length) {
         return NextResponse.json({ error: "Serial index out of range" }, { status: 400 });
@@ -740,6 +744,13 @@ export async function PATCH(request: NextRequest) {
     if (countId === undefined || newQty === undefined) {
       return NextResponse.json(
         { error: "countId and newQty are required" },
+        { status: 400 }
+      );
+    }
+
+    if (typeof newQty !== "number" || isNaN(newQty) || newQty < 0) {
+      return NextResponse.json(
+        { error: "newQty must be a valid non-negative number" },
         { status: 400 }
       );
     }

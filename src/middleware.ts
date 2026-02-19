@@ -39,9 +39,21 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
-  // Role-based access control
+  // Role-based access control for pages and API routes
+  if (pathname.startsWith("/api/team/") && payload.type !== "team") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   if (pathname.startsWith("/team") && payload.type !== "team") {
     return NextResponse.redirect(new URL("/", request.url));
+  }
+  if (pathname.startsWith("/api/supervisor/")) {
+    // Allow admin to access supervisor export API
+    const adminAllowedSupervisorApis = ["/api/supervisor/export", "/api/supervisor/dashboard"];
+    const isAdminAllowed = payload.type === "admin" &&
+      adminAllowedSupervisorApis.some((p) => pathname.startsWith(p));
+    if (payload.type !== "supervisor" && payload.type !== "auditor" && !isAdminAllowed) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
   }
   if (pathname.startsWith("/supervisor")) {
     // Allow admin to access supervisor export page

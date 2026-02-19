@@ -112,8 +112,10 @@ export async function preloadItems(): Promise<number> {
       })
     );
 
-    await offlineDb.items.clear();
-    await offlineDb.items.bulkPut(serverItems);
+    await offlineDb.transaction("rw", offlineDb.items, async () => {
+      await offlineDb.items.clear();
+      await offlineDb.items.bulkPut(serverItems);
+    });
 
     await offlineDb.meta.put({
       key: "lastSync",
@@ -177,9 +179,11 @@ export async function markDiscrepancySynced(clientId: string): Promise<void> {
 export async function syncToServer(): Promise<{
   synced: number;
   failed: number;
+  authExpired?: boolean;
 }> {
   let totalSynced = 0;
   let totalFailed = 0;
+  let authExpired = false;
 
   // ── Sync counts ──
   const unsyncedCounts = await getUnsyncedCounts();
@@ -213,6 +217,9 @@ export async function syncToServer(): Promise<{
         await markSynced(successIds);
         totalSynced += successIds.length;
         totalFailed += unsyncedCounts.length - successIds.length;
+      } else if (res.status === 401) {
+        authExpired = true;
+        return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
         totalFailed += unsyncedCounts.length;
       }
@@ -238,12 +245,16 @@ export async function syncToServer(): Promise<{
           binNumber: disc.binNumber,
           binInternalId: disc.binInternalId,
           unknownSerials: disc.unknownSerials,
+          clientId: disc.clientId,
         }),
       });
 
       if (res.ok) {
         await markDiscrepancySynced(disc.clientId);
         totalSynced++;
+      } else if (res.status === 401) {
+        authExpired = true;
+        return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
         totalFailed++;
       }
@@ -252,7 +263,7 @@ export async function syncToServer(): Promise<{
     }
   }
 
-  return { synced: totalSynced, failed: totalFailed };
+  return { synced: totalSynced, failed: totalFailed, authExpired };
 }
 
 // ─── Get local items (for offline mode) ─────────────────────────────────────

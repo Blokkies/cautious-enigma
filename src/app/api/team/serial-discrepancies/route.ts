@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { itemCode, description, binNumber, binInternalId, unknownSerials } = await request.json();
+    const { itemCode, description, binNumber, binInternalId, unknownSerials, clientId } = await request.json();
 
     if (!itemCode) {
       return NextResponse.json(
@@ -30,6 +30,24 @@ export async function POST(request: NextRequest) {
         { error: "unknownSerials must be a non-empty array" },
         { status: 400 }
       );
+    }
+
+    // Dedup check: if clientId provided, check for existing record from this team
+    if (clientId) {
+      const existing = await db
+        .select({ id: serialDiscrepancies.id })
+        .from(serialDiscrepancies)
+        .where(
+          and(
+            eq(serialDiscrepancies.eventId, user.eventId),
+            eq(serialDiscrepancies.teamId, user.id),
+            eq(serialDiscrepancies.itemCode, itemCode),
+            eq(serialDiscrepancies.unknownSerials, JSON.stringify(unknownSerials))
+          )
+        );
+      if (existing.length > 0) {
+        return NextResponse.json({ success: true, id: existing[0].id, deduplicated: true });
+      }
     }
 
     const [{ id }] = await db

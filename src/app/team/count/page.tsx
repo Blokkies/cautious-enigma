@@ -29,6 +29,11 @@ import { saveCountLocally, markCountSynced, saveDiscrepancyLocally, markDiscrepa
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
 
+/** Normalize isMatch which can be boolean (server) or 0/1 (IndexedDB) */
+function isMatchTrue(val: boolean | number | null | undefined): boolean {
+  return val === true || val === 1;
+}
+
 interface SerialVerificationTask {
   id: number;
   itemCode: string;
@@ -129,6 +134,7 @@ export default function CountingPage() {
   const [qtyValue, setQtyValue] = useState("");
   const [comment, setComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [showFlash, setShowFlash] = useState(false);
   const [showBinComplete, setShowBinComplete] = useState(false);
   const [queueSearch, setQueueSearch] = useState("");
@@ -218,7 +224,7 @@ export default function CountingPage() {
         entry.pending++;
       } else {
         entry.counted++;
-        if (item.variance === 0 || item.isMatch === true || item.isMatch === 1) {
+        if (item.variance === 0 || isMatchTrue(item.isMatch)) {
           entry.matches++;
         } else {
           entry.variances++;
@@ -660,19 +666,21 @@ export default function CountingPage() {
   );
 
   const submitCount = useCallback(() => {
-    if (!currentItem || isSubmitting) return;
+    if (!currentItem || isSubmittingRef.current) return;
     const qty = parseFloat(qtyValue);
     if (isNaN(qty) || qty < 0) {
       toast.error("Please enter a valid quantity");
       return;
     }
 
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     handleCount(currentItem.id, qty, comment || undefined).finally(() => {
       setShowFlash(true);
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     });
-  }, [currentItem, qtyValue, comment, isSubmitting, handleCount]);
+  }, [currentItem, qtyValue, comment, handleCount]);
 
   const handleFlashComplete = useCallback(() => {
     setShowFlash(false);
@@ -834,6 +842,23 @@ export default function CountingPage() {
     }
 
     setIsSubmitting(true);
+    const clientId = uuidv4();
+    const isMatch = qty === (currentVerificationItem.onHand ?? 0);
+
+    // Save to IndexedDB first so data survives network failures
+    try {
+      await saveCountLocally({
+        clientId,
+        itemId: currentVerificationItem.itemId,
+        countedQty: qty,
+        isMatch,
+        comment: verificationComment || null,
+        countedAt: new Date().toISOString(),
+      });
+    } catch {
+      // IndexedDB unavailable — continue with server POST
+    }
+
     try {
       const res = await fetch("/api/team/count", {
         method: "POST",
@@ -841,8 +866,9 @@ export default function CountingPage() {
         body: JSON.stringify({
           itemId: currentVerificationItem.itemId,
           countedQty: qty,
-          isMatch: qty === (currentVerificationItem.onHand ?? 0),
+          isMatch,
           comment: verificationComment || undefined,
+          clientId,
           verificationId: currentVerificationItem.verificationId,
         }),
       });
@@ -852,6 +878,9 @@ export default function CountingPage() {
         toast.error(data.error || "Failed to submit verification");
         return;
       }
+
+      // Mark as synced in IndexedDB
+      try { await markCountSynced(clientId); } catch { /* ok */ }
 
       const onHand = currentVerificationItem.onHand ?? 0;
       const variance = qty - onHand;
@@ -908,28 +937,55 @@ export default function CountingPage() {
       }
 
       try {
-        // Submit each serial's verification count
-        await Promise.all(
+        // Submit each serial's verification count with offline fallback
+        const submitResults = await Promise.all(
           results.map(async ({ itemId, qty }) => {
-            // Find the matching verification item to get verificationId
             const vi = currentEntry.items.find((v) => v.itemId === itemId);
-            if (!vi) return;
+            if (!vi) return { success: false, itemId };
 
-            const item = currentEntry.items.find((v) => v.itemId === itemId);
-            const onHand = item?.onHand ?? 0;
+            const onHand = vi.onHand ?? 0;
+            const cid = uuidv4();
+            const isMatch = qty === onHand;
 
-            await fetch("/api/team/count", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+            // Save to IndexedDB first
+            try {
+              await saveCountLocally({
+                clientId: cid,
                 itemId,
                 countedQty: qty,
-                isMatch: qty === onHand,
-                verificationId: vi.verificationId,
-              }),
-            });
+                isMatch,
+                comment: null,
+                countedAt: new Date().toISOString(),
+              });
+            } catch { /* IndexedDB unavailable */ }
+
+            try {
+              const res = await fetch("/api/team/count", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  itemId,
+                  countedQty: qty,
+                  isMatch,
+                  clientId: cid,
+                  verificationId: vi.verificationId,
+                }),
+              });
+              if (res.ok) {
+                try { await markCountSynced(cid); } catch { /* ok */ }
+                return { success: true, itemId };
+              }
+              return { success: false, itemId };
+            } catch {
+              return { success: false, itemId };
+            }
           })
         );
+
+        const failedCount = submitResults.filter(r => r && !r.success).length;
+        if (failedCount > 0) {
+          toast.info(`${failedCount} verification(s) saved offline — will sync when back online`);
+        }
 
         // Show consolidated summary toast
         const found = results.filter((r) => r.qty > 0).length;
@@ -1640,8 +1696,8 @@ export default function CountingPage() {
               {stats.counted} of {stats.total} counted
             </span>
             {(() => {
-              const matched = items.filter((i) => i.countId !== null && (i.isMatch === true || i.isMatch === 1)).length;
-              const withVariance = items.filter((i) => i.countId !== null && !(i.isMatch === true || i.isMatch === 1)).length;
+              const matched = items.filter((i) => i.countId !== null && isMatchTrue(i.isMatch)).length;
+              const withVariance = items.filter((i) => i.countId !== null && !isMatchTrue(i.isMatch)).length;
               const pending = items.filter((i) => i.countId === null).length;
               return (
                 <>
@@ -2059,7 +2115,7 @@ export default function CountingPage() {
     const pendingInBin = reviewItems.filter((i) => i.countId === null);
     const countedInBin = reviewItems.filter((i) => i.countId !== null);
     const matchCount = countedInBin.filter(
-      (i) => i.variance === 0 || i.isMatch === true || i.isMatch === 1
+      (i) => i.variance === 0 || isMatchTrue(i.isMatch)
     ).length;
     const varianceCount = countedInBin.length - matchCount;
 

@@ -13,6 +13,7 @@ interface SyncState {
   syncing: boolean;
   lastSyncTime: string | null;
   preloaded: boolean;
+  authExpired: boolean;
 }
 
 export function useSync() {
@@ -22,9 +23,11 @@ export function useSync() {
     syncing: false,
     lastSyncTime: null,
     preloaded: false,
+    authExpired: false,
   });
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingCountRef = useRef(0);
+  const authExpiredRef = useRef(false);
 
   const updatePendingCount = useCallback(async () => {
     try {
@@ -37,11 +40,16 @@ export function useSync() {
   }, []);
 
   const doSync = useCallback(async () => {
-    if (!isOnline) return;
+    if (!isOnline || authExpiredRef.current) return;
 
     setState((prev) => ({ ...prev, syncing: true }));
     try {
       const result = await syncToServer();
+      if (result.authExpired) {
+        authExpiredRef.current = true;
+        setState((prev) => ({ ...prev, authExpired: true, syncing: false }));
+        return;
+      }
       if (result.synced > 0) {
         setState((prev) => ({
           ...prev,

@@ -145,6 +145,12 @@ function normalizeColumnName(col: string): string {
     .trim();
 }
 
+/** Strip leading formula-injection characters from imported cell values */
+function sanitizeCellValue(val: string): string {
+  // Prevent Excel formula injection: strip leading =, +, -, @, tab, CR
+  return val.replace(/^[=+\-@\t\r]+/, "");
+}
+
 export function parseExcel(buffer: ArrayBuffer): {
   items: ImportedItem[];
   headers: string[];
@@ -208,7 +214,7 @@ export function parseExcel(buffer: ArrayBuffer): {
       if (field === "onHand" || field === "avgCost" || field === "totalValue") {
         item[field] = typeof val === "number" ? val : parseFloat(String(val)) || 0;
       } else {
-        item[field] = String(val).trim();
+        item[field] = sanitizeCellValue(String(val).trim());
       }
     }
 

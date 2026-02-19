@@ -2,6 +2,16 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 
+function usePageVisible() {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const handler = () => setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, []);
+  return visible;
+}
+
 interface TeamCounts {
   queries: number;
   breakdowns: number;
@@ -65,8 +75,10 @@ const SUPERVISOR_SECTION_TO_COUNT: Record<string, keyof SupervisorCounts> = {
 export function useTeamNotifications() {
   const [counts, setCounts] = useState<TeamCounts>({ queries: 0, breakdowns: 0, verifications: 0 });
   const mountedRef = useRef(true);
+  const isVisible = usePageVisible();
 
   const fetchCounts = useCallback(async () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     try {
       const params = new URLSearchParams({
         lastSeenQueries: getLastSeen("queries"),
@@ -109,14 +121,21 @@ export function useTeamNotifications() {
     };
   }, [fetchCounts]);
 
+  // Re-fetch when tab becomes visible again
+  useEffect(() => {
+    if (isVisible) fetchCounts();
+  }, [isVisible, fetchCounts]);
+
   return { counts, refetch: fetchCounts };
 }
 
 export function useSupervisorNotifications() {
   const [counts, setCounts] = useState<SupervisorCounts>({ queries: 0, breakdowns: 0, serials: 0 });
   const mountedRef = useRef(true);
+  const isVisible = usePageVisible();
 
   const fetchCounts = useCallback(async () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     try {
       const params = new URLSearchParams({
         lastSeenQueries: getLastSeen("supervisorQueries"),
@@ -158,6 +177,11 @@ export function useSupervisorNotifications() {
       window.removeEventListener(MARK_SEEN_EVENT, handleMarkSeen);
     };
   }, [fetchCounts]);
+
+  // Re-fetch when tab becomes visible again
+  useEffect(() => {
+    if (isVisible) fetchCounts();
+  }, [isVisible, fetchCounts]);
 
   return { counts, refetch: fetchCounts };
 }

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { counts, items, teams } from "@/lib/db/schema";
+import { counts, items, teams, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { verifyToken } from "@/lib/token";
 
@@ -41,6 +41,19 @@ export async function GET(request: NextRequest) {
           // Auto-close after max duration
           if (Date.now() - startTime > MAX_DURATION_MS) {
             sendEvent("timeout", { message: "Connection expired, please reconnect" });
+            clearInterval(interval);
+            controller.close();
+            return;
+          }
+
+          // Check if event is still active
+          const [event] = await db
+            .select({ status: stocktakeEvents.status })
+            .from(stocktakeEvents)
+            .where(eq(stocktakeEvents.id, eventId));
+
+          if (!event || event.status === "completed" || event.status === "locked") {
+            sendEvent("event-closed", { message: "Event has been completed or locked" });
             clearInterval(interval);
             controller.close();
             return;

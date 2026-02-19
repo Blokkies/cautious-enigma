@@ -4,6 +4,10 @@ import { serialDiscrepancies, teams, items, counts, auditLog } from "@/lib/db/sc
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { getApiUser, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
+function safeJsonParse<T>(json: string, fallback: T): T {
+  try { return JSON.parse(json) as T; } catch { return fallback; }
+}
+
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
@@ -83,7 +87,7 @@ export async function GET(request: NextRequest) {
       itemCode: disc.itemCode,
       description: disc.description,
       binNumber: disc.binNumber,
-      unknownSerials: JSON.parse(disc.unknownSerials) as string[],
+      unknownSerials: safeJsonParse<string[]>(disc.unknownSerials, []),
       expectedSerials,
       status: disc.status,
       resolution: disc.resolution,
@@ -96,7 +100,7 @@ export async function GET(request: NextRequest) {
       verificationStatus: disc.verificationStatus,
       verificationAssignedAt: disc.verificationAssignedAt,
       verificationCompletedAt: disc.verificationCompletedAt,
-      verifiedSerials: disc.verifiedSerials ? JSON.parse(disc.verifiedSerials) : null,
+      verifiedSerials: disc.verifiedSerials ? safeJsonParse(disc.verifiedSerials, null) : null,
     };
   });
 

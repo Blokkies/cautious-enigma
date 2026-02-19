@@ -26,9 +26,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (typeof countedQty !== "number" || isNaN(countedQty)) {
+    if (typeof countedQty !== "number" || isNaN(countedQty) || countedQty < 0) {
       return NextResponse.json(
-        { error: "countedQty must be a valid number" },
+        { error: "countedQty must be a valid non-negative number" },
         { status: 400 }
       );
     }
@@ -315,9 +315,9 @@ export async function PUT(request: NextRequest) {
     for (const entry of countBatch) {
       const { itemId, countedQty, comment, clientId } = entry;
 
-      // Validate countedQty is a number
-      if (typeof countedQty !== "number" || isNaN(countedQty)) {
-        results.push({ itemId, error: "countedQty must be a number" });
+      // Validate countedQty is a non-negative number
+      if (typeof countedQty !== "number" || isNaN(countedQty) || countedQty < 0) {
+        results.push({ itemId, error: "countedQty must be a non-negative number" });
         continue;
       }
 

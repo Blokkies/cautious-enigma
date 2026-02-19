@@ -15,7 +15,18 @@ export async function GET(request: NextRequest) {
   }
 
   const tab = request.nextUrl.searchParams.get("tab");
-  const warehouses = await getEventWarehouses(user.eventId);
+
+  // Executives have eventId=0; allow override via query param
+  let eventId = user.eventId;
+  if (user.type === "executive" && user.eventId === 0) {
+    const paramEventId = request.nextUrl.searchParams.get("eventId");
+    if (paramEventId) eventId = Number(paramEventId);
+  }
+  if (!eventId) {
+    return NextResponse.json({ error: "eventId is required" }, { status: 400 });
+  }
+
+  const warehouses = await getEventWarehouses(eventId);
 
   const selectShape = {
     countId: counts.id,
@@ -39,18 +50,18 @@ export async function GET(request: NextRequest) {
   // 3-way filter: active (default), accepted, resolved
   const whereClause = tab === "resolved"
     ? and(
-        eq(counts.eventId, user.eventId),
+        eq(counts.eventId, eventId),
         eq(counts.checkStatus, "accepted"),
         eq(counts.isMatch, true)
       )
     : tab === "accepted"
       ? and(
-          eq(counts.eventId, user.eventId),
+          eq(counts.eventId, eventId),
           eq(counts.isMatch, false),
           eq(counts.checkStatus, "accepted")
         )
       : and(
-          eq(counts.eventId, user.eventId),
+          eq(counts.eventId, eventId),
           eq(counts.isMatch, false),
           sql`${counts.checkStatus} != 'accepted'`
         );
@@ -93,7 +104,7 @@ export async function GET(request: NextRequest) {
       })
       .from(verificationAssignments)
       .innerJoin(teams, eq(verificationAssignments.assignedTeamId, teams.id))
-      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, user.eventId)));
+      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, eventId)));
 
     // For completed verifications, fetch the verification count records
     const verificationIds = verifications
@@ -112,7 +123,7 @@ export async function GET(request: NextRequest) {
         .from(counts)
         .where(
           and(
-            eq(counts.eventId, user.eventId),
+            eq(counts.eventId, eventId),
             eq(counts.countType, "verification"),
             inArray(counts.verificationId, verificationIds)
           )
@@ -168,7 +179,7 @@ export async function GET(request: NextRequest) {
       .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
       .where(
         and(
-          eq(serialDiscrepancies.eventId, user.eventId),
+          eq(serialDiscrepancies.eventId, eventId),
           eq(serialDiscrepancies.status, "open")
         )
       );
@@ -202,7 +213,7 @@ export async function GET(request: NextRequest) {
         .from(items)
         .where(
           and(
-            eq(items.eventId, user.eventId),
+            eq(items.eventId, eventId),
             eq(items.itemCode, disc.itemCode),
             warehouseFilter(warehouses),
           )
@@ -221,7 +232,7 @@ export async function GET(request: NextRequest) {
         .from(items)
         .where(
           and(
-            eq(items.eventId, user.eventId),
+            eq(items.eventId, eventId),
             eq(items.itemCode, disc.itemCode),
           )
         )
@@ -287,7 +298,7 @@ export async function GET(request: NextRequest) {
       .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
       .where(
         and(
-          eq(serialDiscrepancies.eventId, user.eventId),
+          eq(serialDiscrepancies.eventId, eventId),
           sql`${serialDiscrepancies.approvedSerials} IS NOT NULL AND ${serialDiscrepancies.approvedSerials} != '[]'`
         )
       );
@@ -307,7 +318,7 @@ export async function GET(request: NextRequest) {
         .from(items)
         .where(
           and(
-            eq(items.eventId, user.eventId),
+            eq(items.eventId, eventId),
             eq(items.itemCode, disc.itemCode),
             warehouseFilter(warehouses),
           )
@@ -324,7 +335,7 @@ export async function GET(request: NextRequest) {
         .from(items)
         .where(
           and(
-            eq(items.eventId, user.eventId),
+            eq(items.eventId, eventId),
             eq(items.itemCode, disc.itemCode),
           )
         )

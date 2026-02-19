@@ -66,6 +66,35 @@ export default function SupervisorLayout({
   };
 
   const execMessageCount = counts.execMessages ?? 0;
+  const isExecutive = user?.type === "executive";
+
+  // Executive viewing supervisor pages: show minimal header with back link
+  if (isExecutive) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
+          <div className="flex items-center justify-between px-4 h-14">
+            <div className="flex items-center gap-3">
+              <Link href="/executive" className="text-sm text-primary hover:underline flex items-center gap-1">
+                ← Executive Dashboard
+              </Link>
+              <span className="text-muted-foreground">·</span>
+              <span className="font-semibold text-primary">Variances (Read-only)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {user && (
+                <span className="text-sm text-muted-foreground">{user.name}</span>
+              )}
+              <Button variant="ghost" size="sm" onClick={handleLogout} className="gap-1">
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </header>
+        <main className="p-4 max-w-6xl mx-auto">{children}</main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">

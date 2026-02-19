@@ -4,11 +4,12 @@ import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { LayoutDashboard, MessageSquare, LogOut } from "lucide-react";
+import { LayoutDashboard, MessageSquare, LogOut, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/executive", icon: LayoutDashboard, label: "Dashboard" },
+  { href: "/supervisor/variances", icon: AlertTriangle, label: "Variances" },
   { href: "/executive/messages", icon: MessageSquare, label: "Messages" },
 ];
 
@@ -45,7 +46,10 @@ export default function ExecutiveLayout({
             </Button>
           </div>
         </div>
-        <div className="flex border-t">
+      </header>
+      {/* Bottom nav for mobile */}
+      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t md:hidden">
+        <div className="flex items-center justify-around h-16">
           {navItems.map(({ href, icon: Icon, label }) => {
             const isActive = href === "/executive"
               ? pathname === "/executive" || pathname.startsWith("/executive/event")
@@ -55,20 +59,48 @@ export default function ExecutiveLayout({
                 key={href}
                 href={href}
                 className={cn(
-                  "flex items-center gap-1.5 px-5 py-2.5 text-sm whitespace-nowrap border-b-2 transition-colors",
+                  "flex flex-col items-center justify-center gap-1 w-full h-full",
                   isActive
-                    ? "border-primary text-primary font-medium"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <Icon className="h-4 w-4" />
-                {label}
+                <Icon className="h-5 w-5" />
+                <span className="text-[10px] font-medium">{label}</span>
               </Link>
             );
           })}
         </div>
-      </header>
-      <main className="p-4 max-w-6xl mx-auto">{children}</main>
+      </nav>
+      {/* Side nav for desktop */}
+      <div className="hidden md:flex">
+        <aside className="w-48 fixed left-0 top-14 bottom-0 bg-white border-r p-3 space-y-1">
+          {navItems.map(({ href, icon: Icon, label }) => {
+            const isActive = href === "/executive"
+              ? pathname === "/executive" || pathname.startsWith("/executive/event")
+              : pathname.startsWith(href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
+                  isActive
+                    ? "bg-primary/10 text-primary font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-gray-50"
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                <span className="flex-1">{label}</span>
+              </Link>
+            );
+          })}
+        </aside>
+        <main className="md:ml-48 flex-1 p-4 pb-20 md:pb-4 w-full">
+          {children}
+        </main>
+      </div>
+      <main className="md:hidden p-4 pb-20">{children}</main>
     </div>
   );
 }

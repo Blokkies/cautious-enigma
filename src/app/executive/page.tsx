@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -66,6 +66,7 @@ export default function ExecutiveDashboard() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const initialLoadDone = useRef(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -74,12 +75,11 @@ export default function ExecutiveDashboard() {
         const data = await res.json();
         const eventList: EventStats[] = data.events || [];
         setEvents(eventList);
-        setSelectedIds((prev) => {
-          if (prev.size === 0) {
-            return new Set(eventList.filter((e) => e.status === "active").map((e) => e.id));
-          }
-          return prev;
-        });
+        // Only auto-select on first load
+        if (!initialLoadDone.current) {
+          initialLoadDone.current = true;
+          setSelectedIds(new Set(eventList.filter((e) => e.status === "active").map((e) => e.id)));
+        }
       }
     } catch {
       // network error

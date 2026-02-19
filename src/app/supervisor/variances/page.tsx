@@ -76,10 +76,22 @@ interface Team {
   members: string | null;
 }
 
+interface EventOption {
+  id: number;
+  name: string;
+  status: string;
+}
+
 export default function VariancesPage() {
   const { user } = useAuth();
   const isAuditor = user?.type === "auditor" || user?.type === "executive";
+  const isExecutive = user?.type === "executive";
   const searchParams = useSearchParams();
+
+  // Executive event picker
+  const [execEvents, setExecEvents] = useState<EventOption[]>([]);
+  const [execEventId, setExecEventId] = useState<number>(0);
+
   const [activeVariances, setActiveVariances] = useState<VarianceItem[]>([]);
   const [acceptedVariances, setAcceptedVariances] = useState<VarianceItem[]>([]);
   const [resolvedVariances, setResolvedVariances] = useState<VarianceItem[]>([]);
@@ -130,12 +142,36 @@ export default function VariancesPage() {
   const [serialVerifySelectedTeamId, setSerialVerifySelectedTeamId] = useState<number | null>(null);
   const [serialVerifyAssigning, setSerialVerifyAssigning] = useState(false);
 
+  // Fetch events list for executive event picker
+  useEffect(() => {
+    if (!isExecutive) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/executive/dashboard");
+        if (res.ok) {
+          const data = await res.json();
+          const evts: EventOption[] = (data.events || []).map((e: { id: number; name: string; status: string }) => ({ id: e.id, name: e.name, status: e.status }));
+          setExecEvents(evts);
+          if (evts.length > 0 && execEventId === 0) {
+            const active = evts.find((e) => e.status === "active");
+            setExecEventId(active?.id ?? evts[0].id);
+          }
+        }
+      } catch {}
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExecutive]);
+
   const loadVariances = useCallback(async () => {
+    // Executive must pick an event first
+    if (isExecutive && !execEventId) return;
+
+    const eidParam = isExecutive ? `eventId=${execEventId}&` : "";
     try {
       const [activeRes, acceptedRes, resolvedRes] = await Promise.all([
-        fetch("/api/supervisor/variances"),
-        fetch("/api/supervisor/variances?tab=accepted"),
-        fetch("/api/supervisor/variances?tab=resolved"),
+        fetch(`/api/supervisor/variances?${eidParam}`),
+        fetch(`/api/supervisor/variances?${eidParam}tab=accepted`),
+        fetch(`/api/supervisor/variances?${eidParam}tab=resolved`),
       ]);
 
       if (activeRes.ok) {
@@ -169,7 +205,8 @@ export default function VariancesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExecutive, execEventId]);
 
   useEffect(() => {
     loadVariances();
@@ -775,6 +812,22 @@ export default function VariancesPage() {
 
   return (
     <div className="space-y-4">
+      {/* Executive event picker */}
+      {isExecutive && execEvents.length > 1 && (
+        <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg border">
+          <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">Event:</label>
+          <select
+            value={execEventId}
+            onChange={(e) => { setExecEventId(Number(e.target.value)); setLoading(true); }}
+            className="flex-1 rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            {execEvents.map((ev) => (
+              <option key={ev.id} value={ev.id}>{ev.name} ({ev.status})</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <h1 className="text-2xl font-bold">Variances</h1>

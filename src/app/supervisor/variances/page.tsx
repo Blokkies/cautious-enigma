@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
+import { markNotificationSeen } from "@/hooks/use-notifications";
 import { groupSerializedVariances, type SerializedGroupRow } from "@/lib/variance-grouping";
 import { getStockStatusStyle } from "@/components/counting/item-card";
 
@@ -175,6 +176,13 @@ export default function VariancesPage() {
     const interval = setInterval(loadVariances, 15000);
     return () => clearInterval(interval);
   }, [loadVariances]);
+
+  // Mark serials as seen when serial filter is active
+  useEffect(() => {
+    if (serialFilter) {
+      markNotificationSeen("supervisorSerials");
+    }
+  }, [serialFilter]);
 
   // Focus edit input when dialog opens
   useEffect(() => {

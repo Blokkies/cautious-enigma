@@ -14,23 +14,45 @@ export async function GET(request: NextRequest) {
   const lastSeenBreakdowns = searchParams.get("lastSeenBreakdowns") || "1970-01-01T00:00:00Z";
   const lastSeenSerials = searchParams.get("lastSeenSerials") || "1970-01-01T00:00:00Z";
 
-  // Count open queries created since lastSeen
+  // Count open queries that have new team messages since lastSeen,
+  // UNION with brand-new open queries created since lastSeen
   const queriesResult = await db.execute(
-    sql`SELECT COUNT(*) as count
-        FROM queries
-        WHERE event_id = ${user.eventId}
-          AND status = 'open'
-          AND created_at > ${lastSeenQueries}`
+    sql`SELECT COUNT(*) as count FROM (
+          SELECT DISTINCT qm.query_id as id
+          FROM query_messages qm
+          INNER JOIN queries q ON q.id = qm.query_id
+          WHERE q.event_id = ${user.eventId}
+            AND q.status = 'open'
+            AND qm.sender_type = 'team'
+            AND qm.created_at > ${lastSeenQueries}
+          UNION
+          SELECT id
+          FROM queries
+          WHERE event_id = ${user.eventId}
+            AND status = 'open'
+            AND created_at > ${lastSeenQueries}
+        ) AS combined`
   );
   const queriesCountVal = Number((queriesResult[0] as Record<string, unknown>)?.count ?? 0);
 
-  // Count pending breakdowns created since lastSeen
+  // Count pending breakdowns that have new team messages since lastSeen,
+  // UNION with brand-new pending breakdowns created since lastSeen
   const breakdownsResult = await db.execute(
-    sql`SELECT COUNT(*) as count
-        FROM breakdowns
-        WHERE event_id = ${user.eventId}
-          AND approval_status = 'pending'
-          AND created_at > ${lastSeenBreakdowns}`
+    sql`SELECT COUNT(*) as count FROM (
+          SELECT DISTINCT bm.breakdown_id as id
+          FROM breakdown_messages bm
+          INNER JOIN breakdowns b ON b.id = bm.breakdown_id
+          WHERE b.event_id = ${user.eventId}
+            AND b.approval_status = 'pending'
+            AND bm.sender_type = 'team'
+            AND bm.created_at > ${lastSeenBreakdowns}
+          UNION
+          SELECT id
+          FROM breakdowns
+          WHERE event_id = ${user.eventId}
+            AND approval_status = 'pending'
+            AND created_at > ${lastSeenBreakdowns}
+        ) AS combined`
   );
   const breakdownsCountVal = Number((breakdownsResult[0] as Record<string, unknown>)?.count ?? 0);
 

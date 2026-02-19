@@ -14,9 +14,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X, Eye } from "lucide-react";
+import { Plus, Trash2, Users, Shield, Pencil, ArrowRight, Loader2, X, Eye, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
+import { generateTeamTemplate } from "@/lib/team-excel";
 
 function parseMembers(members: string | null): string[] {
   if (!members) return [];
@@ -66,6 +67,17 @@ export default function SupervisorTeamsPage() {
   const [editTeam, setEditTeam] = useState<TeamInfo | null>(null);
   const [editForm, setEditForm] = useState({ name: "", pin: "" });
   const [editMembers, setEditMembers] = useState<string[]>([""]);
+
+  // Import from Excel
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    teamsCreated: number;
+    teamsSkipped: number;
+    totalRows: number;
+    errors: string[];
+  } | null>(null);
 
   const openEditDialog = (team: TeamInfo) => {
     setEditTeam(team);
@@ -247,6 +259,49 @@ export default function SupervisorTeamsPage() {
     }
   };
 
+  const downloadTemplate = () => {
+    const data = generateTeamTemplate();
+    const blob = new Blob([data as unknown as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "team-import-template.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importTeams = async () => {
+    if (!importFile) {
+      toast.error("Please select a file");
+      return;
+    }
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", importFile);
+      formData.append("eventId", String(eventId));
+      const res = await fetch("/api/admin/teams/import", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Import failed");
+        return;
+      }
+      setImportResult(data.summary);
+      if (data.success) {
+        toast.success(`${data.summary.teamsCreated} team(s) imported`);
+        loadTeams();
+      }
+    } catch {
+      toast.error("Import failed");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   if (loading) {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   }
@@ -374,10 +429,16 @@ export default function SupervisorTeamsPage() {
 
               <Separator className="my-4" />
 
-              <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
-                <Plus className="h-4 w-4" />
-                Bulk Create Teams
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
+                  <Plus className="h-4 w-4" />
+                  Bulk Create Teams
+                </Button>
+                <Button onClick={() => { setImportOpen(true); setImportFile(null); setImportResult(null); }} variant="outline" className="gap-1">
+                  <Upload className="h-4 w-4" />
+                  Import from Excel
+                </Button>
+              </div>
             </>
           )}
         </CardContent>
@@ -509,6 +570,85 @@ export default function SupervisorTeamsPage() {
                   <><Plus className="h-4 w-4" /> Create Teams</>
                 )}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import from Excel Dialog */}
+      <Dialog open={importOpen} onOpenChange={(open) => { if (!importing) setImportOpen(open); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5" />
+              Import Teams from Excel
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              Upload an Excel file with columns: <strong>Team Name</strong>, <strong>PIN</strong>, and optionally <strong>Members</strong> (comma-separated).
+            </div>
+
+            <Button variant="outline" size="sm" onClick={downloadTemplate} className="gap-1">
+              <Download className="h-4 w-4" />
+              Download Template
+            </Button>
+
+            <div>
+              <label className="text-sm font-medium mb-1 block">Select File</label>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => {
+                  setImportFile(e.target.files?.[0] || null);
+                  setImportResult(null);
+                }}
+                disabled={importing}
+              />
+            </div>
+
+            {importResult && (
+              <div className="space-y-2">
+                {importResult.teamsCreated > 0 && (
+                  <div className="flex items-start gap-2 p-3 bg-green-50 text-green-800 rounded-lg text-sm">
+                    <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div>
+                      <div className="font-medium">{importResult.teamsCreated} team(s) created successfully</div>
+                      {importResult.teamsSkipped > 0 && (
+                        <div className="text-green-600">{importResult.teamsSkipped} skipped (already exist)</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {importResult.errors.length > 0 && (
+                  <div className="p-3 bg-red-50 text-red-800 rounded-lg text-sm">
+                    <div className="flex items-center gap-1 font-medium mb-1">
+                      <AlertCircle className="h-4 w-4" />
+                      {importResult.errors.length} issue(s)
+                    </div>
+                    <ul className="list-disc list-inside space-y-0.5 text-xs">
+                      {importResult.errors.map((err, i) => (
+                        <li key={i}>{err}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setImportOpen(false)} disabled={importing}>
+                {importResult ? "Close" : "Cancel"}
+              </Button>
+              {!importResult?.teamsCreated && (
+                <Button onClick={importTeams} disabled={importing || !importFile} className="gap-1">
+                  {importing ? (
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Importing...</>
+                  ) : (
+                    <><Upload className="h-4 w-4" /> Import</>
+                  )}
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>

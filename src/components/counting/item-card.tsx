@@ -223,10 +223,10 @@ export function ActiveItemCard({
         {showSuccessFlash && onFlashComplete && (
           <SuccessFlash onComplete={onFlashComplete} />
         )}
-        <CardContent className={`p-4 ${er ? "space-y-5" : "space-y-4"} pb-48`}>
+        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"} pb-48`}>
           {/* Verification badge */}
           {isVerification && (
-            <Badge className={`bg-purple-100 text-purple-800 border-purple-300 ${er ? "text-sm" : "text-xs"}`}>
+            <Badge className={`bg-purple-100 text-purple-800 border-purple-300 ${er ? "text-base" : "text-xs"}`}>
               Verification Count
             </Badge>
           )}
@@ -234,15 +234,15 @@ export function ActiveItemCard({
           {/* Bin number */}
           {item.binNumber && (
             <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : "py-2"}`}>
-              <span className={`${er ? "text-sm" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
-              <span className={`font-mono font-bold ${er ? "text-lg" : "text-base"}`}>{item.binNumber}</span>
+              <span className={`${er ? "text-base" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
+              <span className={`font-mono font-bold ${er ? "text-xl" : "text-base"}`}>{item.binNumber}</span>
             </div>
           )}
 
           {/* Item Code */}
           <div className="space-y-1">
-            <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
-            <div className={`font-mono font-bold ${er ? "text-2xl" : "text-xl"} tracking-tight`}>
+            <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
+            <div className={`font-mono font-bold ${er ? "text-3xl" : "text-xl"} tracking-tight`}>
               {item.itemCode}
             </div>
           </div>
@@ -250,41 +250,41 @@ export function ActiveItemCard({
           {/* Description */}
           {item.description && (
             <div className="space-y-0.5">
-              <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
-              <div className={`${er ? "text-base" : "text-sm"} leading-snug`}>
+              <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
+              <div className={`${er ? "text-lg" : "text-sm"} leading-snug`}>
                 {item.description}
               </div>
             </div>
           )}
 
           {/* Metadata row */}
-          <div className={`flex flex-wrap items-center ${er ? "gap-2" : "gap-1.5"}`}>
+          <div className={`flex flex-wrap items-center ${er ? "gap-3" : "gap-1.5"}`}>
             {item.brand && (
-              <Badge variant="secondary" className={er ? "text-sm" : "text-xs"}>
+              <Badge variant="secondary" className={er ? "text-base" : "text-xs"}>
                 {item.brand}
               </Badge>
             )}
             {item.stockStatus && (
-              <Badge className={`${er ? "text-sm" : "text-xs"} ${getStockStatusStyle(item.stockStatus)}`}>
+              <Badge className={`${er ? "text-base" : "text-xs"} ${getStockStatusStyle(item.stockStatus)}`}>
                 {item.stockStatus}
               </Badge>
             )}
             {isSerialized && (
-              <Badge className={`${er ? "text-sm" : "text-xs"} bg-purple-100 text-purple-800 border-purple-300`}>
+              <Badge className={`${er ? "text-base" : "text-xs"} bg-purple-100 text-purple-800 border-purple-300`}>
                 Serialized
               </Badge>
             )}
           </div>
           {isSerialized && item.serialNumber && (
-            <div className={`${er ? "text-sm" : "text-xs"} font-mono text-purple-700 bg-purple-50 px-2 py-1 rounded`}>
+            <div className={`${er ? "text-base" : "text-xs"} font-mono text-purple-700 bg-purple-50 px-2 py-1 rounded`}>
               S/N: {item.serialNumber}
             </div>
           )}
 
           {/* On-hand quantity (with variance tint) */}
-          <div className={`text-center py-2 rounded-lg ${varianceBgStyles[vState]}`}>
-            <div className={`${er ? "text-sm" : "text-xs"} font-medium text-muted-foreground mb-1`}>On Hand</div>
-            <div className={`${er ? "text-4xl" : "text-3xl"} font-bold`}>{onHand}</div>
+          <div className={`text-center ${er ? "py-3" : "py-2"} rounded-lg ${varianceBgStyles[vState]}`}>
+            <div className={`${er ? "text-base" : "text-xs"} font-medium text-muted-foreground mb-1`}>On Hand</div>
+            <div className={`${er ? "text-5xl" : "text-3xl"} font-bold`}>{onHand}</div>
           </div>
 
           {/* Skip + Add note */}
@@ -292,7 +292,7 @@ export function ActiveItemCard({
             <Button
               variant="outline"
               size="sm"
-              className={er ? "text-sm" : "text-xs"}
+              className={er ? "text-base h-10" : "text-xs"}
               onClick={onSkip}
             >
               Skip
@@ -300,9 +300,9 @@ export function ActiveItemCard({
             <button
               type="button"
               onClick={() => setLocalShowComment((v) => !v)}
-              className={`${er ? "text-sm" : "text-xs"} text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors`}
+              className={`${er ? "text-base" : "text-xs"} text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors`}
             >
-              <MessageSquare className="h-3.5 w-3.5" />
+              <MessageSquare className={er ? "h-5 w-5" : "h-3.5 w-3.5"} />
               {localShowComment ? "Hide note" : "Add note"}
             </button>
           </div>
@@ -313,7 +313,7 @@ export function ActiveItemCard({
               value={comment}
               onChange={(e) => onCommentChange(e.target.value)}
               placeholder="Add a note about this item..."
-              className={er ? "text-base" : "text-sm"}
+              className={er ? "text-lg" : "text-sm"}
               rows={2}
             />
           )}
@@ -325,9 +325,9 @@ export function ActiveItemCard({
         <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
           {/* Input row: On-hand | Input | Live variance */}
           <div className="flex items-center gap-2">
-            <div className="flex flex-col items-center flex-shrink-0 min-w-[3rem]">
-              <span className="text-[10px] text-muted-foreground font-medium">OH</span>
-              <span className={`${er ? "text-lg" : "text-base"} font-bold`}>{onHand}</span>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[4rem]" : "min-w-[3rem]"}`}>
+              <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground font-medium`}>OH</span>
+              <span className={`${er ? "text-2xl" : "text-base"} font-bold`}>{onHand}</span>
             </div>
             <Input
               ref={inputRef}
@@ -336,7 +336,7 @@ export function ActiveItemCard({
               value={qtyValue}
               onChange={(e) => onQtyChange(e.target.value)}
               placeholder="Qty"
-              className={`${er ? "h-16 text-3xl" : "h-14 text-2xl"} text-center font-semibold flex-1 ${varianceInputStyles[vState]}`}
+              className={`${er ? "h-20 text-4xl" : "h-14 text-2xl"} text-center font-semibold flex-1 ${varianceInputStyles[vState]}`}
               disabled={isSubmitting}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -345,10 +345,10 @@ export function ActiveItemCard({
                 }
               }}
             />
-            <div className="flex flex-col items-center flex-shrink-0 min-w-[3rem]">
-              <span className="text-[10px] text-muted-foreground font-medium">Var</span>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[4rem]" : "min-w-[3rem]"}`}>
+              <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground font-medium`}>Var</span>
               {liveVariance !== null && !isNaN(liveVariance) ? (
-                <span className={`${er ? "text-base" : "text-sm"} font-bold px-2 py-0.5 rounded-full ${
+                <span className={`${er ? "text-lg" : "text-sm"} font-bold px-2 py-0.5 rounded-full ${
                   vState === "match" ? "text-green-700 bg-green-100" :
                   vState === "small" ? "text-amber-700 bg-amber-100" :
                   vState === "large" ? "text-red-700 bg-red-100" : ""
@@ -356,7 +356,7 @@ export function ActiveItemCard({
                   {liveVariance === 0 ? "MATCH" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
                 </span>
               ) : (
-                <span className="text-sm text-muted-foreground">—</span>
+                <span className={`${er ? "text-base" : "text-sm"} text-muted-foreground`}>—</span>
               )}
             </div>
           </div>
@@ -365,7 +365,7 @@ export function ActiveItemCard({
           {isMatchValue ? (
             <Button
               onClick={onSubmit}
-              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white ${
+              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white ${
                 isVerification
                   ? "bg-purple-600 hover:bg-purple-700"
                   : "bg-green-600 hover:bg-green-700"
@@ -377,7 +377,7 @@ export function ActiveItemCard({
           ) : (
             <Button
               onClick={onSubmit}
-              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white ${
+              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white ${
                 isVerification
                   ? "bg-purple-600 hover:bg-purple-700"
                   : "bg-amber-500 hover:bg-amber-600"

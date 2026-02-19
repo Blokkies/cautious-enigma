@@ -1197,6 +1197,26 @@ export default function CountingPage() {
     });
   }, []);
 
+  const collapseAllAisles = useCallback((groups: ReturnType<typeof groupBinsByAisle>, variant: string) => {
+    setCollapsedAisles((prev) => {
+      const next = new Set(prev);
+      for (const group of groups) {
+        next.add(`${variant}-${group.prefix}`);
+      }
+      return next;
+    });
+  }, []);
+
+  const expandAllAisles = useCallback((groups: ReturnType<typeof groupBinsByAisle>, variant: string) => {
+    setCollapsedAisles((prev) => {
+      const next = new Set(prev);
+      for (const group of groups) {
+        next.delete(`${variant}-${group.prefix}`);
+      }
+      return next;
+    });
+  }, []);
+
   // ---------- Render helpers ----------
   function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number }, variant: "not-started" | "in-progress" | "completed") {
     const isSingleItem = bStats.total === 1;
@@ -1211,19 +1231,19 @@ export default function CountingPage() {
           onClick={() => selectBin(bin)}
         >
           <div className="flex items-center gap-1">
-            <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"} truncate`}>{bin}</span>
+            <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"} truncate`}>{bin}</span>
             {hasSerialized && (
               <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
             )}
           </div>
           <div className="flex items-center justify-between mt-1">
             {!isSingleItem && (
-              <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground`}>{bStats.pending} left</span>
+              <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground`}>{bStats.pending} left</span>
             )}
             <CircularProgress percent={percent} />
           </div>
           {bStats.supervisorEdited > 0 && (
-            <span className={`${er ? "text-xs" : "text-[10px]"} font-medium text-indigo-700 mt-1 block`}>
+            <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-indigo-700 mt-1 block`}>
               Supervisor edited
             </span>
           )}
@@ -1243,7 +1263,7 @@ export default function CountingPage() {
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1 min-w-0">
-              <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"} truncate`}>{bin}</span>
+              <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"} truncate`}>{bin}</span>
               {hasSerialized && (
                 <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
               )}
@@ -1255,15 +1275,15 @@ export default function CountingPage() {
             )}
           </div>
           {!isSingleItem && (
-            <div className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground mt-1`}>{bStats.total} items</div>
+            <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>{bStats.total} items</div>
           )}
           {hasVariances && (
-            <span className={`${er ? "text-xs" : "text-[10px]"} font-medium text-amber-700 mt-0.5 block`}>
+            <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-amber-700 mt-0.5 block`}>
               {bStats.variances} variance{bStats.variances !== 1 ? "s" : ""}
             </span>
           )}
           {bStats.supervisorEdited > 0 && (
-            <span className={`${er ? "text-xs" : "text-[10px]"} font-medium text-indigo-700 mt-0.5 block`}>
+            <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-indigo-700 mt-0.5 block`}>
               Supervisor edited
             </span>
           )}
@@ -1279,13 +1299,13 @@ export default function CountingPage() {
         onClick={() => selectBin(bin)}
       >
         <div className="flex items-center gap-1">
-          <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"} truncate`}>{bin}</span>
+          <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"} truncate`}>{bin}</span>
           {hasSerialized && (
             <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
           )}
         </div>
         {!isSingleItem && (
-          <div className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground mt-1`}>
+          <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
             {bStats.total} items
           </div>
         )}
@@ -1312,12 +1332,12 @@ export default function CountingPage() {
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className={`font-mono font-bold ${er ? "text-base" : "text-sm"}`}>{bin}</span>
+            <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"}`}>{bin}</span>
             {hasSerialized && (
               <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
             )}
           </div>
-          <span className={`${er ? "text-xs" : "text-[10px]"} text-muted-foreground`}>
+          <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
             {bStats.total} item{bStats.total !== 1 ? "s" : ""}
             {variant === "in-progress" && ` · ${bStats.pending} left`}
             {variant === "completed" && hasVariances && ` · ${bStats.variances} variance${bStats.variances !== 1 ? "s" : ""}`}
@@ -1326,7 +1346,7 @@ export default function CountingPage() {
         {variant === "in-progress" && (
           <div className="flex items-center gap-2 flex-shrink-0">
             <Progress value={percent} className="h-2 w-20" />
-            <span className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-blue-600 min-w-[2rem] text-right`}>{percent}%</span>
+            <span className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-blue-600 min-w-[2rem] text-right`}>{percent}%</span>
           </div>
         )}
         {variant === "completed" && (
@@ -1769,8 +1789,8 @@ export default function CountingPage() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            <Progress value={stats.progressPercent} className={`${er ? "h-4" : "h-3"} flex-1`} />
-            <span className={`${er ? "text-base" : "text-sm"} font-semibold text-primary min-w-[3rem] text-right`}>
+            <Progress value={stats.progressPercent} className={`${er ? "h-5" : "h-3"} flex-1`} />
+            <span className={`${er ? "text-lg" : "text-sm"} font-semibold text-primary min-w-[3rem] text-right`}>
               {stats.progressPercent}%
             </span>
           </div>
@@ -1865,7 +1885,7 @@ export default function CountingPage() {
         {!search.trim() && (
           <div className="border-b bg-muted/30">
             <div className="px-4 pt-3 pb-1 flex items-center justify-between">
-              <h1 className={`${er ? "text-xl" : "text-lg"} font-semibold`}>Select a Bin</h1>
+              <h1 className={`${er ? "text-2xl" : "text-lg"} font-semibold`}>Select a Bin</h1>
               <button
                 onClick={() => updateSettings({ binViewMode: settings.binViewMode === "grid" ? "list" : "grid" })}
                 className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -2052,7 +2072,16 @@ export default function CountingPage() {
                       All bins have been started
                     </div>
                   ) : (
-                    renderAisleGroupedBins(groupedNotStarted, "not-started")
+                    <>
+                      {groupedNotStarted.length > 1 && (
+                        <div className="flex items-center justify-end gap-2 mb-2">
+                          <button onClick={() => expandAllAisles(groupedNotStarted, "not-started")} className="text-xs text-primary hover:underline">Expand all</button>
+                          <span className="text-muted-foreground text-xs">·</span>
+                          <button onClick={() => collapseAllAisles(groupedNotStarted, "not-started")} className="text-xs text-primary hover:underline">Collapse all</button>
+                        </div>
+                      )}
+                      {renderAisleGroupedBins(groupedNotStarted, "not-started")}
+                    </>
                   )}
                 </div>
               )}
@@ -2065,7 +2094,16 @@ export default function CountingPage() {
                       No bins in progress
                     </div>
                   ) : (
-                    renderAisleGroupedBins(groupedInProgress, "in-progress")
+                    <>
+                      {groupedInProgress.length > 1 && (
+                        <div className="flex items-center justify-end gap-2 mb-2">
+                          <button onClick={() => expandAllAisles(groupedInProgress, "in-progress")} className="text-xs text-primary hover:underline">Expand all</button>
+                          <span className="text-muted-foreground text-xs">·</span>
+                          <button onClick={() => collapseAllAisles(groupedInProgress, "in-progress")} className="text-xs text-primary hover:underline">Collapse all</button>
+                        </div>
+                      )}
+                      {renderAisleGroupedBins(groupedInProgress, "in-progress")}
+                    </>
                   )}
                 </div>
               )}
@@ -2105,7 +2143,16 @@ export default function CountingPage() {
                           No bins match this filter
                         </div>
                       ) : (
-                        renderAisleGroupedBins(groupedCompleted, "completed")
+                        <>
+                          {groupedCompleted.length > 1 && (
+                            <div className="flex items-center justify-end gap-2">
+                              <button onClick={() => expandAllAisles(groupedCompleted, "completed")} className="text-xs text-primary hover:underline">Expand all</button>
+                              <span className="text-muted-foreground text-xs">·</span>
+                              <button onClick={() => collapseAllAisles(groupedCompleted, "completed")} className="text-xs text-primary hover:underline">Collapse all</button>
+                            </div>
+                          )}
+                          {renderAisleGroupedBins(groupedCompleted, "completed")}
+                        </>
                       )}
                     </>
                   )}

@@ -262,19 +262,19 @@ export function SerializedGroupCard({
         {showSuccessFlash && onFlashComplete && (
           <SuccessFlash onComplete={onFlashComplete} />
         )}
-        <CardContent className={`p-4 ${er ? "space-y-5" : "space-y-4"} pb-52`}>
+        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"} pb-52`}>
           {/* Bin number */}
           {entry.items[0]?.binNumber && (
             <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : "py-2"}`}>
-              <span className={`${er ? "text-sm" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
-              <span className={`font-mono font-bold ${er ? "text-lg" : "text-base"}`}>{entry.items[0].binNumber}</span>
+              <span className={`${er ? "text-base" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
+              <span className={`font-mono font-bold ${er ? "text-xl" : "text-base"}`}>{entry.items[0].binNumber}</span>
             </div>
           )}
 
           {/* Item Code */}
           <div className="space-y-1">
-            <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
-            <div className={`font-mono font-bold ${er ? "text-2xl" : "text-xl"} tracking-tight`}>
+            <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
+            <div className={`font-mono font-bold ${er ? "text-3xl" : "text-xl"} tracking-tight`}>
               {entry.itemCode}
             </div>
           </div>
@@ -282,35 +282,35 @@ export function SerializedGroupCard({
           {/* Description */}
           {entry.description && (
             <div className="space-y-0.5">
-              <div className={`${er ? "text-xs" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
-              <div className={`${er ? "text-base" : "text-sm"} leading-snug`}>
+              <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
+              <div className={`${er ? "text-lg" : "text-sm"} leading-snug`}>
                 {entry.description}
               </div>
             </div>
           )}
 
           {/* Metadata badges */}
-          <div className={`flex flex-wrap items-center ${er ? "gap-2" : "gap-1.5"}`}>
+          <div className={`flex flex-wrap items-center ${er ? "gap-3" : "gap-1.5"}`}>
             {entry.brand && (
-              <Badge variant="secondary" className={er ? "text-sm" : "text-xs"}>
+              <Badge variant="secondary" className={er ? "text-base" : "text-xs"}>
                 {entry.brand}
               </Badge>
             )}
             {entry.stockStatus && (
-              <Badge className={`${er ? "text-sm" : "text-xs"} ${getStockStatusStyle(entry.stockStatus)}`}>
+              <Badge className={`${er ? "text-base" : "text-xs"} ${getStockStatusStyle(entry.stockStatus)}`}>
                 {entry.stockStatus}
               </Badge>
             )}
-            <Badge className={`${er ? "text-sm" : "text-xs"} bg-purple-100 text-purple-800 border-purple-300`}>
+            <Badge className={`${er ? "text-base" : "text-xs"} bg-purple-100 text-purple-800 border-purple-300`}>
               Serialized
             </Badge>
-            <Badge variant="outline" className={er ? "text-sm" : "text-xs"}>
+            <Badge variant="outline" className={er ? "text-base" : "text-xs"}>
               {entry.items.length} serial{entry.items.length !== 1 ? "s" : ""}
             </Badge>
           </div>
 
           {/* Scanner instructions */}
-          <div className={`${er ? "text-sm" : "text-xs"} text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5`}>
+          <div className={`${er ? "text-base" : "text-xs"} text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5`}>
             Scan found serials, then submit. Unscanned = Not Found
           </div>
 
@@ -329,14 +329,14 @@ export function SerializedGroupCard({
                   }
                 }}
                 placeholder="Scan or type serial number..."
-                className={`pl-9 ${er ? "h-12 text-base" : "h-10"}`}
+                className={`pl-9 ${er ? "h-14 text-lg" : "h-10"}`}
               />
             </div>
             <Button
               type="button"
               variant="outline"
               size="icon"
-              className={`${er ? "h-12 w-12" : "h-10 w-10"} flex-shrink-0`}
+              className={`${er ? "h-14 w-14" : "h-10 w-10"} flex-shrink-0`}
               onClick={handleScan}
               disabled={!scanInput.trim()}
             >
@@ -344,7 +344,7 @@ export function SerializedGroupCard({
             </Button>
           </div>
           {scanMessage && (
-            <div className={`${er ? "text-sm" : "text-xs"} font-medium px-3 py-1.5 rounded-md ${
+            <div className={`${er ? "text-base" : "text-xs"} font-medium px-3 py-1.5 rounded-md ${
               scanMessage.type === "success"
                 ? "text-green-800 bg-green-100 border border-green-200"
                 : scanMessage.type === "cross-bin"
@@ -360,7 +360,7 @@ export function SerializedGroupCard({
           {/* Unknown serials list */}
           {unknownSerials.length > 0 && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
-              <div className={`${er ? "text-sm" : "text-xs"} font-medium text-amber-800`}>
+              <div className={`${er ? "text-base" : "text-xs"} font-medium text-amber-800`}>
                 Unknown serials ({unknownSerials.length}) — will be sent to supervisor
               </div>
               <div className="space-y-1">
@@ -388,9 +388,9 @@ export function SerializedGroupCard({
             <button
               type="button"
               onClick={() => setShowList((v) => !v)}
-              className={`w-full flex items-center justify-between px-3 ${er ? "py-3" : "py-2"} rounded-lg border bg-muted/50 hover:bg-muted transition-colors`}
+              className={`w-full flex items-center justify-between px-3 ${er ? "py-4" : "py-2"} rounded-lg border bg-muted/50 hover:bg-muted transition-colors`}
             >
-              <span className={`${er ? "text-base" : "text-sm"} font-medium`}>
+              <span className={`${er ? "text-lg" : "text-sm"} font-medium`}>
                 {showList ? "Hide" : "Show"} serial list
               </span>
               <div className="flex items-center gap-2">
@@ -451,7 +451,7 @@ export function SerializedGroupCard({
             <Button
               variant="outline"
               size="sm"
-              className={er ? "text-sm" : "text-xs"}
+              className={er ? "text-base h-10" : "text-xs"}
               onClick={onSkip}
             >
               Skip
@@ -459,7 +459,7 @@ export function SerializedGroupCard({
             <button
               type="button"
               onClick={() => setShowComment((v) => !v)}
-              className={`${er ? "text-sm" : "text-xs"} text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors`}
+              className={`${er ? "text-base" : "text-xs"} text-muted-foreground hover:text-foreground flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-muted transition-colors`}
             >
               <MessageSquare className="h-3.5 w-3.5" />
               {showComment ? "Hide note" : "Add note"}
@@ -472,7 +472,7 @@ export function SerializedGroupCard({
               value={comment}
               onChange={(e) => onCommentChange(e.target.value)}
               placeholder="Add a note about this group..."
-              className={er ? "text-base" : "text-sm"}
+              className={er ? "text-lg" : "text-sm"}
               rows={2}
             />
           )}
@@ -490,7 +490,7 @@ export function SerializedGroupCard({
       <div className="fixed bottom-16 left-0 right-0 z-40 border-t shadow-lg bg-white safe-area-bottom">
         <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
           {/* Summary */}
-          <div className={`text-center ${er ? "text-base" : "text-sm"} text-muted-foreground`}>
+          <div className={`text-center ${er ? "text-lg" : "text-sm"} text-muted-foreground`}>
             {foundCount} found · {notFoundCount} not found
           </div>
 
@@ -524,7 +524,7 @@ export function SerializedGroupCard({
           {allFound ? (
             <Button
               onClick={handleSubmitClick}
-              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white bg-green-600 hover:bg-green-700`}
+              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white bg-green-600 hover:bg-green-700`}
               disabled={isSubmitting}
             >
               All Match
@@ -532,7 +532,7 @@ export function SerializedGroupCard({
           ) : allNotFound ? (
             <Button
               onClick={handleSubmitClick}
-              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white bg-red-600 hover:bg-red-700`}
+              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white bg-red-600 hover:bg-red-700`}
               disabled={isSubmitting}
             >
               Submit All Not Found
@@ -540,7 +540,7 @@ export function SerializedGroupCard({
           ) : (
             <Button
               onClick={handleSubmitClick}
-              className={`w-full ${er ? "h-16 text-xl" : "h-14 text-lg"} font-bold text-white bg-amber-500 hover:bg-amber-600`}
+              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white bg-amber-500 hover:bg-amber-600`}
               disabled={isSubmitting}
             >
               Submit — {foundCount} Found, {notFoundCount} Not Found

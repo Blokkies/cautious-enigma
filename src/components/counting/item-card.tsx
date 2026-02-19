@@ -223,7 +223,7 @@ export function ActiveItemCard({
         {showSuccessFlash && onFlashComplete && (
           <SuccessFlash onComplete={onFlashComplete} />
         )}
-        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"} pb-48`}>
+        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"}`}>
           {/* Verification badge */}
           {isVerification && (
             <Badge className={`bg-purple-100 text-purple-800 border-purple-300 ${er ? "text-base" : "text-xs"}`}>

@@ -262,7 +262,7 @@ export function SerializedGroupCard({
         {showSuccessFlash && onFlashComplete && (
           <SuccessFlash onComplete={onFlashComplete} />
         )}
-        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"} pb-52`}>
+        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"}`}>
           {/* Bin number */}
           {entry.items[0]?.binNumber && (
             <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : "py-2"}`}>

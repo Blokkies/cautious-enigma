@@ -64,10 +64,12 @@ export default function TeamsPage() {
   const [showPins, setShowPins] = useState(false);
 
   // Team form
+  const [addTeamOpen, setAddTeamOpen] = useState(false);
   const [teamForm, setTeamForm] = useState({ name: "", pin: "" });
   const [teamMembers, setTeamMembers] = useState<string[]>([""]);
 
   // Supervisor form
+  const [addSupOpen, setAddSupOpen] = useState(false);
   const [supForm, setSupForm] = useState({
     name: "",
     pin: "",
@@ -194,6 +196,7 @@ export default function TeamsPage() {
         toast.success("Team created");
         setTeamForm({ name: "", pin: "" });
         setTeamMembers([""]);
+        setAddTeamOpen(false);
         loadTeams();
       }
     } catch {
@@ -220,6 +223,7 @@ export default function TeamsPage() {
       if (res.ok) {
         toast.success("Supervisor created");
         setSupForm({ name: "", pin: "" });
+        setAddSupOpen(false);
         loadTeams();
       }
     } catch {
@@ -447,30 +451,49 @@ export default function TeamsPage() {
 
           <Separator className="my-4" />
 
-          {/* Add Single Team */}
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={() => { setAddTeamOpen(true); setTeamForm({ name: "", pin: "" }); setTeamMembers([""]); }} className="gap-1">
+              <Plus className="h-4 w-4" />
+              Add Team
+            </Button>
+            <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
+              <Plus className="h-4 w-4" />
+              Bulk Create
+            </Button>
+            <Button onClick={() => { setImportOpen(true); setImportFile(null); setImportResult(null); }} variant="outline" className="gap-1">
+              <Upload className="h-4 w-4" />
+              Import from Excel
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Add Team Dialog */}
+      <Dialog open={addTeamOpen} onOpenChange={(open) => { if (!open) setAddTeamOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Team</DialogTitle>
+          </DialogHeader>
           <div className="space-y-3">
-            <h3 className="font-medium">Add Team</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                placeholder="Team name"
-                value={teamForm.name}
-                onChange={(e) =>
-                  setTeamForm((p) => ({ ...p, name: e.target.value }))
-                }
-              />
-              <Input
-                placeholder="4-digit PIN"
-                type="password"
-                maxLength={6}
-                value={teamForm.pin}
-                onChange={(e) =>
-                  setTeamForm((p) => ({
-                    ...p,
-                    pin: e.target.value.replace(/\D/g, ""),
-                  }))
-                }
-              />
-            </div>
+            <Input
+              placeholder="Team name"
+              value={teamForm.name}
+              onChange={(e) =>
+                setTeamForm((p) => ({ ...p, name: e.target.value }))
+              }
+            />
+            <Input
+              placeholder="4-digit PIN"
+              type="password"
+              maxLength={6}
+              value={teamForm.pin}
+              onChange={(e) =>
+                setTeamForm((p) => ({
+                  ...p,
+                  pin: e.target.value.replace(/\D/g, ""),
+                }))
+              }
+            />
             <div className="space-y-2">
               <div className="text-sm font-medium">Members</div>
               {teamMembers.map((member, i) => (
@@ -491,26 +514,15 @@ export default function TeamsPage() {
                 <Plus className="h-3 w-3" /> Add Member
               </Button>
             </div>
-            <Button onClick={createTeam} className="gap-1">
-              <Plus className="h-4 w-4" />
-              Add Team
-            </Button>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setAddTeamOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={createTeam}>Create Team</Button>
+            </div>
           </div>
-
-          <Separator className="my-4" />
-
-          <div className="flex gap-2">
-            <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
-              <Plus className="h-4 w-4" />
-              Bulk Create Teams
-            </Button>
-            <Button onClick={() => { setImportOpen(true); setImportFile(null); setImportResult(null); }} variant="outline" className="gap-1">
-              <Upload className="h-4 w-4" />
-              Import from Excel
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Team Dialog */}
       <Dialog open={!!editTeam} onOpenChange={(open) => !open && setEditTeam(null)}>
@@ -759,36 +771,48 @@ export default function TeamsPage() {
             </div>
           )}
 
-          <div className="space-y-3">
-            <h3 className="font-medium">Add Supervisor</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                placeholder="Supervisor name"
-                value={supForm.name}
-                onChange={(e) =>
-                  setSupForm((p) => ({ ...p, name: e.target.value }))
-                }
-              />
-              <Input
-                placeholder="4-digit PIN"
-                type="password"
-                maxLength={6}
-                value={supForm.pin}
-                onChange={(e) =>
-                  setSupForm((p) => ({
-                    ...p,
-                    pin: e.target.value.replace(/\D/g, ""),
-                  }))
-                }
-              />
-            </div>
-            <Button onClick={createSupervisor} className="gap-1">
-              <Plus className="h-4 w-4" />
-              Add Supervisor
-            </Button>
-          </div>
+          <Button onClick={() => { setAddSupOpen(true); setSupForm({ name: "", pin: "" }); }} className="gap-1">
+            <Plus className="h-4 w-4" />
+            Add Supervisor
+          </Button>
         </CardContent>
       </Card>
+
+      {/* Add Supervisor Dialog */}
+      <Dialog open={addSupOpen} onOpenChange={(open) => { if (!open) setAddSupOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Supervisor</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Supervisor name"
+              value={supForm.name}
+              onChange={(e) =>
+                setSupForm((p) => ({ ...p, name: e.target.value }))
+              }
+            />
+            <Input
+              placeholder="4-digit PIN"
+              type="password"
+              maxLength={6}
+              value={supForm.pin}
+              onChange={(e) =>
+                setSupForm((p) => ({
+                  ...p,
+                  pin: e.target.value.replace(/\D/g, ""),
+                }))
+              }
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setAddSupOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={createSupervisor}>Create Supervisor</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

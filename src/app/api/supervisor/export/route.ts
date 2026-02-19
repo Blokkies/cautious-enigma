@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import {
   items, counts, teams, serialDiscrepancies, stocktakeEvents,
   verificationAssignments, queries, queryMessages, breakdowns,
-  breakdownMessages, auditLog, supervisors,
+  breakdownMessages, auditLog, supervisors, admins, executives,
 } from "@/lib/db/schema";
 import { eq, and, sql, inArray, asc, desc } from "drizzle-orm";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
@@ -877,6 +877,41 @@ async function buildVerificationsExport(eventId: number): Promise<Record<string,
 }
 
 // ─── Audit Log Export ──────────────────────────────────────────────────────
+
+// Human-readable action labels
+const ACTION_LABELS: Record<string, string> = {
+  create_count: "Count Created",
+  update_count: "Count Updated",
+  verification_count: "Verification Count Submitted",
+  supervisor_edit_count: "Supervisor Edited Count",
+  supervisor_accept_variance: "Variance Accepted",
+  supervisor_reopen_variance: "Variance Reopened",
+  assign_verification: "Verification Assigned",
+  verification_accept_original: "Accepted Original Count",
+  verification_accept_verification: "Accepted Verification Count",
+  serial_edit_unknown: "Unknown Serial Edited",
+  serial_edit_approved: "Approved Serial Edited",
+  serial_approve_unknown: "Unknown Serial Approved",
+  serial_dismiss_unknown: "Unknown Serial Dismissed",
+  serial_update_unknowns: "Unknown Serials Updated",
+  serial_override_expected: "Expected Serial Overridden",
+  serial_assign_verification: "Serial Verification Assigned",
+  serial_discrepancy_reopened: "Serial Discrepancy Reopened",
+  serial_discrepancy_resolved: "Serial Discrepancy Resolved",
+  serial_verification_completed: "Serial Verification Completed",
+  query_resolved: "Query Resolved",
+  query_reopened: "Query Reopened",
+  query_responded: "Query Response Sent",
+  query_deleted: "Query Deleted",
+  query_team_message: "Team Query Message",
+  breakdown_approved: "Breakdown Approved",
+  breakdown_rejected: "Breakdown Rejected",
+  breakdown_pending: "Breakdown Set Pending",
+  breakdown_message: "Breakdown Message Sent",
+  breakdown_deleted: "Breakdown Deleted",
+  breakdown_team_message: "Team Breakdown Message",
+};
+
 async function buildAuditLogExport(eventId: number): Promise<Record<string, unknown>[]> {
   const logEntries = await db
     .select()
@@ -884,17 +919,182 @@ async function buildAuditLogExport(eventId: number): Promise<Record<string, unkn
     .where(eq(auditLog.eventId, eventId))
     .orderBy(desc(auditLog.id));
 
-  return logEntries.map((entry) => ({
-    "Log ID": entry.id,
-    "Action": entry.action,
-    "User ID": entry.userId,
-    "User Type": entry.userType,
-    "Table": entry.tableName,
-    "Record ID": entry.recordId,
-    "Old Value": entry.oldValue,
-    "New Value": entry.newValue,
-    "Created At": entry.createdAt,
-  }));
+  if (logEntries.length === 0) return [];
+
+  // ── Resolve event name ──────────────────────────────────────────────────
+  const [event] = await db.select({ name: stocktakeEvents.name }).from(stocktakeEvents).where(eq(stocktakeEvents.id, eventId));
+  const eventName = event?.name ?? `Event #${eventId}`;
+
+  // ── Resolve user names by type ──────────────────────────────────────────
+  const userKeySet = new Set(logEntries.map((e) => `${e.userType}:${e.userId}`));
+  const userNameMap: Record<string, string> = {};
+
+  const userKeys = Array.from(userKeySet);
+  const supervisorIds = userKeys.filter((k) => k.startsWith("supervisor:")).map((k) => Number(k.split(":")[1])).filter(Boolean);
+  const teamIds = userKeys.filter((k) => k.startsWith("team:")).map((k) => Number(k.split(":")[1])).filter(Boolean);
+  const adminIds = userKeys.filter((k) => k.startsWith("admin:")).map((k) => Number(k.split(":")[1])).filter(Boolean);
+  const executiveIds = userKeys.filter((k) => k.startsWith("executive:")).map((k) => Number(k.split(":")[1])).filter(Boolean);
+
+  if (supervisorIds.length > 0) {
+    const rows = await db.select({ id: supervisors.id, name: supervisors.name }).from(supervisors).where(inArray(supervisors.id, supervisorIds));
+    for (const r of rows) userNameMap[`supervisor:${r.id}`] = r.name;
+  }
+  if (teamIds.length > 0) {
+    const rows = await db.select({ id: teams.id, name: teams.name }).from(teams).where(inArray(teams.id, teamIds));
+    for (const r of rows) userNameMap[`team:${r.id}`] = r.name;
+  }
+  if (adminIds.length > 0) {
+    const rows = await db.select({ id: admins.id, name: admins.name }).from(admins).where(inArray(admins.id, adminIds));
+    for (const r of rows) userNameMap[`admin:${r.id}`] = r.name;
+  }
+  if (executiveIds.length > 0) {
+    const rows = await db.select({ id: executives.id, name: executives.name }).from(executives).where(inArray(executives.id, executiveIds));
+    for (const r of rows) userNameMap[`executive:${r.id}`] = r.name;
+  }
+
+  // ── Resolve item codes from recordId ────────────────────────────────────
+  // For "counts" table: recordId is a count ID → join counts→items
+  const countRecordIds = Array.from(new Set(
+    logEntries.filter((e) => e.tableName === "counts" && e.recordId).map((e) => e.recordId!)
+  ));
+  const countItemMap: Record<number, { itemCode: string; description: string | null; binNumber: string | null }> = {};
+  if (countRecordIds.length > 0) {
+    const rows = await db
+      .select({ countId: counts.id, itemCode: items.itemCode, description: items.description, binNumber: items.binNumber })
+      .from(counts)
+      .innerJoin(items, eq(counts.itemId, items.id))
+      .where(inArray(counts.id, countRecordIds));
+    for (const r of rows) countItemMap[r.countId] = { itemCode: r.itemCode, description: r.description, binNumber: r.binNumber };
+  }
+
+  // For "serial_discrepancies" table: recordId is a discrepancy ID → get itemCode directly
+  const discRecordIds = Array.from(new Set(
+    logEntries.filter((e) => e.tableName === "serial_discrepancies" && e.recordId).map((e) => e.recordId!)
+  ));
+  const discItemMap: Record<number, { itemCode: string; description: string | null; binNumber: string | null }> = {};
+  if (discRecordIds.length > 0) {
+    const rows = await db
+      .select({ id: serialDiscrepancies.id, itemCode: serialDiscrepancies.itemCode, description: serialDiscrepancies.description, binNumber: serialDiscrepancies.binNumber })
+      .from(serialDiscrepancies)
+      .where(inArray(serialDiscrepancies.id, discRecordIds));
+    for (const r of rows) discItemMap[r.id] = { itemCode: r.itemCode, description: r.description, binNumber: r.binNumber };
+  }
+
+  // For "verification_assignments" table: recordId → join to counts→items
+  const vaRecordIds = Array.from(new Set(
+    logEntries.filter((e) => e.tableName === "verification_assignments" && e.recordId).map((e) => e.recordId!)
+  ));
+  const vaItemMap: Record<number, { itemCode: string; description: string | null; binNumber: string | null }> = {};
+  if (vaRecordIds.length > 0) {
+    const rows = await db
+      .select({ vaId: verificationAssignments.id, itemCode: items.itemCode, description: items.description, binNumber: items.binNumber })
+      .from(verificationAssignments)
+      .innerJoin(items, eq(verificationAssignments.itemId, items.id))
+      .where(inArray(verificationAssignments.id, vaRecordIds));
+    for (const r of rows) vaItemMap[r.vaId] = { itemCode: r.itemCode, description: r.description, binNumber: r.binNumber };
+  }
+
+  // For "queries" table: recordId → get itemCode from queries table
+  const queryRecordIds = Array.from(new Set(
+    logEntries.filter((e) => (e.tableName === "queries" || e.tableName === "query_messages") && e.recordId).map((e) => e.recordId!)
+  ));
+  const queryItemMap: Record<number, string> = {};
+  if (queryRecordIds.length > 0) {
+    const rows = await db
+      .select({ id: queries.id, itemCode: queries.itemCode })
+      .from(queries)
+      .where(inArray(queries.id, queryRecordIds));
+    for (const r of rows) if (r.itemCode) queryItemMap[r.id] = r.itemCode;
+  }
+
+  // For "breakdowns" / "breakdown_messages" table: recordId → get itemCode from breakdowns
+  const bdRecordIds = Array.from(new Set(
+    logEntries.filter((e) => (e.tableName === "breakdowns" || e.tableName === "breakdown_messages") && e.recordId).map((e) => e.recordId!)
+  ));
+  const bdItemMap: Record<number, string> = {};
+  if (bdRecordIds.length > 0) {
+    const rows = await db
+      .select({ id: breakdowns.id, itemCode: breakdowns.itemCode })
+      .from(breakdowns)
+      .where(inArray(breakdowns.id, bdRecordIds));
+    for (const r of rows) if (r.itemCode) bdItemMap[r.id] = r.itemCode;
+  }
+
+  // ── Build rows ──────────────────────────────────────────────────────────
+  return logEntries.map((entry) => {
+    const userKey = `${entry.userType}:${entry.userId}`;
+    const userName = userNameMap[userKey] ?? `${entry.userType} #${entry.userId}`;
+    const userTypeLabel = entry.userType ? entry.userType.charAt(0).toUpperCase() + entry.userType.slice(1) : "";
+
+    // Resolve item code based on table
+    let itemCode = "";
+    let itemDescription = "";
+    let binNumber = "";
+    if (entry.tableName === "counts" && entry.recordId) {
+      const ref = countItemMap[entry.recordId];
+      if (ref) { itemCode = ref.itemCode; itemDescription = ref.description ?? ""; binNumber = ref.binNumber ?? ""; }
+    } else if (entry.tableName === "serial_discrepancies" && entry.recordId) {
+      const ref = discItemMap[entry.recordId];
+      if (ref) { itemCode = ref.itemCode; itemDescription = ref.description ?? ""; binNumber = ref.binNumber ?? ""; }
+    } else if (entry.tableName === "verification_assignments" && entry.recordId) {
+      const ref = vaItemMap[entry.recordId];
+      if (ref) { itemCode = ref.itemCode; itemDescription = ref.description ?? ""; binNumber = ref.binNumber ?? ""; }
+    } else if ((entry.tableName === "queries" || entry.tableName === "query_messages") && entry.recordId) {
+      itemCode = queryItemMap[entry.recordId] ?? "";
+    } else if ((entry.tableName === "breakdowns" || entry.tableName === "breakdown_messages") && entry.recordId) {
+      itemCode = bdItemMap[entry.recordId] ?? "";
+    }
+
+    // Parse old/new values for key details
+    const oldParsed = entry.oldValue ? safeJsonParse<Record<string, unknown>>(entry.oldValue, {}) : {};
+    const newParsed = entry.newValue ? safeJsonParse<Record<string, unknown>>(entry.newValue, {}) : {};
+
+    // Extract most useful details from old/new values
+    let details = "";
+    if (entry.action === "supervisor_edit_count" || entry.action === "update_count") {
+      details = `Qty: ${oldParsed.countedQty ?? "?"} → ${newParsed.countedQty ?? "?"}`;
+      if (newParsed.reason) details += ` | Reason: ${newParsed.reason}`;
+    } else if (entry.action === "create_count" || entry.action === "verification_count") {
+      details = `Qty: ${newParsed.countedQty ?? "?"}, Variance: ${newParsed.variance ?? "?"}`;
+    } else if (entry.action === "supervisor_accept_variance" || entry.action === "supervisor_reopen_variance") {
+      details = `Status: ${newParsed.checkStatus ?? ""}`;
+    } else if (entry.action === "serial_edit_unknown" || entry.action === "serial_edit_approved") {
+      details = `Serial: ${oldParsed.serial ?? "?"} → ${newParsed.serial ?? "?"}`;
+    } else if (entry.action === "serial_approve_unknown" || entry.action === "serial_dismiss_unknown") {
+      details = `Serial: ${newParsed.serial ?? ""}`;
+    } else if (entry.action === "serial_override_expected") {
+      details = `Serial: ${newParsed.serialNumber ?? ""}, Qty: ${oldParsed.countedQty ?? "?"} → ${newParsed.countedQty ?? "?"}`;
+    } else if (entry.action === "serial_discrepancy_resolved") {
+      details = `Resolution: ${newParsed.resolution ?? ""}`;
+    } else if (entry.action === "serial_assign_verification") {
+      details = `Assigned team ID: ${newParsed.assignedTeamId ?? ""}`;
+    } else if (entry.action === "query_resolved" || entry.action === "query_responded") {
+      details = newParsed.response ? `Response: ${String(newParsed.response).substring(0, 200)}` : `Status: ${newParsed.status ?? ""}`;
+    } else if (entry.action?.startsWith("breakdown_") && newParsed.status) {
+      details = `Status: ${newParsed.status}`;
+      if (newParsed.message) details += ` | Message: ${String(newParsed.message).substring(0, 200)}`;
+    } else if (newParsed.message) {
+      details = `Message: ${String(newParsed.message).substring(0, 200)}`;
+    }
+
+    return {
+      "Log ID": entry.id,
+      "Timestamp": entry.createdAt,
+      "Event": eventName,
+      "Action": ACTION_LABELS[entry.action] ?? entry.action,
+      "Action Code": entry.action,
+      "Performed By": userName,
+      "User Type": userTypeLabel,
+      "Item Code": itemCode,
+      "Description": itemDescription,
+      "Bin Number": binNumber,
+      "Table": entry.tableName,
+      "Record ID": entry.recordId,
+      "Details": details,
+      "Old Value (Raw)": entry.oldValue,
+      "New Value (Raw)": entry.newValue,
+    };
+  });
 }
 
 function safeJsonParse<T>(json: string, fallback: T): T {

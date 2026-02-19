@@ -1042,6 +1042,7 @@ export default function VariancesPage() {
             showCheckbox={false}
             showReopenButton={!isAuditor}
             onEdit={isAuditor ? undefined : openEditDialog}
+            onAccept={isAuditor ? undefined : handleAccept}
             onReopenVariance={isAuditor ? undefined : handleReopenVariance}
             onEditUnknownSerial={isAuditor ? undefined : openEditSerialDialog}
             isSaving={saving}

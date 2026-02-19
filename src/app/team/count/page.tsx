@@ -712,6 +712,7 @@ export default function CountingPage() {
   const handleFlashComplete = useCallback(() => {
     setShowFlash(false);
     setComment("");
+    window.scrollTo({ top: 0 });
   }, []);
 
   const submitSerializedGroup = useCallback(
@@ -785,6 +786,7 @@ export default function CountingPage() {
     setQtyValue("");
     setComment("");
     setQueueSearch("");
+    window.scrollTo({ top: 0 });
   }, [countingQueue.length]);
 
   const jumpToEntry = useCallback((queueIndex: number) => {
@@ -793,6 +795,7 @@ export default function CountingPage() {
     setQtyValue("");
     setComment("");
     setQueueSearch("");
+    window.scrollTo({ top: 0 });
   }, [countingQueue.length]);
 
   const selectBin = useCallback(

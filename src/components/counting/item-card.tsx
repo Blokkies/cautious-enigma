@@ -336,7 +336,7 @@ export function ActiveItemCard({
               value={qtyValue}
               onChange={(e) => onQtyChange(e.target.value)}
               placeholder="Qty"
-              className={`${er ? "h-20 text-4xl" : "h-14 text-2xl"} text-center font-semibold flex-1 ${varianceInputStyles[vState]}`}
+              className={`${er ? "h-24 text-5xl" : "h-16 text-4xl"} text-center font-semibold flex-1 ${varianceInputStyles[vState]}`}
               disabled={isSubmitting}
               onWheel={(e) => e.currentTarget.blur()}
               onKeyDown={(e) => {

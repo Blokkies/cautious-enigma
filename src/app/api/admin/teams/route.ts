@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { teams, supervisors, items } from "@/lib/db/schema";
+import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
@@ -204,9 +204,25 @@ export async function DELETE(request: NextRequest) {
           return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
         }
       }
-      // Unassign items first
-      await db.update(items).set({ teamId: null }).where(eq(items.teamId, id));
-      await db.delete(teams).where(eq(teams.id, id));
+      // Cascade delete team's dependent data in a transaction
+      await db.transaction(async (tx) => {
+        // Messages on queries/breakdowns for this team
+        await tx.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE team_id = ${id})`);
+        await tx.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE team_id = ${id})`);
+        // Verification assignments, serial discrepancies
+        await tx.delete(verificationAssignments).where(eq(verificationAssignments.assignedTeamId, id));
+        await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.teamId, id));
+        // Counts, queries, breakdowns
+        await tx.delete(counts).where(eq(counts.teamId, id));
+        await tx.delete(queries).where(eq(queries.teamId, id));
+        await tx.delete(breakdowns).where(eq(breakdowns.teamId, id));
+        // Team assignments
+        await tx.delete(teamAssignments).where(eq(teamAssignments.teamId, id));
+        // Unassign items
+        await tx.update(items).set({ teamId: null }).where(eq(items.teamId, id));
+        // Delete the team
+        await tx.delete(teams).where(eq(teams.id, id));
+      });
     }
 
     return NextResponse.json({ success: true });

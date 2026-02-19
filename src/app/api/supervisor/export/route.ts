@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, counts, teams, serialDiscrepancies } from "@/lib/db/schema";
+import { items, counts, teams, serialDiscrepancies, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 import { exportToExcel } from "@/lib/excel";
@@ -188,7 +188,6 @@ export async function GET(request: NextRequest) {
 
   // Admin has eventId=0, find the latest event
   if (!eventId || eventId === 0) {
-    const { stocktakeEvents } = await import("@/lib/db/schema");
     const [latest] = await db
       .select()
       .from(stocktakeEvents)

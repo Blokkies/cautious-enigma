@@ -248,6 +248,8 @@ CREATE INDEX IF NOT EXISTS idx_verification_event_status ON verification_assignm
 CREATE INDEX IF NOT EXISTS idx_serial_disc_event_status ON serial_discrepancies(event_id, status);
 CREATE INDEX IF NOT EXISTS idx_queries_event_status ON queries(event_id, status);
 CREATE INDEX IF NOT EXISTS idx_breakdowns_event_status ON breakdowns(event_id, approval_status);
+CREATE INDEX IF NOT EXISTS idx_items_event_code ON items(event_id, item_code);
+CREATE INDEX IF NOT EXISTS idx_counts_event_check ON counts(event_id, check_status);
 `;
 
 // DO block must be executed as a single statement (contains semicolons)

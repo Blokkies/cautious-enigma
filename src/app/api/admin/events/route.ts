@@ -7,34 +7,27 @@ import {
   auditLog, serialDiscrepancies,
 } from "@/lib/db/schema";
 import { eq, and, isNotNull, sql } from "drizzle-orm";
+import { getApiUser } from "@/lib/api-auth";
 
 const VALID_STATUSES = ["setup", "active", "completed", "locked"] as const;
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   const events = await db
     .select()
     .from(stocktakeEvents);
 
   const enriched = await Promise.all(events.map(async (event) => {
-    const [totalItemCountRow] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(items)
-      .where(eq(items.eventId, event.id));
-
-    const [assignedItemCountRow] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(items)
-      .where(and(eq(items.eventId, event.id), isNotNull(items.teamId)));
-
-    const [teamCountRow] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(teams)
-      .where(eq(teams.eventId, event.id));
-
-    const [supervisorCountRow] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(supervisors)
-      .where(eq(supervisors.eventId, event.id));
+    const [[totalItemCountRow], [assignedItemCountRow], [teamCountRow], [supervisorCountRow]] = await Promise.all([
+      db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.eventId, event.id)),
+      db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, event.id), isNotNull(items.teamId))),
+      db.select({ count: sql<number>`count(*)` }).from(teams).where(eq(teams.eventId, event.id)),
+      db.select({ count: sql<number>`count(*)` }).from(supervisors).where(eq(supervisors.eventId, event.id)),
+    ]);
 
     return {
       ...event,
@@ -49,6 +42,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const { name, location, startDate, endDate } = await request.json();
 
@@ -84,6 +82,11 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const { id, status, warehouses } = body;
@@ -138,6 +141,11 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const { id } = await request.json();
 
@@ -156,44 +164,33 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
 
-    // Cascade delete all related data (order matters for FK constraints)
-    // 1. Messages (reference queries/breakdowns)
-    const eventQueries = await db.select({ id: queries.id }).from(queries).where(eq(queries.eventId, eventId));
-    if (eventQueries.length > 0) {
-      const queryIds = eventQueries.map((q) => q.id);
-      for (const qid of queryIds) {
-        await db.delete(queryMessages).where(eq(queryMessages.queryId, qid));
-      }
-    }
+    // Cascade delete all related data in a transaction for atomicity
+    await db.transaction(async (tx) => {
+      // 1. Messages (use subquery to avoid N+1)
+      await tx.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${eventId})`);
+      await tx.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${eventId})`);
 
-    const eventBreakdowns = await db.select({ id: breakdowns.id }).from(breakdowns).where(eq(breakdowns.eventId, eventId));
-    if (eventBreakdowns.length > 0) {
-      const breakdownIds = eventBreakdowns.map((b) => b.id);
-      for (const bid of breakdownIds) {
-        await db.delete(breakdownMessages).where(eq(breakdownMessages.breakdownId, bid));
-      }
-    }
+      // 2. Verification assignments, counts, queries, breakdowns, serial discrepancies
+      await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eventId));
+      await tx.delete(counts).where(eq(counts.eventId, eventId));
+      await tx.delete(queries).where(eq(queries.eventId, eventId));
+      await tx.delete(breakdowns).where(eq(breakdowns.eventId, eventId));
+      await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eventId));
 
-    // 2. Verification assignments, counts, queries, breakdowns, serial discrepancies
-    await db.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eventId));
-    await db.delete(counts).where(eq(counts.eventId, eventId));
-    await db.delete(queries).where(eq(queries.eventId, eventId));
-    await db.delete(breakdowns).where(eq(breakdowns.eventId, eventId));
-    await db.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eventId));
+      // 3. Team assignments, audit log
+      await tx.delete(teamAssignments).where(eq(teamAssignments.eventId, eventId));
+      await tx.delete(auditLog).where(eq(auditLog.eventId, eventId));
 
-    // 3. Team assignments, audit log
-    await db.delete(teamAssignments).where(eq(teamAssignments.eventId, eventId));
-    await db.delete(auditLog).where(eq(auditLog.eventId, eventId));
+      // 4. Items
+      await tx.delete(items).where(eq(items.eventId, eventId));
 
-    // 4. Items (references teams via teamId, but that's nullable)
-    await db.delete(items).where(eq(items.eventId, eventId));
+      // 5. Supervisors and teams
+      await tx.delete(supervisors).where(eq(supervisors.eventId, eventId));
+      await tx.delete(teams).where(eq(teams.eventId, eventId));
 
-    // 5. Supervisors and teams
-    await db.delete(supervisors).where(eq(supervisors.eventId, eventId));
-    await db.delete(teams).where(eq(teams.eventId, eventId));
-
-    // 6. The event itself
-    await db.delete(stocktakeEvents).where(eq(stocktakeEvents.id, eventId));
+      // 6. The event itself
+      await tx.delete(stocktakeEvents).where(eq(stocktakeEvents.id, eventId));
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

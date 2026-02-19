@@ -20,6 +20,10 @@ export async function GET(request: NextRequest) {
   const eventId = payload.eventId;
   let lastCheckTime = new Date().toISOString();
 
+  const MAX_DURATION_MS = 30 * 60 * 1000; // 30 minutes max connection
+  const POLL_INTERVAL_MS = 10_000; // 10 seconds between polls
+  const startTime = Date.now();
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -34,6 +38,14 @@ export async function GET(request: NextRequest) {
 
       const interval = setInterval(async () => {
         try {
+          // Auto-close after max duration
+          if (Date.now() - startTime > MAX_DURATION_MS) {
+            sendEvent("timeout", { message: "Connection expired, please reconnect" });
+            clearInterval(interval);
+            controller.close();
+            return;
+          }
+
           // Check for new counts since last check
           const newCounts = await db
             .select({
@@ -84,7 +96,7 @@ export async function GET(request: NextRequest) {
         } catch {
           // DB error, skip this tick
         }
-      }, 3000);
+      }, POLL_INTERVAL_MS);
 
       // Cleanup on close
       request.signal.addEventListener("abort", () => {

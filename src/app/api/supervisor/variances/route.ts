@@ -697,7 +697,7 @@ export async function PATCH(request: NextRequest) {
 
     // Handle accept/reopen variance actions
     if (action === "accept_variance" || action === "reopen_variance") {
-      if (!countId) {
+      if (countId === undefined || countId === null) {
         return NextResponse.json(
           { error: "countId is required" },
           { status: 400 }

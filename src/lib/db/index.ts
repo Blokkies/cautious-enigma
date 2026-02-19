@@ -2,7 +2,10 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
 
-const connectionString = process.env.DATABASE_URL!;
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error("DATABASE_URL is required. Set it in .env.local.");
+}
 
 // Use global singleton to prevent Next.js dev mode hot-reload from creating multiple connections
 const globalForDb = globalThis as unknown as { pgClient: ReturnType<typeof postgres> };

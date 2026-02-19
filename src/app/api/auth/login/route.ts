@@ -56,12 +56,12 @@ export async function POST(request: NextRequest) {
         .where(and(eq(teams.id, Number(id)), eq(teams.eventId, event.id)));
 
       if (!team) {
-        return NextResponse.json({ error: "Team not found" }, { status: 401 });
+        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
       }
 
       const valid = await verifyPin(pin, team.pinHash);
       if (!valid) {
-        return NextResponse.json({ error: "Invalid PIN" }, { status: 401 });
+        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
       }
 
       const token = await createToken({
@@ -98,14 +98,14 @@ export async function POST(request: NextRequest) {
 
       if (!supervisor) {
         return NextResponse.json(
-          { error: "Supervisor not found" },
+          { error: "Invalid credentials" },
           { status: 401 }
         );
       }
 
       const valid = await verifyPin(pin, supervisor.pinHash);
       if (!valid) {
-        return NextResponse.json({ error: "Invalid PIN" }, { status: 401 });
+        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
       }
 
       const token = await createToken({
@@ -149,14 +149,14 @@ export async function POST(request: NextRequest) {
 
       if (!auditor) {
         return NextResponse.json(
-          { error: "Auditor not found" },
+          { error: "Invalid credentials" },
           { status: 401 }
         );
       }
 
       const valid = await verifyPin(pin, auditor.pinHash);
       if (!valid) {
-        return NextResponse.json({ error: "Invalid PIN" }, { status: 401 });
+        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
       }
 
       const token = await createToken({

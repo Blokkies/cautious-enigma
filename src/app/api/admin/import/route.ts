@@ -3,9 +3,15 @@ import { db } from "@/lib/db";
 import { items, stocktakeEvents } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
+import { getApiUser } from "@/lib/api-auth";
 
 // GET: List events that have imported items (for "copy from" feature)
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const allEvents = await db
       .select({
@@ -36,6 +42,11 @@ export async function GET() {
 
 // PUT: Copy items from one event to another
 export async function PUT(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const body = await request.json();
     const { sourceEventId, targetEventId } = body;
@@ -126,6 +137,11 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const user = getApiUser(request);
+  if (!user || user.type !== "admin") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File;

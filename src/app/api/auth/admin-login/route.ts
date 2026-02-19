@@ -6,7 +6,9 @@ import { createToken, getTokenCookieOptions } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin2026";
-if (!process.env.ADMIN_PASSWORD) {
+if (!process.env.ADMIN_PASSWORD && process.env.NODE_ENV === "production") {
+  throw new Error("ADMIN_PASSWORD must be set in production. Set ADMIN_PASSWORD in .env.local.");
+} else if (!process.env.ADMIN_PASSWORD) {
   console.warn("[SECURITY] ADMIN_PASSWORD not set — using default. Set ADMIN_PASSWORD in .env.local for production.");
 }
 
@@ -36,7 +38,7 @@ export async function POST(request: NextRequest) {
       if (password !== ADMIN_PASSWORD) {
         return NextResponse.json({ error: "Invalid password" }, { status: 401 });
       }
-      const hash = bcrypt.hashSync(password, 10);
+      const hash = await bcrypt.hash(password, 10);
       const [{ id }] = await db
         .insert(admins)
         .values({ name: "Admin", passwordHash: hash })
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest) {
 
     // Check password against each admin
     for (const admin of allAdmins) {
-      if (bcrypt.compareSync(password, admin.passwordHash)) {
+      if (await bcrypt.compare(password, admin.passwordHash)) {
         const token = await createToken({
           id: admin.id,
           type: "admin",

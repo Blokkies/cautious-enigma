@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { serialDiscrepancies, teams, items, counts, auditLog } from "@/lib/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { getApiUser, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
@@ -36,57 +36,47 @@ export async function GET(request: NextRequest) {
     .where(eq(serialDiscrepancies.eventId, user.eventId))
     .orderBy(desc(serialDiscrepancies.createdAt));
 
-  // Enrich each discrepancy with expected serial info (filtered by selected warehouses)
-  const enriched = await Promise.all(allDiscrepancies.map(async (disc) => {
-    // Find expected serialized items matching itemCode + binNumber in this event
-    const expectedItems = await db
-      .select({
-        id: items.id,
-        serialNumber: items.serialNumber,
-      })
-      .from(items)
-      .where(
-        and(
-          eq(items.eventId, user.eventId),
-          eq(items.itemCode, disc.itemCode),
-          eq(items.isSerialized, true),
-          warehouseFilter(warehouses),
-          ...(disc.binNumber ? [eq(items.binNumber, disc.binNumber)] : [])
-        )
-      );
+  // Batch-fetch all serialized items for this event (avoids N+1 per discrepancy)
+  const allSerializedItems = await db
+    .select({ id: items.id, itemCode: items.itemCode, binNumber: items.binNumber, serialNumber: items.serialNumber })
+    .from(items)
+    .where(and(eq(items.eventId, user.eventId), eq(items.isSerialized, true), warehouseFilter(warehouses)));
 
-    // Check count status for each expected serial
-    const expectedSerials = await Promise.all(expectedItems.map(async (item) => {
-      const [count] = await db
-        .select({ id: counts.id, countedQty: counts.countedQty })
+  // Batch-fetch all counts for serialized items
+  const serializedItemIds = allSerializedItems.map((i) => i.id);
+  const allSerialCounts = serializedItemIds.length > 0
+    ? await db
+        .select({ itemId: counts.itemId, countedQty: counts.countedQty })
         .from(counts)
-        .where(and(eq(counts.itemId, item.id), eq(counts.eventId, user.eventId)));
+        .where(and(eq(counts.eventId, user.eventId), inArray(counts.itemId, serializedItemIds)))
+    : [];
+  const countByItemId = new Map(allSerialCounts.map((c) => [c.itemId, c.countedQty]));
 
+  // Batch-fetch all verification team names
+  const vTeamIds = Array.from(new Set(allDiscrepancies.map((d) => d.verificationTeamId).filter((id): id is number => !!id)));
+  const vTeams = vTeamIds.length > 0
+    ? await db.select({ id: teams.id, name: teams.name }).from(teams).where(inArray(teams.id, vTeamIds))
+    : [];
+  const vTeamMap = new Map(vTeams.map((t) => [t.id, t.name]));
+
+  // Enrich each discrepancy using pre-fetched data (no additional queries)
+  const enriched = allDiscrepancies.map((disc) => {
+    const expectedItems = allSerializedItems.filter((i) =>
+      i.itemCode === disc.itemCode && (!disc.binNumber || i.binNumber === disc.binNumber)
+    );
+
+    const expectedSerials = expectedItems.map((item) => {
+      const countedQty = countByItemId.get(item.id);
       let status: "found" | "not_found" | "uncounted";
-      if (!count) {
+      if (countedQty === undefined) {
         status = "uncounted";
-      } else if (count.countedQty > 0) {
+      } else if (countedQty > 0) {
         status = "found";
       } else {
         status = "not_found";
       }
-
-      return {
-        itemId: item.id,
-        serialNumber: item.serialNumber,
-        status,
-      };
-    }));
-
-    // Look up verification team name if assigned
-    let verificationTeamName: string | null = null;
-    if (disc.verificationTeamId) {
-      const [vTeam] = await db
-        .select({ name: teams.name })
-        .from(teams)
-        .where(eq(teams.id, disc.verificationTeamId));
-      verificationTeamName = vTeam?.name ?? null;
-    }
+      return { itemId: item.id, serialNumber: item.serialNumber, status };
+    });
 
     return {
       id: disc.id,
@@ -102,13 +92,13 @@ export async function GET(request: NextRequest) {
       teamName: disc.teamName,
       teamId: disc.teamId,
       verificationTeamId: disc.verificationTeamId,
-      verificationTeamName,
+      verificationTeamName: disc.verificationTeamId ? vTeamMap.get(disc.verificationTeamId) ?? null : null,
       verificationStatus: disc.verificationStatus,
       verificationAssignedAt: disc.verificationAssignedAt,
       verificationCompletedAt: disc.verificationCompletedAt,
       verifiedSerials: disc.verifiedSerials ? JSON.parse(disc.verifiedSerials) : null,
     };
-  }));
+  });
 
   return NextResponse.json({ discrepancies: enriched });
 }

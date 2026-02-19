@@ -54,9 +54,18 @@ export async function middleware(request: NextRequest) {
     }
   }
   const supervisorAllowedAdminApis = ["/api/admin/teams", "/api/admin/assign"];
+  // Protect /admin page routes
   if (pathname.startsWith("/admin") && payload.type !== "admin") {
     if (!((payload.type === "supervisor" || payload.type === "auditor") && supervisorAllowedAdminApis.some(p => pathname.startsWith(p)))) {
       return NextResponse.redirect(new URL("/", request.url));
+    }
+  }
+  // Protect /api/admin/* API routes (defense in depth alongside handler-level checks)
+  if (pathname.startsWith("/api/admin/") && payload.type !== "admin") {
+    const isSupervisorAllowed = (payload.type === "supervisor" || payload.type === "auditor") &&
+      supervisorAllowedAdminApis.some(p => pathname.startsWith(p));
+    if (!isSupervisorAllowed) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
   }
   // /completed is accessible to supervisors and admins

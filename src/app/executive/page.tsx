@@ -4,13 +4,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Package,
-  CheckCircle2,
-  AlertTriangle,
-  TrendingUp,
-  TrendingDown,
   Users,
   MessageSquare,
   FileWarning,

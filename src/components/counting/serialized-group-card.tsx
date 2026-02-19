@@ -487,8 +487,8 @@ export function SerializedGroupCard({
       </Card>
 
       {/* Sticky Action Zone — fixed at bottom */}
-      <div className="fixed bottom-16 left-0 right-0 z-40 border-t shadow-lg bg-white safe-area-bottom">
-        <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
+      <div className={`fixed ${settings.compactMode ? "bottom-11" : "bottom-16"} left-0 right-0 z-40 border-t shadow-lg bg-white safe-area-bottom`}>
+        <div className={`max-w-lg mx-auto px-4 ${settings.compactMode ? "py-1.5 space-y-1" : "py-3 space-y-2"}`}>
           {/* Summary */}
           <div className={`text-center ${er ? "text-lg" : "text-sm"} text-muted-foreground`}>
             {foundCount} found · {notFoundCount} not found

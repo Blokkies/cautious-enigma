@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useSettings } from "@/contexts/settings-context";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { Button } from "@/components/ui/button";
-import { LogOut, Eye, EyeOff, Smartphone } from "lucide-react";
+import { LogOut, Eye, EyeOff, Smartphone, Minimize2, Maximize2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface TeamHeaderProps {
@@ -13,9 +13,10 @@ interface TeamHeaderProps {
 
 export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
   const { user, logout } = useAuth();
-  const { settings, toggleEasyRead, toggleHaptic } = useSettings();
+  const { settings, toggleEasyRead, toggleHaptic, toggleCompact } = useSettings();
   const isOnline = useOnlineStatus();
   const router = useRouter();
+  const cm = settings.compactMode;
 
   const handleLogout = async () => {
     await logout();
@@ -24,34 +25,34 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
 
   return (
     <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
-      <div className="flex items-center justify-between px-4 h-14">
-        <div className="flex items-center gap-1.5">
+      <div className={`flex items-center justify-between px-3 ${cm ? "h-10" : "h-14"}`}>
+        <div className="flex items-center gap-1.5 min-w-0">
           {user?.eventName && (
             <>
-              <span className="text-sm text-muted-foreground">{user.eventName}</span>
+              <span className={`${cm ? "text-xs" : "text-sm"} text-muted-foreground truncate`}>{user.eventName}</span>
               <span className="text-muted-foreground">·</span>
             </>
           )}
-          <span className="font-semibold text-primary">{user?.name}</span>
+          <span className={`font-semibold text-primary ${cm ? "text-sm" : ""} truncate`}>{user?.name}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {isOnline ? (
             pendingSyncs > 0 ? (
-              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full animate-pulse">
+              <span className={`${cm ? "text-[10px] px-1.5" : "text-xs px-2"} font-medium text-amber-600 bg-amber-50 py-0.5 rounded-full animate-pulse`}>
                 Syncing {pendingSyncs}
               </span>
             ) : (
-              <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+              <span className={`${cm ? "text-[10px] px-1.5" : "text-xs px-2"} font-medium text-green-600 bg-green-50 py-0.5 rounded-full`}>
                 Online
               </span>
             )
           ) : (
             pendingSyncs > 0 ? (
-              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
-                Offline · {pendingSyncs} pending
+              <span className={`${cm ? "text-[10px] px-1.5" : "text-xs px-2"} font-medium text-red-600 bg-red-50 py-0.5 rounded-full`}>
+                Offline · {pendingSyncs}
               </span>
             ) : (
-              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+              <span className={`${cm ? "text-[10px] px-1.5" : "text-xs px-2"} font-medium text-red-600 bg-red-50 py-0.5 rounded-full`}>
                 Offline
               </span>
             )
@@ -59,23 +60,32 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
           <Button
             variant="ghost"
             size="sm"
+            onClick={toggleCompact}
+            className={`${cm ? "h-7 w-7 p-0" : "touch-target"} ${settings.compactMode ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
+            title="Compact Mode"
+          >
+            {settings.compactMode ? <Minimize2 className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} /> : <Maximize2 className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={toggleEasyRead}
-            className={`touch-target ${settings.easyRead ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
+            className={`${cm ? "h-7 w-7 p-0" : "touch-target"} ${settings.easyRead ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
             title="Easy Read"
           >
-            {settings.easyRead ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            {settings.easyRead ? <Eye className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} /> : <EyeOff className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />}
           </Button>
           <Button
             variant="ghost"
             size="sm"
             onClick={toggleHaptic}
-            className={`touch-target ${settings.hapticFeedback ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
+            className={`${cm ? "h-7 w-7 p-0" : "touch-target"} ${settings.hapticFeedback ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
             title="Haptic Feedback"
           >
-            <Smartphone className="h-4 w-4" />
+            <Smartphone className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />
           </Button>
-          <Button variant="ghost" size="sm" onClick={handleLogout} className="touch-target">
-            <LogOut className="h-4 w-4" />
+          <Button variant="ghost" size="sm" onClick={handleLogout} className={cm ? "h-7 w-7 p-0" : "touch-target"}>
+            <LogOut className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />
           </Button>
         </div>
       </div>

@@ -5,12 +5,14 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 export interface AppSettings {
   easyRead: boolean;
   hapticFeedback: boolean;
+  compactMode: boolean;
   binViewMode: "grid" | "list";
 }
 
 const defaultSettings: AppSettings = {
   easyRead: false,
   hapticFeedback: false,
+  compactMode: false,
   binViewMode: "grid",
 };
 
@@ -19,6 +21,7 @@ interface SettingsContextType {
   updateSettings: (partial: Partial<AppSettings>) => void;
   toggleEasyRead: () => void;
   toggleHaptic: () => void;
+  toggleCompact: () => void;
 }
 
 const SettingsContext = createContext<SettingsContextType | null>(null);
@@ -65,8 +68,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setSettings((prev) => ({ ...prev, hapticFeedback: !prev.hapticFeedback }));
   }, []);
 
+  const toggleCompact = useCallback(() => {
+    setSettings((prev) => ({ ...prev, compactMode: !prev.compactMode }));
+  }, []);
+
   return (
-    <SettingsContext.Provider value={{ settings, updateSettings, toggleEasyRead, toggleHaptic }}>
+    <SettingsContext.Provider value={{ settings, updateSettings, toggleEasyRead, toggleHaptic, toggleCompact }}>
       {children}
     </SettingsContext.Provider>
   );

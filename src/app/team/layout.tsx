@@ -18,7 +18,7 @@ export default function TeamLayout({
   return (
     <div className="min-h-screen bg-gray-50" data-easy-read={settings.easyRead ? "true" : "false"}>
       <TeamHeader pendingSyncs={sync.pendingCount} />
-      <main className="pb-20">{children}</main>
+      <main className={settings.compactMode ? "pb-14" : "pb-20"}>{children}</main>
       <TeamNav />
     </div>
   );

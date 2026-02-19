@@ -362,40 +362,31 @@ export default function AssignPage() {
       // Sort bins naturally so physically adjacent bins stay together
       const sorted = [...binsToBalance].sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
 
-      const teamCount = targetTeams.length;
-      let teamTotals: { teamId: number; name: string; total: number; bins: string[] }[];
+      // Build team trackers with existing totals so we balance the OVERALL distribution
+      const teamTotals = targetTeams.map((t) => ({
+        teamId: t.id,
+        name: t.name,
+        currentBins: t.bins.length,
+        currentItems: t.itemCount,
+        bins: [] as string[],
+      }));
 
       if (balanceMode === "equal-bins") {
-        // Split contiguous bins into equal-sized chunks
-        const binsPerTeam = Math.ceil(sorted.length / teamCount);
-        teamTotals = targetTeams.map((t, i) => ({
-          teamId: t.id,
-          name: t.name,
-          total: t.bins.length,
-          bins: sorted.slice(i * binsPerTeam, (i + 1) * binsPerTeam).map((b) => b.bin_number),
-        }));
-      } else {
-        // Split contiguous bins into chunks balanced by item count
-        const totalItems = sorted.reduce((s, b) => s + b.item_count, 0);
-        const targetPerTeam = Math.ceil(totalItems / teamCount);
-        teamTotals = targetTeams.map((t) => ({
-          teamId: t.id,
-          name: t.name,
-          total: t.itemCount,
-          bins: [] as string[],
-        }));
-
-        let teamIdx = 0;
-        let currentTotal = 0;
+        // Greedy: assign each bin to the team with the fewest total bins
         for (const bin of sorted) {
-          teamTotals[teamIdx].bins.push(bin.bin_number);
-          teamTotals[teamIdx].total += bin.item_count;
-          currentTotal += bin.item_count;
-          // Move to next team if we've hit the target and there are more teams
-          if (currentTotal >= targetPerTeam && teamIdx < teamCount - 1) {
-            teamIdx++;
-            currentTotal = 0;
-          }
+          const target = teamTotals.reduce((min, t) =>
+            (t.currentBins + t.bins.length) < (min.currentBins + min.bins.length) ? t : min
+          );
+          target.bins.push(bin.bin_number);
+        }
+      } else {
+        // Greedy: assign each bin to the team with the fewest total items
+        for (const bin of sorted) {
+          const target = teamTotals.reduce((min, t) =>
+            (t.currentItems) < (min.currentItems) ? t : min
+          );
+          target.bins.push(bin.bin_number);
+          target.currentItems += bin.item_count;
         }
       }
 
@@ -417,7 +408,12 @@ export default function AssignPage() {
         const data = await res.json();
         const summary = teamTotals
           .filter((t) => t.bins.length > 0)
-          .map((t) => `${t.name}: ${t.bins.length} bins`)
+          .map((t) => {
+            const finalTotal = balanceMode === "equal-bins"
+              ? t.currentBins + t.bins.length
+              : t.currentItems;
+            return `${t.name}: +${t.bins.length} bins (${finalTotal} total ${balanceMode === "equal-bins" ? "bins" : "items"})`;
+          })
           .join(", ");
         toast.success(`Assigned ${data.assignedCount} items (${summary})`);
         setSelectedBins(new Set());

@@ -209,6 +209,7 @@ export function ActiveItemCard({
 }: ActiveItemCardProps) {
   const { settings } = useSettings();
   const er = settings.easyRead;
+  const cm = settings.compactMode;
   const isSerialized = item.isSerialized === true || item.isSerialized === 1;
   const [localShowComment, setLocalShowComment] = useState(false);
 
@@ -219,11 +220,11 @@ export function ActiveItemCard({
 
   return (
     <>
-      <Card className={`${er ? "border-[3px]" : "border-2"} relative ${isVerification ? "border-purple-400" : "border-primary/30"}`}>
+      <Card className={`${er ? "border-[3px]" : cm ? "border" : "border-2"} relative ${isVerification ? "border-purple-400" : "border-primary/30"}`}>
         {showSuccessFlash && onFlashComplete && (
           <SuccessFlash onComplete={onFlashComplete} />
         )}
-        <CardContent className={`${er ? "p-5 space-y-6" : "p-4 space-y-4"}`}>
+        <CardContent className={er ? "p-5 space-y-6" : cm ? "p-2.5 space-y-2" : "p-4 space-y-4"}>
           {/* Verification badge */}
           {isVerification && (
             <Badge className={`bg-purple-100 text-purple-800 border-purple-300 ${er ? "text-base" : "text-xs"}`}>
@@ -233,25 +234,25 @@ export function ActiveItemCard({
 
           {/* Bin number */}
           {item.binNumber && (
-            <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : "py-2"}`}>
+            <div className={`flex items-center gap-2 bg-slate-100 rounded-lg px-3 ${er ? "py-3" : cm ? "py-1" : "py-2"}`}>
               <span className={`${er ? "text-base" : "text-xs"} font-medium text-muted-foreground uppercase tracking-wide`}>Bin</span>
-              <span className={`font-mono font-bold ${er ? "text-xl" : "text-base"}`}>{item.binNumber}</span>
+              <span className={`font-mono font-bold ${er ? "text-xl" : cm ? "text-sm" : "text-base"}`}>{item.binNumber}</span>
             </div>
           )}
 
           {/* Item Code */}
-          <div className="space-y-1">
+          <div className={cm ? "space-y-0" : "space-y-1"}>
             <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Item Code</div>
-            <div className={`font-mono font-bold ${er ? "text-3xl" : "text-xl"} tracking-tight`}>
+            <div className={`font-mono font-bold ${er ? "text-3xl" : cm ? "text-base" : "text-xl"} tracking-tight`}>
               {item.itemCode}
             </div>
           </div>
 
           {/* Description */}
           {item.description && (
-            <div className="space-y-0.5">
-              <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>
-              <div className={`${er ? "text-lg" : "text-sm"} leading-snug`}>
+            <div className={cm ? "space-y-0" : "space-y-0.5"}>
+              {!cm && <div className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-muted-foreground uppercase tracking-wider`}>Description</div>}
+              <div className={`${er ? "text-lg" : cm ? "text-xs text-muted-foreground" : "text-sm"} leading-snug ${cm ? "line-clamp-1" : ""}`}>
                 {item.description}
               </div>
             </div>
@@ -282,17 +283,17 @@ export function ActiveItemCard({
           )}
 
           {/* On-hand quantity (with variance tint) */}
-          <div className={`text-center ${er ? "py-3" : "py-2"} rounded-lg ${varianceBgStyles[vState]}`}>
-            <div className={`${er ? "text-base" : "text-xs"} font-medium text-muted-foreground mb-1`}>On Hand</div>
-            <div className={`${er ? "text-5xl" : "text-3xl"} font-bold`}>{onHand}</div>
+          <div className={`text-center ${er ? "py-3" : cm ? "py-1" : "py-2"} rounded-lg ${varianceBgStyles[vState]}`}>
+            <div className={`${er ? "text-base" : "text-xs"} font-medium text-muted-foreground ${cm ? "mb-0" : "mb-1"}`}>On Hand</div>
+            <div className={`${er ? "text-5xl" : cm ? "text-2xl" : "text-3xl"} font-bold`}>{onHand}</div>
           </div>
 
           {/* Skip + Add note */}
-          <div className="flex items-center justify-between border-t pt-3">
+          <div className={`flex items-center justify-between border-t ${cm ? "pt-1.5" : "pt-3"}`}>
             <Button
               variant="outline"
               size="sm"
-              className={er ? "text-base h-10" : "text-xs"}
+              className={er ? "text-base h-10" : cm ? "text-xs h-7" : "text-xs"}
               onClick={onSkip}
             >
               Skip
@@ -321,13 +322,13 @@ export function ActiveItemCard({
       </Card>
 
       {/* Sticky Action Zone — fixed at bottom */}
-      <div className={`fixed bottom-16 left-0 right-0 z-40 border-t shadow-lg ${varianceBarStyles[vState]} safe-area-bottom`}>
-        <div className="max-w-lg mx-auto px-4 py-3 space-y-2">
+      <div className={`fixed ${cm ? "bottom-11" : "bottom-16"} left-0 right-0 z-40 border-t shadow-lg ${varianceBarStyles[vState]} safe-area-bottom`}>
+        <div className={`max-w-lg mx-auto px-4 ${cm ? "py-1.5 space-y-1" : "py-3 space-y-2"}`}>
           {/* Input row: On-hand | Input | Live variance */}
-          <div className="flex items-center gap-3">
-            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5.5rem]" : "min-w-[5rem]"}`}>
-              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>On Hand</span>
-              <span className={`${er ? "text-4xl" : "text-3xl"} font-bold`}>{onHand}</span>
+          <div className={`flex items-center ${cm ? "gap-2" : "gap-3"}`}>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5.5rem]" : cm ? "min-w-[3.5rem]" : "min-w-[5rem]"}`}>
+              <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground font-medium`}>On Hand</span>
+              <span className={`${er ? "text-4xl" : cm ? "text-2xl" : "text-3xl"} font-bold`}>{onHand}</span>
             </div>
             <Input
               ref={inputRef}
@@ -336,7 +337,7 @@ export function ActiveItemCard({
               value={qtyValue}
               onChange={(e) => onQtyChange(e.target.value)}
               placeholder="Qty"
-              className={`${er ? "h-24 text-5xl md:text-5xl" : "h-20 text-4xl md:text-4xl"} text-center font-bold flex-1 ${varianceInputStyles[vState]}`}
+              className={`${er ? "h-24 text-5xl md:text-5xl" : cm ? "h-14 text-3xl" : "h-20 text-4xl md:text-4xl"} text-center font-bold flex-1 ${varianceInputStyles[vState]}`}
               disabled={isSubmitting}
               onWheel={(e) => e.currentTarget.blur()}
               onKeyDown={(e) => {
@@ -346,10 +347,10 @@ export function ActiveItemCard({
                 }
               }}
             />
-            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5.5rem]" : "min-w-[5rem]"}`}>
-              <span className={`${er ? "text-sm" : "text-xs"} text-muted-foreground font-medium`}>Variance</span>
+            <div className={`flex flex-col items-center flex-shrink-0 ${er ? "min-w-[5.5rem]" : cm ? "min-w-[3.5rem]" : "min-w-[5rem]"}`}>
+              <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground font-medium`}>Variance</span>
               {liveVariance !== null && !isNaN(liveVariance) ? (
-                <span className={`${er ? "text-4xl" : "text-3xl"} font-bold px-2 py-0.5 rounded-full ${
+                <span className={`${er ? "text-4xl" : cm ? "text-2xl" : "text-3xl"} font-bold px-2 py-0.5 rounded-full ${
                   vState === "match" ? "text-green-700 bg-green-100" :
                   vState === "small" ? "text-amber-700 bg-amber-100" :
                   vState === "large" ? "text-red-700 bg-red-100" : ""
@@ -357,7 +358,7 @@ export function ActiveItemCard({
                   {liveVariance === 0 ? "0" : `${liveVariance > 0 ? "+" : ""}${liveVariance}`}
                 </span>
               ) : (
-                <span className={`${er ? "text-4xl" : "text-3xl"} text-muted-foreground`}>—</span>
+                <span className={`${er ? "text-4xl" : cm ? "text-2xl" : "text-3xl"} text-muted-foreground`}>—</span>
               )}
             </div>
           </div>
@@ -366,7 +367,7 @@ export function ActiveItemCard({
           {isMatchValue ? (
             <Button
               onClick={onSubmit}
-              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white ${
+              className={`w-full ${er ? "h-18 text-2xl" : cm ? "h-10 text-base" : "h-14 text-lg"} font-bold text-white ${
                 isVerification
                   ? "bg-purple-600 hover:bg-purple-700"
                   : "bg-green-600 hover:bg-green-700"
@@ -378,7 +379,7 @@ export function ActiveItemCard({
           ) : (
             <Button
               onClick={onSubmit}
-              className={`w-full ${er ? "h-18 text-2xl" : "h-14 text-lg"} font-bold text-white ${
+              className={`w-full ${er ? "h-18 text-2xl" : cm ? "h-10 text-base" : "h-14 text-lg"} font-bold text-white ${
                 isVerification
                   ? "bg-purple-600 hover:bg-purple-700"
                   : "bg-amber-500 hover:bg-amber-600"

@@ -51,7 +51,8 @@ export async function middleware(request: NextRequest) {
     const adminAllowedSupervisorApis = ["/api/supervisor/export", "/api/supervisor/dashboard"];
     const isAdminAllowed = payload.type === "admin" &&
       adminAllowedSupervisorApis.some((p) => pathname.startsWith(p));
-    if (payload.type !== "supervisor" && payload.type !== "auditor" && !isAdminAllowed) {
+    // Executives get read-only access to supervisor routes (like auditors)
+    if (payload.type !== "supervisor" && payload.type !== "auditor" && payload.type !== "executive" && !isAdminAllowed) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
   }
@@ -61,7 +62,8 @@ export async function middleware(request: NextRequest) {
     const isAdminAllowed =
       payload.type === "admin" &&
       adminAllowedSupervisorPaths.some((p) => pathname.startsWith(p));
-    if (payload.type !== "supervisor" && payload.type !== "auditor" && !isAdminAllowed) {
+    // Executives get read-only access to supervisor pages (like auditors)
+    if (payload.type !== "supervisor" && payload.type !== "auditor" && payload.type !== "executive" && !isAdminAllowed) {
       return NextResponse.redirect(new URL("/", request.url));
     }
   }

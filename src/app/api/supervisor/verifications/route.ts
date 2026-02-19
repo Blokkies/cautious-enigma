@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
+  if (!user || (user.type !== "supervisor" && user.type !== "auditor" && user.type !== "executive")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

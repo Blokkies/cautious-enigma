@@ -78,7 +78,7 @@ interface Team {
 
 export default function VariancesPage() {
   const { user } = useAuth();
-  const isAuditor = user?.type === "auditor";
+  const isAuditor = user?.type === "auditor" || user?.type === "executive";
   const searchParams = useSearchParams();
   const [activeVariances, setActiveVariances] = useState<VarianceItem[]>([]);
   const [acceptedVariances, setAcceptedVariances] = useState<VarianceItem[]>([]);

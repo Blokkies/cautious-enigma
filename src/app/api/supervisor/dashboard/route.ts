@@ -6,7 +6,7 @@ import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter 
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "admin" && user.type !== "auditor")) {
+  if (!user || (user.type !== "supervisor" && user.type !== "admin" && user.type !== "auditor" && user.type !== "executive")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

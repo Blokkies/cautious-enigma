@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, use } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter, useParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -85,8 +85,8 @@ const statusColors: Record<string, string> = {
   completed: "bg-blue-500/10 text-blue-700 border-blue-500/20",
 };
 
-export default function EventDrillDown({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function EventDrillDown() {
+  const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [event, setEvent] = useState<EventInfo | null>(null);
   const [overall, setOverall] = useState<Overall | null>(null);

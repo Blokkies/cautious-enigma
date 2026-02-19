@@ -244,11 +244,6 @@ export async function POST(request: NextRequest) {
       uploadedBy: user.id ? Number(user.id) : null,
     }).returning({ id: uploads.id });
 
-    // Link upload to event
-    await db.update(stocktakeEvents)
-      .set({ uploadId: upload.id })
-      .where(eq(stocktakeEvents.id, Number(eventId)));
-
     // Get import summary
     const [totalImported] = await db
       .select({ count: sql<number>`count(*)` })
@@ -283,7 +278,7 @@ export async function POST(request: NextRequest) {
       .sort();
 
     await db.update(stocktakeEvents)
-      .set({ warehouses: JSON.stringify(warehouses) })
+      .set({ warehouses: JSON.stringify(warehouses), uploadId: upload.id })
       .where(eq(stocktakeEvents.id, Number(eventId)));
 
     return NextResponse.json({

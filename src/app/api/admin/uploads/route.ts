@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { uploads, stocktakeEvents } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
 
 // GET: List all uploads with linked events
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
         createdAt: uploads.createdAt,
       })
       .from(uploads)
-      .orderBy(uploads.createdAt);
+      .orderBy(desc(uploads.createdAt));
 
     // For each upload, find linked events
     const result = await Promise.all(

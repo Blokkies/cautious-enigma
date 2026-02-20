@@ -77,10 +77,10 @@ export default function ExportPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download =
-        format === "csv"
-          ? `stocktake_${type}.csv`
-          : `stocktake_${type}.xlsx`;
+      // Prefer server-provided filename from Content-Disposition
+      const cd = res.headers.get("Content-Disposition");
+      const cdMatch = cd?.match(/filename="?([^";\n]+)"?/);
+      a.download = cdMatch?.[1] ?? (format === "csv" ? `stocktake_${type}.csv` : `stocktake_${type}.xlsx`);
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

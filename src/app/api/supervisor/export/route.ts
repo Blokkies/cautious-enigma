@@ -223,6 +223,15 @@ export async function GET(request: NextRequest) {
   }
 
   const warehouses = await getEventWarehouses(eventId);
+
+  // Build filename prefix with warehouse name
+  const [eventRow] = await db.select({ name: stocktakeEvents.name }).from(stocktakeEvents).where(eq(stocktakeEvents.id, eventId));
+  const warehouseTag = warehouses && warehouses.length > 0
+    ? warehouses.join("_").replace(/[^a-zA-Z0-9_-]/g, "_")
+    : null;
+  const eventTag = eventRow?.name?.replace(/[^a-zA-Z0-9_-]/g, "_") ?? "stocktake";
+  const filePrefix = warehouseTag ? `${eventTag}_${warehouseTag}` : eventTag;
+
   let data: Record<string, unknown>[];
 
   if (type === "serials") {
@@ -386,18 +395,18 @@ export async function GET(request: NextRequest) {
 
   // Filename mapping
   const filenameBase: Record<string, string> = {
-    full: "stocktake_master_export",
-    variances_nonserialized_up: "stocktake_nonserialized_variances_up",
-    variances_nonserialized_down: "stocktake_nonserialized_variances_down",
-    variances_serialized_up: "stocktake_serialized_variances_up",
-    variances_serialized_down: "stocktake_serialized_variances_down",
-    variances_all: "stocktake_all_variances",
-    variances: "stocktake_all_variances",
-    serials: "stocktake_serials",
-    queries: "stocktake_queries",
-    breakdowns: "stocktake_breakdowns",
-    verifications: "stocktake_verifications",
-    audit_log: "stocktake_audit_log",
+    full: `${filePrefix}_master_export`,
+    variances_nonserialized_up: `${filePrefix}_nonserialized_variances_up`,
+    variances_nonserialized_down: `${filePrefix}_nonserialized_variances_down`,
+    variances_serialized_up: `${filePrefix}_serialized_variances_up`,
+    variances_serialized_down: `${filePrefix}_serialized_variances_down`,
+    variances_all: `${filePrefix}_all_variances`,
+    variances: `${filePrefix}_all_variances`,
+    serials: `${filePrefix}_serials`,
+    queries: `${filePrefix}_queries`,
+    breakdowns: `${filePrefix}_breakdowns`,
+    verifications: `${filePrefix}_verifications`,
+    audit_log: `${filePrefix}_audit_log`,
   };
   const base = filenameBase[type] || filenameBase.full;
 

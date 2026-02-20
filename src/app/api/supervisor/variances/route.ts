@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
     countedQty: counts.countedQty,
     variance: counts.variance,
     varianceValue: counts.varianceValue,
+    teamId: counts.teamId,
     teamName: teams.name,
     comment: counts.comment,
     checkStatus: counts.checkStatus,
@@ -408,7 +409,46 @@ export async function PATCH(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { countId, newQty, reason, action, verificationId } = body;
+    const { countId, newQty, reason, action, verificationId, countIds } = body;
+
+    // Handle bulk accept variance
+    if (action === "bulk_accept_variance") {
+      if (!Array.isArray(countIds) || countIds.length === 0) {
+        return NextResponse.json({ error: "countIds array is required" }, { status: 400 });
+      }
+
+      // Verify all counts belong to this event
+      const validCounts = await db
+        .select({ id: counts.id })
+        .from(counts)
+        .where(and(inArray(counts.id, countIds), eq(counts.eventId, user.eventId)));
+
+      const validIds = validCounts.map((c) => c.id);
+      if (validIds.length === 0) {
+        return NextResponse.json({ error: "No valid counts found" }, { status: 404 });
+      }
+
+      await db.update(counts)
+        .set({ checkStatus: "accepted" })
+        .where(inArray(counts.id, validIds));
+
+      // Audit log entries
+      await Promise.all(
+        validIds.map((id) =>
+          db.insert(auditLog).values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "supervisor",
+            action: "supervisor_accept_variance",
+            tableName: "counts",
+            recordId: id,
+            newValue: JSON.stringify({ checkStatus: "accepted", bulk: true }),
+          })
+        )
+      );
+
+      return NextResponse.json({ success: true, acceptedCount: validIds.length });
+    }
 
     // Handle verification acceptance actions
     if (action === "accept_original" || action === "accept_verification") {

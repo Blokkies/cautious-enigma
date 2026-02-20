@@ -25,7 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil, MessageSquare } from "lucide-react";
+import { Search, ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil, MessageSquare, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
 import { markNotificationSeen } from "@/hooks/use-notifications";
@@ -43,6 +43,7 @@ interface VarianceItem {
   countedQty: number;
   variance: number;
   varianceValue: number;
+  teamId: number;
   teamName: string;
   comment: string | null;
   checkStatus: string;
@@ -128,7 +129,12 @@ export default function VariancesPage() {
   const [selectedTeamIds, setSelectedTeamIds] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
   const [thresholdValue, setThresholdValue] = useState("");
+  const [thresholdMode, setThresholdMode] = useState<"gte" | "lte">("gte");
   const [serialFilter, setSerialFilter] = useState(searchParams.get("filter") === "serials");
+
+  // Bulk accept state
+  const [showBulkAcceptDialog, setShowBulkAcceptDialog] = useState(false);
+  const [bulkAccepting, setBulkAccepting] = useState(false);
 
   // Edit serial dialog state
   const [editingSerialItem, setEditingSerialItem] = useState<VarianceItem | null>(null);
@@ -395,17 +401,19 @@ export default function VariancesPage() {
   const canSelect = (v: VarianceItem) =>
     !v.isUnknownSerial && (!v.verificationId || v.verificationStatus === "accepted");
 
-  const selectAboveThreshold = () => {
+  const selectByThreshold = () => {
     const threshold = parseFloat(thresholdValue);
     if (isNaN(threshold) || threshold < 0) {
       toast.error("Enter a valid amount");
       return;
     }
-    const matching = filterItems(selectableItems).filter(
-      (v) => Math.abs(v.varianceValue) >= threshold
+    const matching = filterItems(selectableItems).filter((v) =>
+      thresholdMode === "gte"
+        ? Math.abs(v.varianceValue) >= threshold
+        : Math.abs(v.varianceValue) <= threshold
     );
     if (matching.length === 0) {
-      toast.info("No variances above that amount");
+      toast.info(`No variances ${thresholdMode === "gte" ? "above" : "below"} R${threshold}`);
       return;
     }
     setSelectedCountIds(new Set(matching.map((v) => v.countId)));
@@ -451,16 +459,45 @@ export default function VariancesPage() {
 
     setAssigning(true);
     try {
-      const allCountIds = Array.from(selectedCountIds);
       const teamIds = Array.from(selectedTeamIds);
 
-      // Round-robin distribute items across selected teams
+      // Sort selected items by bin number (natural order) so adjacent bins stay grouped
+      const selectedItems = activeVariances
+        .filter((v) => selectedCountIds.has(v.countId))
+        .sort((a, b) => {
+          const binCmp = (a.binNumber || "").localeCompare(b.binNumber || "", undefined, { numeric: true, sensitivity: "base" });
+          if (binCmp !== 0) return binCmp;
+          return (a.itemCode || "").localeCompare(b.itemCode || "", undefined, { numeric: true, sensitivity: "base" });
+        });
+
+      // Distribute items across teams, avoiding the team that originally counted each item
       const teamChunks: Map<number, number[]> = new Map();
-      for (const tid of teamIds) teamChunks.set(tid, []);
-      allCountIds.forEach((countId, i) => {
-        const tid = teamIds[i % teamIds.length];
-        teamChunks.get(tid)!.push(countId);
-      });
+      const teamLoads: Map<number, number> = new Map();
+      for (const tid of teamIds) {
+        teamChunks.set(tid, []);
+        teamLoads.set(tid, 0);
+      }
+
+      for (const item of selectedItems) {
+        const origTeamId = item.teamId;
+
+        // Pick the least-loaded team that isn't the original counter
+        const candidates = teamIds.filter((tid) => tid !== origTeamId);
+        const pool = candidates.length > 0 ? candidates : teamIds; // fallback if no other team available
+
+        let bestTid = pool[0];
+        let bestLoad = teamLoads.get(bestTid) ?? 0;
+        for (const tid of pool) {
+          const load = teamLoads.get(tid) ?? 0;
+          if (load < bestLoad) {
+            bestTid = tid;
+            bestLoad = load;
+          }
+        }
+
+        teamChunks.get(bestTid)!.push(item.countId);
+        teamLoads.set(bestTid, bestLoad + 1);
+      }
 
       let totalCreated = 0;
       for (const [teamId, countIds] of Array.from(teamChunks.entries())) {
@@ -595,6 +632,41 @@ export default function VariancesPage() {
       toast.error("Failed — check your connection");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Bulk accept selected variances
+  const handleBulkAccept = async () => {
+    const ids = Array.from(selectedCountIds);
+    if (ids.length === 0) return;
+    setBulkAccepting(true);
+    try {
+      const res = await fetch("/api/supervisor/variances", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bulk_accept_variance", countIds: ids }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Failed to accept variances");
+        return;
+      }
+      const data = await res.json();
+      // Optimistic move from active to accepted
+      const acceptedIds = new Set(ids);
+      const moved = activeVariances.filter((v) => acceptedIds.has(v.countId));
+      setActiveVariances((prev) => prev.filter((v) => !acceptedIds.has(v.countId)));
+      setAcceptedVariances((prev) => [
+        ...moved.map((v) => ({ ...v, checkStatus: "accepted" })),
+        ...prev,
+      ]);
+      setSelectedCountIds(new Set());
+      toast.success(`${data.acceptedCount} variance${data.acceptedCount !== 1 ? "s" : ""} accepted`);
+    } catch {
+      toast.error("Failed to accept — check your connection");
+    } finally {
+      setBulkAccepting(false);
+      setShowBulkAcceptDialog(false);
     }
   };
 
@@ -946,64 +1018,113 @@ export default function VariancesPage() {
         <TabsContent value="active">
           {/* Selection toolbar */}
           {!isAuditor && activeVariances.length > 0 && (
-            <div className="bg-muted/30 rounded-lg p-2 mb-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 flex-wrap">
+            <div className="bg-muted/30 rounded-lg p-2 mb-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={toggleSelectAll}
+                  className="text-xs"
+                >
+                  {selectedCountIds.size === filterItems(selectableItems).length &&
+                  filterItems(selectableItems).length > 0
+                    ? "Deselect All"
+                    : `Select All (${filterItems(selectableItems).length})`}
+                </Button>
+
+                <div className="h-4 w-px bg-border" />
+
+                {/* Value threshold selector */}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">R</span>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    value={thresholdValue}
+                    onChange={(e) => setThresholdValue(e.target.value)}
+                    placeholder="0"
+                    className="h-7 w-20 text-xs"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") selectByThreshold();
+                    }}
+                  />
+                  <div className="flex">
+                    <button
+                      onClick={() => setThresholdMode("gte")}
+                      className={`px-2 py-1 text-xs font-medium rounded-l-md border transition-colors ${
+                        thresholdMode === "gte"
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background text-muted-foreground border-border hover:bg-muted"
+                      }`}
+                    >
+                      &ge;
+                    </button>
+                    <button
+                      onClick={() => setThresholdMode("lte")}
+                      className={`px-2 py-1 text-xs font-medium rounded-r-md border-t border-r border-b transition-colors ${
+                        thresholdMode === "lte"
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background text-muted-foreground border-border hover:bg-muted"
+                      }`}
+                    >
+                      &le;
+                    </button>
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={toggleSelectAll}
-                    className="text-xs"
+                    className="text-xs h-7"
+                    onClick={selectByThreshold}
+                    disabled={!thresholdValue}
                   >
-                    {selectedCountIds.size === filterItems(selectableItems).length &&
-                    filterItems(selectableItems).length > 0
-                      ? "☑ Deselect All"
-                      : "☐ Select All"}
+                    Select
                   </Button>
-
-                  <div className="h-4 w-px bg-border" />
-
-                  {/* Threshold selector */}
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">R</span>
-                    <Input
-                      type="number"
-                      inputMode="decimal"
-                      value={thresholdValue}
-                      onChange={(e) => setThresholdValue(e.target.value)}
-                      placeholder="0"
-                      className="h-7 w-20 text-xs"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") selectAboveThreshold();
-                      }}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-7"
-                      onClick={selectAboveThreshold}
-                      disabled={!thresholdValue}
-                    >
-                      Select ≥
-                    </Button>
-                  </div>
                 </div>
 
                 {selectedCountIds.size > 0 && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-muted-foreground">
-                      {selectedCountIds.size} selected
-                    </span>
-                    <Button
-                      size="sm"
-                      onClick={openAssignDialog}
-                    >
-                      <ClipboardCheck className="h-4 w-4 mr-1" />
-                      Assign Verification
-                    </Button>
-                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs h-7 text-muted-foreground"
+                    onClick={() => setSelectedCountIds(new Set())}
+                  >
+                    Clear
+                  </Button>
                 )}
               </div>
+
+              {selectedCountIds.size > 0 && (
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/50">
+                  <span className="text-sm font-medium">
+                    {selectedCountIds.size} selected
+                    <span className="text-muted-foreground font-normal ml-1">
+                      (R{activeVariances
+                        .filter((v) => selectedCountIds.has(v.countId))
+                        .reduce((sum, v) => sum + Math.abs(v.varianceValue), 0)
+                        .toLocaleString(undefined, { maximumFractionDigits: 0 })} total value)
+                    </span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={openAssignDialog}
+                      className="text-xs"
+                    >
+                      <ClipboardCheck className="h-3.5 w-3.5 mr-1" />
+                      Assign Verification
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => setShowBulkAcceptDialog(true)}
+                      className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      <Check className="h-3.5 w-3.5 mr-1" />
+                      Accept Selected
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1416,6 +1537,56 @@ export default function VariancesPage() {
               {assigning
                 ? "Assigning..."
                 : `Assign to ${selectedTeamIds.size} team${selectedTeamIds.size !== 1 ? "s" : ""}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Accept Confirmation Dialog */}
+      <Dialog open={showBulkAcceptDialog} onOpenChange={(open) => { if (!open) setShowBulkAcceptDialog(false); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Accept {selectedCountIds.size} Variance{selectedCountIds.size !== 1 ? "s" : ""}
+            </DialogTitle>
+            <DialogDescription>
+              This will mark {selectedCountIds.size} variance{selectedCountIds.size !== 1 ? "s" : ""} as accepted. Accepted variances move to the Accepted tab and will no longer appear as active items requiring review.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+              <p className="font-semibold">This action affects stock records</p>
+              <p className="mt-1 text-xs">
+                Accepting a variance means the counted quantity is confirmed as correct.
+                The variance between on-hand and counted will stand as the final result.
+                You can reopen individual variances later from the Accepted tab if needed.
+              </p>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Total variance value: <span className="font-medium text-foreground">
+                R{activeVariances
+                  .filter((v) => selectedCountIds.has(v.countId))
+                  .reduce((sum, v) => sum + Math.abs(v.varianceValue), 0)
+                  .toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkAcceptDialog(false)} disabled={bulkAccepting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleBulkAccept}
+              disabled={bulkAccepting}
+              className="bg-green-600 hover:bg-green-700 text-white gap-1"
+            >
+              {bulkAccepting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              {bulkAccepting ? "Accepting..." : "Confirm Accept"}
             </Button>
           </DialogFooter>
         </DialogContent>

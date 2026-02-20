@@ -139,8 +139,12 @@ export default function SupervisorAssignPage() {
   // Team bin selection (for bulk removal)
   const [selectedTeamBins, setSelectedTeamBins] = useState<Record<number, Set<string>>>({});
 
-  // Assigned bin search (shared across teams)
+  // Assigned bin search & filters (shared across teams — only one expanded at a time)
   const [assignedBinSearch, setAssignedBinSearch] = useState("");
+  const [assignedBinSearchMode, setAssignedBinSearchMode] = useState<"contains" | "starts" | "range">("contains");
+  const [assignedRangeFrom, setAssignedRangeFrom] = useState("");
+  const [assignedRangeTo, setAssignedRangeTo] = useState("");
+  const [assignedCountedFilter, setAssignedCountedFilter] = useState<"all" | "counted" | "uncounted">("all");
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -451,6 +455,13 @@ export default function SupervisorAssignPage() {
     });
   };
 
+  const selectFilteredTeamBins = (teamId: number, filteredBins: BinInfo[]) => {
+    setSelectedTeamBins((prev) => ({
+      ...prev,
+      [teamId]: new Set(filteredBins.map((b) => b.bin_number)),
+    }));
+  };
+
   const getSelectedTeamBinCount = (teamId: number) => {
     return selectedTeamBins[teamId]?.size || 0;
   };
@@ -588,13 +599,25 @@ export default function SupervisorAssignPage() {
     return team.bins.some(b => selected.has(b.bin_number) && (b.counted_items ?? 0) > 0);
   };
 
+  const resetAssignedFilters = () => {
+    setAssignedBinSearch("");
+    setAssignedBinSearchMode("contains");
+    setAssignedRangeFrom("");
+    setAssignedRangeTo("");
+    setAssignedCountedFilter("all");
+  };
+
   const toggleTeamExpand = (teamId: number) => {
     setExpandedTeams((prev) => {
       const next = new Set(prev);
-      if (next.has(teamId)) next.delete(teamId);
-      else next.add(teamId);
+      if (next.has(teamId)) {
+        next.delete(teamId);
+      } else {
+        next.add(teamId);
+      }
       return next;
     });
+    resetAssignedFilters();
   };
 
   const selectedItemCount = useMemo(() => {
@@ -771,15 +794,129 @@ export default function SupervisorAssignPage() {
                   </div>
 
                   {isExpanded && team.bins.length > 0 && (() => {
-                    const aq = assignedBinSearch.toLowerCase();
-                    const visibleBins = aq
-                      ? [...team.bins].filter(b => b.bin_number.toLowerCase().includes(aq)).sort((a, b) => naturalCompare(a.bin_number, b.bin_number))
-                      : [...team.bins].sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
+                    // Filter pipeline: search mode → counted status → sort
+                    let filtered = [...team.bins];
+
+                    // 1. Search mode filter
+                    if (assignedBinSearchMode === "range") {
+                      const from = assignedRangeFrom.trim().toLowerCase();
+                      const to = assignedRangeTo.trim().toLowerCase();
+                      if (from || to) {
+                        filtered = filtered.filter((b) => {
+                          const v = b.bin_number.toLowerCase();
+                          if (from && to) return naturalCompare(v, from) >= 0 && naturalCompare(v, to) <= 0;
+                          if (from) return naturalCompare(v, from) >= 0;
+                          return naturalCompare(v, to) <= 0;
+                        });
+                      }
+                    } else if (assignedBinSearch.trim()) {
+                      const q = assignedBinSearch.toLowerCase();
+                      filtered = filtered.filter((b) => {
+                        const v = b.bin_number.toLowerCase();
+                        return assignedBinSearchMode === "starts" ? v.startsWith(q) : v.includes(q);
+                      });
+                    }
+
+                    // 2. Counted status filter
+                    if (assignedCountedFilter === "counted") {
+                      filtered = filtered.filter((b) => (b.counted_items ?? 0) > 0);
+                    } else if (assignedCountedFilter === "uncounted") {
+                      filtered = filtered.filter((b) => (b.counted_items ?? 0) === 0);
+                    }
+
+                    const visibleBins = filtered.sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
+                    const hasActiveFilter =
+                      assignedBinSearch.trim() !== "" ||
+                      assignedBinSearchMode === "range" && (assignedRangeFrom.trim() !== "" || assignedRangeTo.trim() !== "") ||
+                      assignedCountedFilter !== "all";
+                    const filteredDiffers = hasActiveFilter && visibleBins.length !== team.bins.length;
+
                     return (
                     <div className="border-t px-3 py-2 bg-gray-50 space-y-1">
+                      {/* Row 1: Search mode pills + counted status pills */}
+                      {team.bins.length > 5 && (
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pb-1">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground mr-0.5">Search:</span>
+                            {([
+                              { key: "contains" as const, label: "Contains" },
+                              { key: "starts" as const, label: "Starts with" },
+                              { key: "range" as const, label: "Range" },
+                            ]).map((m) => (
+                              <button
+                                key={m.key}
+                                onClick={() => { setAssignedBinSearchMode(m.key); setAssignedBinSearch(""); setAssignedRangeFrom(""); setAssignedRangeTo(""); }}
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                                  assignedBinSearchMode === m.key
+                                    ? "bg-primary text-primary-foreground"
+                                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                                }`}
+                              >
+                                {m.label}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground mr-0.5">Status:</span>
+                            {([
+                              { key: "all" as const, label: "All" },
+                              { key: "uncounted" as const, label: "Uncounted" },
+                              { key: "counted" as const, label: "Counted" },
+                            ]).map((m) => (
+                              <button
+                                key={m.key}
+                                onClick={() => setAssignedCountedFilter(m.key)}
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+                                  assignedCountedFilter === m.key
+                                    ? "bg-primary text-primary-foreground"
+                                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                                }`}
+                              >
+                                {m.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Row 2: Search input or range inputs */}
+                      {team.bins.length > 5 && (
+                        assignedBinSearchMode === "range" ? (
+                          <div className="flex gap-1.5 items-center">
+                            <Input
+                              placeholder="From"
+                              value={assignedRangeFrom}
+                              onChange={(e) => setAssignedRangeFrom(e.target.value)}
+                              className="h-7 text-xs flex-1"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <span className="text-[10px] text-muted-foreground">to</span>
+                            <Input
+                              placeholder="To"
+                              value={assignedRangeTo}
+                              onChange={(e) => setAssignedRangeTo(e.target.value)}
+                              className="h-7 text-xs flex-1"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                            <Input
+                              placeholder={assignedBinSearchMode === "starts" ? "Bin starts with..." : "Filter assigned bins..."}
+                              value={assignedBinSearch}
+                              onChange={(e) => setAssignedBinSearch(e.target.value)}
+                              className="pl-8 h-7 text-xs"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </div>
+                        )
+                      )}
+
+                      {/* Row 3: Selection toolbar */}
                       {!isAuditor && (
-                        <div className="flex items-center justify-between pb-1 mb-1 border-b border-gray-200">
-                          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                        <div className="flex items-center gap-2 pb-1 mb-1 border-b border-gray-200 flex-wrap">
+                          <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
                             <input
                               type="checkbox"
                               checked={allBinsSelected}
@@ -789,25 +926,34 @@ export default function SupervisorAssignPage() {
                               onChange={() => toggleAllTeamBins(team.id, team.bins)}
                               className="rounded"
                             />
-                            Select all {team.bins.length} bins
+                            Select all {team.bins.length}
                           </label>
+                          {filteredDiffers && visibleBins.length > 0 && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-5 px-2 text-[10px] gap-1"
+                              onClick={() => selectFilteredTeamBins(team.id, visibleBins)}
+                            >
+                              Select filtered ({visibleBins.length})
+                            </Button>
+                          )}
+                          {someBinsSelected && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-5 px-2 text-[10px] text-muted-foreground"
+                              onClick={() => setSelectedTeamBins((prev) => ({ ...prev, [team.id]: new Set() }))}
+                            >
+                              Clear
+                            </Button>
+                          )}
                         </div>
                       )}
-                      {team.bins.length > 5 && (
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                          <Input
-                            placeholder="Filter assigned bins..."
-                            value={assignedBinSearch}
-                            onChange={(e) => setAssignedBinSearch(e.target.value)}
-                            className="pl-8 h-7 text-xs"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </div>
-                      )}
+
                       <div className="max-h-60 overflow-y-auto space-y-1">
                       {visibleBins.length === 0 ? (
-                        <div className="text-xs text-muted-foreground text-center py-2">No bins match &quot;{assignedBinSearch}&quot;</div>
+                        <div className="text-xs text-muted-foreground text-center py-2">No bins match filter</div>
                       ) : visibleBins.map((bin) => {
                         const isCounted = (bin.counted_items ?? 0) > 0;
                         return (

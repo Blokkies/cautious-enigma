@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
-import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { eq, and, sql, isNotNull, inArray } from "drizzle-orm";
+import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
 
 export async function GET(
   request: NextRequest,
@@ -24,8 +24,12 @@ export async function GET(
     return NextResponse.json({ error: "Event not found" }, { status: 404 });
   }
 
-  // Overall stats
+  const warehouses = await getEventWarehouses(eventId);
+  const cwf = countsWarehouseFilter(eventId, warehouses);
+
+  // Fetch team list + overall stats + recent activity in parallel
   const [
+    teamList,
     [totalItemsRow],
     [countedItemsRow],
     [matchedItemsRow],
@@ -36,51 +40,20 @@ export async function GET(
     [openQueriesRow],
     [pendingBreakdownsRow],
     [openSerialsRow],
+    recentActivity,
   ] = await Promise.all([
-    db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eventId), isNotNull(items.teamId))),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"))),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, true))),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false))),
-    db.select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false))),
-    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance > 0`)),
-    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance < 0`)),
+    db.select().from(teams).where(eq(teams.eventId, eventId)),
+    db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses))),
+    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), cwf)),
+    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, true), cwf)),
+    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf)),
+    db.select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf)),
+    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance > 0`, cwf)),
+    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance < 0`, cwf)),
     db.select({ count: sql<number>`count(*)` }).from(queries).where(and(eq(queries.eventId, eventId), eq(queries.status, "open"))),
     db.select({ count: sql<number>`count(*)` }).from(breakdowns).where(and(eq(breakdowns.eventId, eventId), eq(breakdowns.approvalStatus, "pending"))),
     db.select({ count: sql<number>`count(*)` }).from(serialDiscrepancies).where(and(eq(serialDiscrepancies.eventId, eventId), eq(serialDiscrepancies.status, "open"))),
-  ]);
-
-  const total = totalItemsRow?.count || 0;
-  const counted = countedItemsRow?.count || 0;
-
-  // Per-team stats
-  const teamList = await db.select().from(teams).where(eq(teams.eventId, eventId));
-
-  const teamProgress = await Promise.all(teamList.map(async (team) => {
-    const [[teamTotal], [teamCounted], [teamVariances], [lastCount]] = await Promise.all([
-      db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eventId), eq(items.teamId, team.id))),
-      db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), eq(counts.countType, "initial"))),
-      db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), eq(counts.countType, "initial"), eq(counts.isMatch, false))),
-      db.select({ countedAt: counts.countedAt }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id))).orderBy(sql`counted_at DESC`).limit(1),
-    ]);
-
-    const t = teamTotal?.count || 0;
-    const c = teamCounted?.count || 0;
-    return {
-      id: team.id,
-      name: team.name,
-      members: team.members,
-      total: t,
-      counted: c,
-      pending: t - c,
-      variances: teamVariances?.count || 0,
-      progressPercent: t > 0 ? Math.round((c / t) * 100) : 0,
-      lastActivity: lastCount?.countedAt || null,
-    };
-  }));
-
-  // Recent activity
-  const recentActivity = await db
-    .select({
+    db.select({
       teamName: teams.name,
       itemCode: items.itemCode,
       countedQty: counts.countedQty,
@@ -91,9 +64,65 @@ export async function GET(
     .from(counts)
     .innerJoin(teams, eq(counts.teamId, teams.id))
     .innerJoin(items, eq(counts.itemId, items.id))
-    .where(eq(counts.eventId, eventId))
+    .where(and(eq(counts.eventId, eventId), cwf))
     .orderBy(sql`counted_at DESC`)
-    .limit(20);
+    .limit(20),
+  ]);
+
+  const total = Number(totalItemsRow?.count ?? 0);
+  const counted = Number(countedItemsRow?.count ?? 0);
+
+  // Per-team stats — batch with GROUP BY
+  const teamIds = teamList.map((t) => t.id);
+
+  let teamTotalRows: { teamId: number; count: number }[] = [];
+  let teamCountedRows: { teamId: number; count: number }[] = [];
+  let teamVarianceRows: { teamId: number; count: number }[] = [];
+  let teamLastCountRows: { teamId: number; countedAt: string }[] = [];
+
+  if (teamIds.length > 0) {
+    const [tt, tc, tv, tl] = await Promise.all([
+      db.select({ teamId: items.teamId, count: sql<number>`count(*)` })
+        .from(items)
+        .where(and(eq(items.eventId, eventId), inArray(items.teamId, teamIds), warehouseFilter(warehouses)))
+        .groupBy(items.teamId),
+      db.select({ teamId: counts.teamId, count: sql<number>`count(*)` })
+        .from(counts)
+        .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), eq(counts.countType, "initial"), cwf))
+        .groupBy(counts.teamId),
+      db.select({ teamId: counts.teamId, count: sql<number>`count(*)` })
+        .from(counts)
+        .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf))
+        .groupBy(counts.teamId),
+      db.select({ teamId: counts.teamId, countedAt: sql<string>`max(counted_at)` })
+        .from(counts)
+        .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), cwf))
+        .groupBy(counts.teamId),
+    ]);
+    teamTotalRows = tt as typeof teamTotalRows;
+    teamCountedRows = tc as typeof teamCountedRows;
+    teamVarianceRows = tv as typeof teamVarianceRows;
+    teamLastCountRows = tl as typeof teamLastCountRows;
+  }
+
+  const teamProgress = teamList.map((team) => {
+    const t = Number(teamTotalRows.find((r) => r.teamId === team.id)?.count ?? 0);
+    const c = Number(teamCountedRows.find((r) => r.teamId === team.id)?.count ?? 0);
+    const v = Number(teamVarianceRows.find((r) => r.teamId === team.id)?.count ?? 0);
+    const lastActivity = teamLastCountRows.find((r) => r.teamId === team.id)?.countedAt || null;
+
+    return {
+      id: team.id,
+      name: team.name,
+      members: team.members,
+      total: t,
+      counted: c,
+      pending: t - c,
+      variances: v,
+      progressPercent: t > 0 ? Math.round((c / t) * 100) : 0,
+      lastActivity,
+    };
+  });
 
   return NextResponse.json({
     event: {
@@ -106,19 +135,19 @@ export async function GET(
     overall: {
       total,
       counted,
-      matched: matchedItemsRow?.count || 0,
-      withVariance: varianceItemsRow?.count || 0,
-      varianceValue: varianceValueRow?.total || 0,
-      overCount: overStats?.count || 0,
-      overValue: overStats?.total || 0,
-      underCount: underStats?.count || 0,
-      underValue: underStats?.total || 0,
-      netVarianceValue: (overStats?.total || 0) - (underStats?.total || 0),
+      matched: Number(matchedItemsRow?.count ?? 0),
+      withVariance: Number(varianceItemsRow?.count ?? 0),
+      varianceValue: Number(varianceValueRow?.total ?? 0),
+      overCount: Number(overStats?.count ?? 0),
+      overValue: Number(overStats?.total ?? 0),
+      underCount: Number(underStats?.count ?? 0),
+      underValue: Number(underStats?.total ?? 0),
+      netVarianceValue: Number(overStats?.total ?? 0) - Number(underStats?.total ?? 0),
       pending: total - counted,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
-      openQueries: openQueriesRow?.count || 0,
-      pendingBreakdowns: pendingBreakdownsRow?.count || 0,
-      openSerialDiscrepancies: openSerialsRow?.count || 0,
+      openQueries: Number(openQueriesRow?.count ?? 0),
+      pendingBreakdowns: Number(pendingBreakdownsRow?.count ?? 0),
+      openSerialDiscrepancies: Number(openSerialsRow?.count ?? 0),
     },
     teamProgress,
     recentActivity,

@@ -1717,6 +1717,16 @@ function VarianceTable({
   isSaving?: boolean;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set());
+
+  const toggleComment = (countId: number) => {
+    setExpandedComments((prev) => {
+      const next = new Set(prev);
+      if (next.has(countId)) next.delete(countId);
+      else next.add(countId);
+      return next;
+    });
+  };
 
   const displayRows = useMemo(
     () => groupSerializedVariances(items),
@@ -1806,6 +1816,8 @@ function VarianceTable({
                       onEditUnknownSerial,
                       onSerialVerify,
                       isSaving,
+                      expandedComments,
+                      onToggleComment: toggleComment,
                     });
                   }
 
@@ -1916,6 +1928,8 @@ function VarianceTable({
                         onEditUnknownSerial,
                         onSerialVerify,
                         isSaving,
+                        expandedComments,
+                        onToggleComment: toggleComment,
                       }))}
                     </React.Fragment>
                   );
@@ -1948,10 +1962,13 @@ interface RowProps {
   onEditUnknownSerial?: (item: VarianceItem) => void;
   onSerialVerify?: (item: VarianceItem) => void;
   isSaving?: boolean;
+  expandedComments?: Set<number>;
+  onToggleComment?: (countId: number) => void;
 }
 
 function renderSingleRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, isResolvedTab, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, isResolvedTab, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving, expandedComments, onToggleComment } = props;
+  const commentExpanded = expandedComments?.has(v.countId) ?? false;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -1984,11 +2001,33 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
         </TableCell>
       )}
       <TableCell className="font-mono text-sm">
-        <div>{v.itemCode}</div>
+        <div className="flex items-center gap-1">
+          <span>{v.itemCode}</span>
+          {v.comment && (
+            <button
+              type="button"
+              onClick={() => onToggleComment?.(v.countId)}
+              className={`inline-flex items-center justify-center h-5 w-5 rounded-full transition-colors ${
+                commentExpanded
+                  ? "bg-blue-100 text-blue-700"
+                  : "text-blue-400 hover:text-blue-600 hover:bg-blue-50"
+              }`}
+              title="View team note"
+            >
+              <MessageSquare className="h-3 w-3" />
+            </button>
+          )}
+        </div>
         {v.serialNumber && (
           <Badge className={`${v.isUnknownSerial ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-purple-100 text-purple-800 border-purple-300"} text-[10px] mt-0.5 font-mono`}>
             S/N: {v.serialNumber}
           </Badge>
+        )}
+        {commentExpanded && v.comment && (
+          <div className="mt-1.5 px-2 py-1.5 rounded-md bg-blue-50 border border-blue-200 text-xs text-blue-900 font-sans leading-relaxed max-w-[250px]">
+            <div className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider mb-0.5">Team Note</div>
+            {v.comment}
+          </div>
         )}
       </TableCell>
       <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate">
@@ -2195,7 +2234,8 @@ function renderSingleRow(v: VarianceItem, props: RowProps) {
 }
 
 function renderSubRow(v: VarianceItem, props: RowProps) {
-  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, isResolvedTab, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving } = props;
+  const { showEditButton, showCheckbox, showAcceptButton, showReopenButton, isResolvedTab, onEdit, selectedCountIds, onToggleSelect, canSelect, onAccept, onAcceptVariance, onReopenVariance, onApproveUnknownSerial, onDismissUnknownSerial, onEditUnknownSerial, onSerialVerify, isSaving, expandedComments, onToggleComment } = props;
+  const commentExpanded = expandedComments?.has(v.countId) ?? false;
   const isSelectable = canSelect ? canSelect(v) : false;
   const isSelected = selectedCountIds?.has(v.countId) ?? false;
   const hasVerification = !!v.verificationId;
@@ -2223,12 +2263,34 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
         </TableCell>
       )}
       <TableCell className="font-mono text-sm pl-10">
-        {v.serialNumber ? (
-          <Badge className={`${isUnknown ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-purple-100 text-purple-800 border-purple-300"} text-[10px] font-mono`}>
-            S/N: {v.serialNumber}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground text-xs">No S/N</span>
+        <div className="flex items-center gap-1">
+          {v.serialNumber ? (
+            <Badge className={`${isUnknown ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-purple-100 text-purple-800 border-purple-300"} text-[10px] font-mono`}>
+              S/N: {v.serialNumber}
+            </Badge>
+          ) : (
+            <span className="text-muted-foreground text-xs">No S/N</span>
+          )}
+          {v.comment && (
+            <button
+              type="button"
+              onClick={() => onToggleComment?.(v.countId)}
+              className={`inline-flex items-center justify-center h-5 w-5 rounded-full transition-colors ${
+                commentExpanded
+                  ? "bg-blue-100 text-blue-700"
+                  : "text-blue-400 hover:text-blue-600 hover:bg-blue-50"
+              }`}
+              title="View team note"
+            >
+              <MessageSquare className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        {commentExpanded && v.comment && (
+          <div className="mt-1.5 px-2 py-1.5 rounded-md bg-blue-50 border border-blue-200 text-xs text-blue-900 font-sans leading-relaxed max-w-[250px]">
+            <div className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider mb-0.5">Team Note</div>
+            {v.comment}
+          </div>
         )}
       </TableCell>
       <TableCell className="hidden md:table-cell text-sm max-w-[200px] truncate text-muted-foreground">

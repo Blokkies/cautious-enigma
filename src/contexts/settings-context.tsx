@@ -15,7 +15,7 @@ const defaultSettings: AppSettings = {
   hapticFeedback: false,
   compactMode: false,
   binViewMode: "grid",
-  autoNextBin: true,
+  autoNextBin: false,
 };
 
 interface SettingsContextType {

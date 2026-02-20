@@ -276,6 +276,8 @@ CREATE TABLE IF NOT EXISTS uploads (
 
 ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS upload_id INTEGER REFERENCES uploads(id);
 CREATE INDEX IF NOT EXISTS idx_events_upload ON stocktake_events(upload_id);
+
+ALTER TABLE counts ADD COLUMN IF NOT EXISTS comment_status TEXT;
 `;
 
 const compositeIndexes = `

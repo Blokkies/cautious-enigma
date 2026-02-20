@@ -148,6 +148,7 @@ export const counts = pgTable("counts", {
     .notNull()
     .default("initial"),
   verificationId: integer("verification_id"),
+  commentStatus: text("comment_status"),
 });
 
 // ─── Queries (team-to-supervisor communication) ─────────────────────────────

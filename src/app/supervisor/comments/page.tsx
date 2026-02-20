@@ -5,6 +5,8 @@ import { useAuth } from "@/contexts/auth-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -13,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, MessageSquare, CheckCircle2, AlertTriangle, Clock } from "lucide-react";
+import { Search, MessageSquare, CheckCircle2, AlertTriangle, Clock, Check } from "lucide-react";
 
 interface CommentItem {
   countId: number;
@@ -29,6 +31,7 @@ interface CommentItem {
   isMatch: boolean;
   checkStatus: string;
   comment: string;
+  commentStatus: string | null;
   countedAt: string;
   teamId: number;
   teamName: string;
@@ -37,15 +40,21 @@ interface CommentItem {
   stockStatus: string | null;
 }
 
+type StatusFilter = "all" | "open" | "has-variance" | "reviewed";
+
 export default function SupervisorCommentsPage() {
   const { user } = useAuth();
   const isExecutive = user?.type === "executive";
+  const isAuditor = user?.type === "auditor";
+  const canReview = !isAuditor && !isExecutive;
 
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [searchMode, setSearchMode] = useState<"contains" | "starts" | "bin" | "team">("contains");
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "accepted" | "resolved">("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [reviewing, setReviewing] = useState<Set<number>>(new Set());
 
   // Executive event picker
   const [execEvents, setExecEvents] = useState<{ id: number; name: string; status: string }[]>([]);
@@ -94,16 +103,21 @@ export default function SupervisorCommentsPage() {
     loadComments();
   }, [loadComments]);
 
+  // Clear selections when filter or search changes
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [statusFilter, search, searchMode]);
+
   const filtered = useMemo(() => {
     let result = comments;
 
     // Status filter
-    if (statusFilter === "active") {
-      result = result.filter((c) => !c.isMatch && c.checkStatus !== "accepted");
-    } else if (statusFilter === "accepted") {
-      result = result.filter((c) => !c.isMatch && c.checkStatus === "accepted");
-    } else if (statusFilter === "resolved") {
-      result = result.filter((c) => c.isMatch);
+    if (statusFilter === "open") {
+      result = result.filter((c) => c.commentStatus !== "reviewed" && c.isMatch);
+    } else if (statusFilter === "has-variance") {
+      result = result.filter((c) => c.commentStatus !== "reviewed" && !c.isMatch);
+    } else if (statusFilter === "reviewed") {
+      result = result.filter((c) => c.commentStatus === "reviewed");
     }
 
     // Text search
@@ -135,9 +149,138 @@ export default function SupervisorCommentsPage() {
   }, [comments, search, searchMode, statusFilter]);
 
   // Stats
-  const activeCount = comments.filter((c) => !c.isMatch && c.checkStatus !== "accepted").length;
-  const acceptedCount = comments.filter((c) => !c.isMatch && c.checkStatus === "accepted").length;
-  const resolvedCount = comments.filter((c) => c.isMatch).length;
+  const openCount = comments.filter((c) => c.commentStatus !== "reviewed" && c.isMatch).length;
+  const hasVarianceCount = comments.filter((c) => c.commentStatus !== "reviewed" && !c.isMatch).length;
+  const reviewedCount = comments.filter((c) => c.commentStatus === "reviewed").length;
+
+  // Unreviewable items in current filtered view (for bulk select)
+  const unreviewedInView = useMemo(
+    () => filtered.filter((c) => c.commentStatus !== "reviewed"),
+    [filtered]
+  );
+
+  const handleReviewComment = async (countId: number) => {
+    setReviewing((prev) => new Set(prev).add(countId));
+    // Optimistic update
+    setComments((prev) =>
+      prev.map((c) => (c.countId === countId ? { ...c, commentStatus: "reviewed" } : c))
+    );
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(countId);
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/supervisor/comments", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "review_comment", countId }),
+      });
+      if (!res.ok) {
+        // Revert on failure
+        setComments((prev) =>
+          prev.map((c) => (c.countId === countId ? { ...c, commentStatus: null } : c))
+        );
+      }
+    } catch {
+      // Revert on failure
+      setComments((prev) =>
+        prev.map((c) => (c.countId === countId ? { ...c, commentStatus: null } : c))
+      );
+    } finally {
+      setReviewing((prev) => {
+        const next = new Set(prev);
+        next.delete(countId);
+        return next;
+      });
+    }
+  };
+
+  const handleBulkReview = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    setReviewing(new Set(ids));
+    // Optimistic update
+    setComments((prev) =>
+      prev.map((c) => (ids.includes(c.countId) ? { ...c, commentStatus: "reviewed" } : c))
+    );
+    setSelectedIds(new Set());
+
+    try {
+      const res = await fetch("/api/supervisor/comments", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bulk_review_comments", countIds: ids }),
+      });
+      if (!res.ok) {
+        // Revert on failure
+        setComments((prev) =>
+          prev.map((c) => (ids.includes(c.countId) ? { ...c, commentStatus: null } : c))
+        );
+      }
+    } catch {
+      // Revert on failure
+      setComments((prev) =>
+        prev.map((c) => (ids.includes(c.countId) ? { ...c, commentStatus: null } : c))
+      );
+    } finally {
+      setReviewing(new Set());
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === unreviewedInView.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(unreviewedInView.map((c) => c.countId)));
+    }
+  };
+
+  const toggleSelect = (countId: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(countId)) {
+        next.delete(countId);
+      } else {
+        next.add(countId);
+      }
+      return next;
+    });
+  };
+
+  const getStatusBadge = (c: CommentItem) => {
+    if (c.commentStatus === "reviewed") {
+      return (
+        <Badge className="bg-green-100 text-green-800 border-green-300 text-[10px] gap-0.5">
+          <CheckCircle2 className="h-2.5 w-2.5" />
+          Reviewed
+        </Badge>
+      );
+    }
+    if (c.isMatch) {
+      return (
+        <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px] gap-0.5">
+          <AlertTriangle className="h-2.5 w-2.5" />
+          Open
+        </Badge>
+      );
+    }
+    // Has variance — show variance status
+    const varianceLabel =
+      c.checkStatus === "accepted"
+        ? "Accepted"
+        : c.checkStatus === "recounted"
+          ? "Recounted"
+          : "Active";
+    return (
+      <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px] gap-0.5">
+        <AlertTriangle className="h-2.5 w-2.5" />
+        Variance — {varianceLabel}
+      </Badge>
+    );
+  };
 
   const formatTime = (dateStr: string) => {
     try {
@@ -182,14 +325,14 @@ export default function SupervisorCommentsPage() {
           </Badge>
         </div>
         <div className="flex items-center gap-1.5">
-          <Badge className={`text-xs ${activeCount > 0 ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-muted text-muted-foreground"}`}>
-            {activeCount} active
+          <Badge className={`text-xs ${openCount > 0 ? "bg-amber-100 text-amber-800 border-amber-300" : "bg-muted text-muted-foreground"}`}>
+            {openCount} open
           </Badge>
-          <Badge className={`text-xs ${acceptedCount > 0 ? "bg-green-100 text-green-800 border-green-300" : "bg-muted text-muted-foreground"}`}>
-            {acceptedCount} accepted
+          <Badge className={`text-xs ${hasVarianceCount > 0 ? "bg-red-100 text-red-800 border-red-300" : "bg-muted text-muted-foreground"}`}>
+            {hasVarianceCount} variance
           </Badge>
-          <Badge className={`text-xs ${resolvedCount > 0 ? "bg-blue-100 text-blue-800 border-blue-300" : "bg-muted text-muted-foreground"}`}>
-            {resolvedCount} resolved
+          <Badge className={`text-xs ${reviewedCount > 0 ? "bg-green-100 text-green-800 border-green-300" : "bg-muted text-muted-foreground"}`}>
+            {reviewedCount} reviewed
           </Badge>
         </div>
       </div>
@@ -234,9 +377,9 @@ export default function SupervisorCommentsPage() {
           <span className="text-xs text-muted-foreground mr-1">Status:</span>
           {([
             { key: "all" as const, label: "All" },
-            { key: "active" as const, label: "Active" },
-            { key: "accepted" as const, label: "Accepted" },
-            { key: "resolved" as const, label: "Resolved" },
+            { key: "open" as const, label: "Open" },
+            { key: "has-variance" as const, label: "Has Variance" },
+            { key: "reviewed" as const, label: "Reviewed" },
           ]).map((m) => (
             <button
               key={m.key}
@@ -253,6 +396,29 @@ export default function SupervisorCommentsPage() {
         </div>
       </div>
 
+      {/* Bulk action toolbar */}
+      {canReview && selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 p-2.5 bg-primary/5 border border-primary/20 rounded-lg">
+          <span className="text-sm font-medium">
+            {selectedIds.size} selected
+          </span>
+          <Button
+            size="sm"
+            onClick={handleBulkReview}
+            disabled={reviewing.size > 0}
+          >
+            <Check className="h-3.5 w-3.5 mr-1" />
+            Review Selected
+          </Button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs text-muted-foreground hover:text-foreground ml-auto"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Comments table */}
       <Card>
         <CardContent className="p-0">
@@ -260,6 +426,16 @@ export default function SupervisorCommentsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {canReview && (
+                    <TableHead className="w-10">
+                      {unreviewedInView.length > 0 && (
+                        <Checkbox
+                          checked={selectedIds.size === unreviewedInView.length && unreviewedInView.length > 0}
+                          onCheckedChange={toggleSelectAll}
+                        />
+                      )}
+                    </TableHead>
+                  )}
                   <TableHead>Item Code</TableHead>
                   <TableHead className="hidden md:table-cell">Description</TableHead>
                   <TableHead>Bin</TableHead>
@@ -270,37 +446,34 @@ export default function SupervisorCommentsPage() {
                   <TableHead>Status</TableHead>
                   <TableHead className="min-w-[200px]">Comment</TableHead>
                   <TableHead className="hidden md:table-cell">Time</TableHead>
+                  {canReview && <TableHead className="w-10"></TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={canReview ? 12 : 10} className="text-center py-8 text-muted-foreground">
                       {search ? "No comments match your search" : "No team comments recorded"}
                     </TableCell>
                   </TableRow>
                 ) : (
                   filtered.map((c) => {
                     const isSerialized = c.isSerialized === true || c.isSerialized === 1;
-                    const statusBadge = c.isMatch ? (
-                      <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-[10px] gap-0.5">
-                        <CheckCircle2 className="h-2.5 w-2.5" />
-                        Resolved
-                      </Badge>
-                    ) : c.checkStatus === "accepted" ? (
-                      <Badge className="bg-green-100 text-green-800 border-green-300 text-[10px] gap-0.5">
-                        <CheckCircle2 className="h-2.5 w-2.5" />
-                        Accepted
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px] gap-0.5">
-                        <AlertTriangle className="h-2.5 w-2.5" />
-                        Active
-                      </Badge>
-                    );
+                    const isReviewed = c.commentStatus === "reviewed";
+                    const isReviewingThis = reviewing.has(c.countId);
 
                     return (
-                      <TableRow key={c.countId}>
+                      <TableRow key={c.countId} className={isReviewed ? "opacity-60" : ""}>
+                        {canReview && (
+                          <TableCell>
+                            {!isReviewed && (
+                              <Checkbox
+                                checked={selectedIds.has(c.countId)}
+                                onCheckedChange={() => toggleSelect(c.countId)}
+                              />
+                            )}
+                          </TableCell>
+                        )}
                         <TableCell className="font-mono text-sm">
                           <div>{c.itemCode}</div>
                           {isSerialized && c.serialNumber && (
@@ -334,7 +507,7 @@ export default function SupervisorCommentsPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-sm">{c.teamName}</TableCell>
-                        <TableCell>{statusBadge}</TableCell>
+                        <TableCell>{getStatusBadge(c)}</TableCell>
                         <TableCell className="min-w-[200px] max-w-[320px]">
                           <div className="flex items-start gap-1.5">
                             <MessageSquare className="h-3.5 w-3.5 text-blue-400 mt-0.5 shrink-0" />
@@ -347,6 +520,20 @@ export default function SupervisorCommentsPage() {
                             {formatTime(c.countedAt)}
                           </div>
                         </TableCell>
+                        {canReview && (
+                          <TableCell>
+                            {!isReviewed && (
+                              <button
+                                onClick={() => handleReviewComment(c.countId)}
+                                disabled={isReviewingThis}
+                                className="p-1 rounded hover:bg-green-100 text-muted-foreground hover:text-green-700 transition-colors disabled:opacity-50"
+                                title="Mark as reviewed"
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                            )}
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })

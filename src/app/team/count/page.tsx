@@ -979,16 +979,29 @@ export default function CountingPage() {
       );
 
       if (remainingInBin.length === 0) {
-        // Last item in this bin — go straight back to bin list
+        // Last item in this bin
         toast.success("All verifications in this bin complete!");
-        setSelectedVerificationBin(null);
         setVerificationIndex(0);
         setShowFlash(false);
-        setPageState("bin-selection");
+
         // Check if there are still items in other bins
         const totalRemaining = verificationItems.filter(
           (v) => v.verificationId !== currentVerificationItem.verificationId
         );
+
+        if (settings.autoNextBin && totalRemaining.length > 0) {
+          // Find next verification bin in natural sort order
+          const remainingBins = Array.from(new Set(totalRemaining.map((v) => v.binNumber || "No Bin"))).sort(naturalCompare);
+          const currentVBin = selectedVerificationBin || "";
+          const nextVBin = remainingBins.find((b) => naturalCompare(b, currentVBin) > 0) ?? remainingBins[0];
+          if (nextVBin) {
+            startVerificationCounting(nextVBin);
+            return;
+          }
+        }
+
+        setSelectedVerificationBin(null);
+        setPageState("bin-selection");
         if (totalRemaining.length > 0) {
           setBinTab("verification");
         }
@@ -1002,7 +1015,7 @@ export default function CountingPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting, scopedVerificationItems, verificationItems]);
+  }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting, scopedVerificationItems, verificationItems, settings.autoNextBin, selectedVerificationBin, startVerificationCounting]);
 
   // Submit serialized verification group (uses SerializedGroupCard)
   const submitSerializedVerificationGroup = useCallback(
@@ -1125,15 +1138,30 @@ export default function CountingPage() {
 
         if (remainingInBin.length === 0) {
           toast.success("All verifications in this bin complete!");
-          setSelectedVerificationBin(null);
           setVerificationIndex(0);
           setShowFlash(false);
-          setPageState("bin-selection");
+
           const totalRemaining = verificationItems.filter(
             (v) => !completedItemIds.has(v.verificationId)
           );
-          if (totalRemaining.length > 0) {
-            setBinTab("verification");
+
+          if (settings.autoNextBin && totalRemaining.length > 0) {
+            const remainingBins = Array.from(new Set(totalRemaining.map((v) => v.binNumber || "No Bin"))).sort(naturalCompare);
+            const currentVBin = selectedVerificationBin || "";
+            const nextVBin = remainingBins.find((b) => naturalCompare(b, currentVBin) > 0) ?? remainingBins[0];
+            if (nextVBin) {
+              startVerificationCounting(nextVBin);
+            } else {
+              setSelectedVerificationBin(null);
+              setPageState("bin-selection");
+              setBinTab("verification");
+            }
+          } else {
+            setSelectedVerificationBin(null);
+            setPageState("bin-selection");
+            if (totalRemaining.length > 0) {
+              setBinTab("verification");
+            }
           }
         } else {
           setShowFlash(true);
@@ -1144,7 +1172,7 @@ export default function CountingPage() {
         setIsSubmitting(false);
       }
     },
-    [isSubmitting, verificationQueue, verificationIndex, selectedVerificationBin, scopedVerificationItems, verificationItems]
+    [isSubmitting, verificationQueue, verificationIndex, selectedVerificationBin, scopedVerificationItems, verificationItems, settings.autoNextBin, startVerificationCounting]
   );
 
   // Auto-advance verification after flash
@@ -1186,15 +1214,40 @@ export default function CountingPage() {
     return () => clearTimeout(timer);
   }, [verificationQueue, verificationIndex, pageState]);
 
+  const getNextBin = useCallback((currentBin: string | null) => {
+    const uncountedBins = binStats
+      .filter(([, s]) => s.pending > 0)
+      .map(([bin]) => bin)
+      .sort(naturalCompare);
+    if (!currentBin || uncountedBins.length === 0) return null;
+    const currentIdx = uncountedBins.indexOf(currentBin);
+    // If current bin is in the list, take the next one; otherwise take the first
+    if (currentIdx >= 0 && currentIdx < uncountedBins.length - 1) {
+      return uncountedBins[currentIdx + 1];
+    }
+    // Current bin may no longer be in uncounted list (just completed) — find first bin after it in sort order
+    const nextAfter = uncountedBins.find((b) => naturalCompare(b, currentBin) > 0);
+    return nextAfter ?? null;
+  }, [binStats]);
+
   const handleBinCompleteFinish = useCallback(() => {
     setShowFlash(false);
     setShowBinComplete(false);
+    feedbackBinComplete(settings.hapticFeedback);
+    try { sessionStorage.removeItem(sessionKey); } catch { /* ignore */ }
+
+    if (settings.autoNextBin) {
+      const nextBin = getNextBin(selectedBin);
+      if (nextBin) {
+        selectBin(nextBin);
+        return;
+      }
+    }
+
     setSelectedBin(null);
     setPageState("bin-selection");
     setCurrentIndex(0);
-    feedbackBinComplete(settings.hapticFeedback);
-    try { sessionStorage.removeItem(sessionKey); } catch { /* ignore */ }
-  }, [settings.hapticFeedback]);
+  }, [settings.hapticFeedback, settings.autoNextBin, getNextBin, selectedBin, selectBin]);
 
   // ---------- Recount via full ActiveItemCard ----------
   const startRecount = useCallback((item: CountItem) => {

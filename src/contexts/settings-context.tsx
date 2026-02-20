@@ -7,6 +7,7 @@ export interface AppSettings {
   hapticFeedback: boolean;
   compactMode: boolean;
   binViewMode: "grid" | "list";
+  autoNextBin: boolean;
 }
 
 const defaultSettings: AppSettings = {
@@ -14,6 +15,7 @@ const defaultSettings: AppSettings = {
   hapticFeedback: false,
   compactMode: false,
   binViewMode: "grid",
+  autoNextBin: true,
 };
 
 interface SettingsContextType {
@@ -22,6 +24,7 @@ interface SettingsContextType {
   toggleEasyRead: () => void;
   toggleHaptic: () => void;
   toggleCompact: () => void;
+  toggleAutoNextBin: () => void;
 }
 
 const SettingsContext = createContext<SettingsContextType | null>(null);
@@ -72,8 +75,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setSettings((prev) => ({ ...prev, compactMode: !prev.compactMode }));
   }, []);
 
+  const toggleAutoNextBin = useCallback(() => {
+    setSettings((prev) => ({ ...prev, autoNextBin: !prev.autoNextBin }));
+  }, []);
+
   return (
-    <SettingsContext.Provider value={{ settings, updateSettings, toggleEasyRead, toggleHaptic, toggleCompact }}>
+    <SettingsContext.Provider value={{ settings, updateSettings, toggleEasyRead, toggleHaptic, toggleCompact, toggleAutoNextBin }}>
       {children}
     </SettingsContext.Provider>
   );

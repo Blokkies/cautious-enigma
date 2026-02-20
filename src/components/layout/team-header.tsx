@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useSettings } from "@/contexts/settings-context";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { Button } from "@/components/ui/button";
-import { LogOut, Eye, EyeOff, Smartphone, Minimize2, Maximize2 } from "lucide-react";
+import { LogOut, Eye, EyeOff, SkipForward, Minimize2, Maximize2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface TeamHeaderProps {
@@ -13,7 +13,7 @@ interface TeamHeaderProps {
 
 export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
   const { user, logout } = useAuth();
-  const { settings, toggleEasyRead, toggleHaptic, toggleCompact } = useSettings();
+  const { settings, toggleEasyRead, toggleCompact, toggleAutoNextBin } = useSettings();
   const isOnline = useOnlineStatus();
   const router = useRouter();
   const cm = settings.compactMode;
@@ -78,11 +78,11 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
           <Button
             variant="ghost"
             size="sm"
-            onClick={toggleHaptic}
-            className={`${cm ? "h-7 w-7 p-0" : "touch-target"} ${settings.hapticFeedback ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
-            title="Haptic Feedback"
+            onClick={toggleAutoNextBin}
+            className={`${cm ? "h-7 w-7 p-0" : "touch-target"} ${settings.autoNextBin ? "text-blue-600 bg-blue-50 ring-2 ring-blue-200" : ""}`}
+            title="Auto Next Bin"
           >
-            <Smartphone className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />
+            <SkipForward className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />
           </Button>
           <Button variant="ghost" size="sm" onClick={handleLogout} className={cm ? "h-7 w-7 p-0" : "touch-target"}>
             <LogOut className={cm ? "h-3.5 w-3.5" : "h-4 w-4"} />

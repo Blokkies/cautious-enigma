@@ -345,7 +345,7 @@ export default function SupervisorAssignPage() {
     try {
       const sorted = [...binsToBalance].sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
 
-      // Build team trackers with existing totals so we balance the OVERALL distribution
+      // Build team trackers sorted by existing load (least loaded first)
       const teamTotals = targetTeams.map((t) => ({
         teamId: t.id,
         name: t.name,
@@ -354,22 +354,41 @@ export default function SupervisorAssignPage() {
         bins: [] as string[],
       }));
 
+      // Sort teams by current load so the least-loaded teams get bins first
       if (balanceMode === "equal-bins") {
-        // Greedy: assign each bin to the team with the fewest total bins
-        for (const bin of sorted) {
-          const target = teamTotals.reduce((min, t) =>
-            (t.currentBins + t.bins.length) < (min.currentBins + min.bins.length) ? t : min
-          );
-          target.bins.push(bin.bin_number);
+        teamTotals.sort((a, b) => a.currentBins - b.currentBins);
+      } else {
+        teamTotals.sort((a, b) => a.currentItems - b.currentItems);
+      }
+
+      if (balanceMode === "equal-bins") {
+        // Split sorted bins into contiguous chunks, one per team
+        const totalBins = sorted.length;
+        const n = teamTotals.length;
+        let idx = 0;
+        for (let t = 0; t < n; t++) {
+          const remaining = n - t;
+          const chunkSize = Math.ceil((totalBins - idx) / remaining);
+          for (let j = 0; j < chunkSize && idx < totalBins; j++, idx++) {
+            teamTotals[t].bins.push(sorted[idx].bin_number);
+          }
         }
       } else {
-        // Greedy: assign each bin to the team with the fewest total items
-        for (const bin of sorted) {
-          const target = teamTotals.reduce((min, t) =>
-            (t.currentItems) < (min.currentItems) ? t : min
-          );
-          target.bins.push(bin.bin_number);
-          target.currentItems += bin.item_count;
+        // Split sorted bins into contiguous chunks targeting equal item counts
+        const totalNewItems = sorted.reduce((s, b) => s + b.item_count, 0);
+        const totalExistingItems = teamTotals.reduce((s, t) => s + t.currentItems, 0);
+        const targetPerTeam = (totalNewItems + totalExistingItems) / teamTotals.length;
+        let idx = 0;
+        for (let t = 0; t < teamTotals.length; t++) {
+          const isLast = t === teamTotals.length - 1;
+          let runningItems = teamTotals[t].currentItems;
+          while (idx < sorted.length) {
+            if (!isLast && runningItems >= targetPerTeam && teamTotals[t].bins.length > 0) break;
+            teamTotals[t].bins.push(sorted[idx].bin_number);
+            runningItems += sorted[idx].item_count;
+            teamTotals[t].currentItems += sorted[idx].item_count;
+            idx++;
+          }
         }
       }
 

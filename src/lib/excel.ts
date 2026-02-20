@@ -135,6 +135,7 @@ const COLUMN_MAP: Record<string, keyof ImportedItem> = {
   "lot #": "serialNumber",
   "lot": "serialNumber",
   "serial/lot": "serialNumber",
+  "number": "serialNumber",
 };
 
 function normalizeColumnName(col: string): string {

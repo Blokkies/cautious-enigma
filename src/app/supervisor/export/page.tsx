@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  Archive,
   Download,
   FileSpreadsheet,
   FileText,
+  Loader2,
   TrendingUp,
   TrendingDown,
   AlertTriangle,
@@ -17,6 +19,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import { toast } from "sonner";
+import { downloadAllAsZip } from "@/lib/download-all-zip";
 
 interface ExportStats {
   total: number;
@@ -29,6 +32,8 @@ interface ExportStats {
 export default function ExportPage() {
   const [stats, setStats] = useState<ExportStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [zipping, setZipping] = useState(false);
+  const [zipProgress, setZipProgress] = useState("");
 
   const loadStats = useCallback(async () => {
     try {
@@ -87,6 +92,22 @@ export default function ExportPage() {
     }
   };
 
+  const handleDownloadAll = async () => {
+    setZipping(true);
+    setZipProgress("Fetching exports...");
+    try {
+      await downloadAllAsZip(undefined, "stocktake_all_exports.zip", (done, total) => {
+        setZipProgress(`Fetching exports... ${done}/${total}`);
+      });
+      toast.success("ZIP download started");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "ZIP download failed");
+    } finally {
+      setZipping(false);
+      setZipProgress("");
+    }
+  };
+
   if (loading) {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   }
@@ -125,6 +146,26 @@ export default function ExportPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Download All as ZIP */}
+      <Button
+        size="lg"
+        className="w-full gap-2"
+        onClick={handleDownloadAll}
+        disabled={zipping}
+      >
+        {zipping ? (
+          <>
+            <Loader2 className="h-5 w-5 animate-spin" />
+            {zipProgress}
+          </>
+        ) : (
+          <>
+            <Archive className="h-5 w-5" />
+            Download All Data (ZIP)
+          </>
+        )}
+      </Button>
 
       {/* Master Export */}
       <Card>

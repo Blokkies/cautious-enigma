@@ -5,16 +5,21 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
+  Archive,
   CheckCircle2,
   AlertTriangle,
   Clock,
+  Loader2,
   Users,
   MessageSquare,
   Package,
   ScanBarcode,
   UserCheck,
 } from "lucide-react";
+import { toast } from "sonner";
+import { downloadAllAsZip } from "@/lib/download-all-zip";
 
 interface EventSummary {
   id: number;
@@ -43,7 +48,22 @@ interface EventSummary {
 export default function AdminDashboard() {
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloadingEventId, setDownloadingEventId] = useState<number | null>(null);
   const router = useRouter();
+
+  const handleDownloadAll = async (e: React.MouseEvent, event: EventSummary) => {
+    e.stopPropagation();
+    setDownloadingEventId(event.id);
+    try {
+      const safeName = event.name.replace(/[^a-zA-Z0-9_\- ]/g, "").trim().replace(/\s+/g, "_");
+      await downloadAllAsZip(event.id, `${safeName}_all_exports.zip`);
+      toast.success("ZIP download started");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "ZIP download failed");
+    } finally {
+      setDownloadingEventId(null);
+    }
+  };
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -108,18 +128,34 @@ export default function AdminDashboard() {
                     </div>
                   )}
                 </div>
-                <Badge
-                  variant={
-                    event.status === "active" ? "default" : "secondary"
-                  }
-                  className={
-                    event.status === "active"
-                      ? "bg-blue-100 text-blue-800 hover:bg-blue-100"
-                      : "bg-green-100 text-green-800 hover:bg-green-100"
-                  }
-                >
-                  {event.status === "active" ? "Active" : "Completed"}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={downloadingEventId === event.id}
+                    onClick={(e) => handleDownloadAll(e, event)}
+                    title="Download all exports as ZIP"
+                  >
+                    {downloadingEventId === event.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Archive className="h-4 w-4" />
+                    )}
+                  </Button>
+                  <Badge
+                    variant={
+                      event.status === "active" ? "default" : "secondary"
+                    }
+                    className={
+                      event.status === "active"
+                        ? "bg-blue-100 text-blue-800 hover:bg-blue-100"
+                        : "bg-green-100 text-green-800 hover:bg-green-100"
+                    }
+                  >
+                    {event.status === "active" ? "Active" : "Completed"}
+                  </Badge>
+                </div>
               </div>
 
               {/* Progress */}

@@ -19,34 +19,38 @@ export async function GET(request: NextRequest) {
         )
       );
 
-    const enriched = await Promise.all(
-      eventList.map(async (event) => {
-        const [teamCount] = await db
-          .select({ count: sql<number>`count(*)` })
+    // Batch count queries to avoid exhausting the connection pool
+    const eventIds = eventList.map((e) => e.id);
+
+    const teamCounts = eventIds.length
+      ? await db
+          .select({ eventId: teams.eventId, count: sql<number>`count(*)` })
           .from(teams)
-          .where(eq(teams.eventId, event.id));
+          .groupBy(teams.eventId)
+      : [];
 
-        const [supervisorCount] = await db
-          .select({ count: sql<number>`count(*)` })
+    const supCounts = eventIds.length
+      ? await db
+          .select({ eventId: supervisors.eventId, role: supervisors.role, count: sql<number>`count(*)` })
           .from(supervisors)
-          .where(and(eq(supervisors.eventId, event.id), eq(supervisors.role, "supervisor")));
+          .groupBy(supervisors.eventId, supervisors.role)
+      : [];
 
-        const [auditorCount] = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(supervisors)
-          .where(and(eq(supervisors.eventId, event.id), eq(supervisors.role, "auditor")));
+    const teamMap = new Map(teamCounts.map((r) => [r.eventId, Number(r.count)]));
+    const supMap = new Map<string, number>();
+    for (const r of supCounts) {
+      supMap.set(`${r.eventId}:${r.role}`, Number(r.count));
+    }
 
-        return {
-          id: event.id,
-          name: event.name,
-          location: event.location,
-          status: event.status,
-          teamCount: teamCount?.count || 0,
-          supervisorCount: supervisorCount?.count || 0,
-          auditorCount: auditorCount?.count || 0,
-        };
-      })
-    );
+    const enriched = eventList.map((event) => ({
+      id: event.id,
+      name: event.name,
+      location: event.location,
+      status: event.status,
+      teamCount: teamMap.get(event.id) || 0,
+      supervisorCount: supMap.get(`${event.id}:supervisor`) || 0,
+      auditorCount: supMap.get(`${event.id}:auditor`) || 0,
+    }));
 
     return NextResponse.json({ events: enriched });
   }

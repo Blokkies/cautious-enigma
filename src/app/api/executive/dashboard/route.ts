@@ -63,6 +63,38 @@ export async function GET(request: NextRequest) {
       db.select({ count: sql<number>`count(*)` }).from(serialDiscrepancies).where(and(eq(serialDiscrepancies.eventId, event.id), eq(serialDiscrepancies.status, "open"))),
     ]);
 
+    // Per-warehouse over/under breakdown
+    const warehouseConditions = [
+      eq(counts.eventId, event.id),
+      eq(counts.countType, "initial"),
+      eq(counts.isMatch, false),
+      eq(counts.itemId, items.id),
+    ];
+    if (warehouses && warehouses.length > 0) {
+      warehouseConditions.push(warehouseFilter(warehouses)!);
+    }
+    const warehouseStatsRows = await db
+      .select({
+        warehouse: items.warehouse,
+        overCount: sql<number>`count(*) FILTER (WHERE ${counts.variance} > 0)`,
+        overValue: sql<number>`COALESCE(sum(abs(${counts.varianceValue})) FILTER (WHERE ${counts.variance} > 0), 0)`,
+        underCount: sql<number>`count(*) FILTER (WHERE ${counts.variance} < 0)`,
+        underValue: sql<number>`COALESCE(sum(abs(${counts.varianceValue})) FILTER (WHERE ${counts.variance} < 0), 0)`,
+      })
+      .from(counts)
+      .innerJoin(items, eq(counts.itemId, items.id))
+      .where(and(...warehouseConditions))
+      .groupBy(items.warehouse)
+      .orderBy(sql`sum(abs(${counts.varianceValue})) DESC`);
+
+    const warehouseStats = warehouseStatsRows.map((r) => ({
+      warehouse: r.warehouse || "Unknown",
+      overCount: Number(r.overCount),
+      overValue: Number(r.overValue),
+      underCount: Number(r.underCount),
+      underValue: Number(r.underValue),
+    }));
+
     const totalItems = Number(totalItemsRow?.count ?? 0);
     const countedItems = Number(countedItemsRow?.count ?? 0);
     const overCount = Number(overStats?.count ?? 0);
@@ -92,6 +124,7 @@ export async function GET(request: NextRequest) {
       openQueries: Number(openQueriesRow?.count ?? 0),
       pendingBreakdowns: Number(pendingBreakdownsRow?.count ?? 0),
       openSerialDiscrepancies: Number(openSerialDiscrepanciesRow?.count ?? 0),
+      warehouseStats,
     });
   }
 

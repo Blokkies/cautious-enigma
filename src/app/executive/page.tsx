@@ -16,6 +16,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+interface WarehouseStat {
+  warehouse: string;
+  overCount: number;
+  overValue: number;
+  underCount: number;
+  underValue: number;
+}
+
 interface EventStats {
   id: number;
   name: string;
@@ -38,6 +46,7 @@ interface EventStats {
   openQueries: number;
   pendingBreakdowns: number;
   openSerialDiscrepancies: number;
+  warehouseStats: WarehouseStat[];
 }
 
 function formatCurrency(value: number): string {
@@ -144,6 +153,27 @@ export default function ExecutiveDashboard() {
     }
   );
 
+  // Consolidate warehouse stats across selected events
+  const consolidatedWarehouseStats: WarehouseStat[] = (() => {
+    const map = new Map<string, WarehouseStat>();
+    for (const e of selected) {
+      for (const ws of e.warehouseStats || []) {
+        const existing = map.get(ws.warehouse);
+        if (existing) {
+          existing.overCount += ws.overCount;
+          existing.overValue += ws.overValue;
+          existing.underCount += ws.underCount;
+          existing.underValue += ws.underValue;
+        } else {
+          map.set(ws.warehouse, { ...ws });
+        }
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => (b.overValue + b.underValue) - (a.overValue + a.underValue)
+    );
+  })();
+
   const consolidatedProgress =
     consolidated.totalItems > 0
       ? Math.round((consolidated.countedItems / consolidated.totalItems) * 100)
@@ -248,7 +278,7 @@ export default function ExecutiveDashboard() {
             </div>
 
             {/* Key metrics */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
               <MetricCard label="Matched" value={consolidated.matchedItems.toLocaleString()} color="text-emerald-600" bgColor="bg-emerald-500/10" />
               <MetricCard label="Variances" value={consolidated.varianceItems.toLocaleString()} sub={formatCurrency(consolidated.varianceValue)} color="text-amber-600" bgColor="bg-amber-500/10" />
               <MetricCard
@@ -265,7 +295,65 @@ export default function ExecutiveDashboard() {
                 color="text-orange-600"
                 bgColor="bg-orange-500/10"
               />
+              <MetricCard
+                label="Net Variance"
+                value={`${consolidated.overValue - consolidated.underValue >= 0 ? "+" : ""}${formatCurrency(consolidated.overValue - consolidated.underValue)}`}
+                color={consolidated.overValue - consolidated.underValue >= 0 ? "text-red-600" : "text-orange-600"}
+                bgColor="bg-slate-500/10"
+              />
             </div>
+
+            {/* Warehouse breakdown table */}
+            {consolidatedWarehouseStats.length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                  Warehouse Breakdown
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left">
+                        <th className="pb-2 pr-4 font-medium text-muted-foreground">Warehouse</th>
+                        <th className="pb-2 pr-4 font-medium text-muted-foreground text-right">Over #</th>
+                        <th className="pb-2 pr-4 font-medium text-muted-foreground text-right">Over Value</th>
+                        <th className="pb-2 pr-4 font-medium text-muted-foreground text-right">Under #</th>
+                        <th className="pb-2 pr-4 font-medium text-muted-foreground text-right">Under Value</th>
+                        <th className="pb-2 font-medium text-muted-foreground text-right">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {consolidatedWarehouseStats.map((ws) => {
+                        const net = ws.overValue - ws.underValue;
+                        return (
+                          <tr key={ws.warehouse} className="hover:bg-muted/50">
+                            <td className="py-2 pr-4 font-medium">{ws.warehouse}</td>
+                            <td className="py-2 pr-4 text-right tabular-nums text-red-600">{ws.overCount.toLocaleString()}</td>
+                            <td className="py-2 pr-4 text-right tabular-nums text-red-600">{formatCurrency(ws.overValue)}</td>
+                            <td className="py-2 pr-4 text-right tabular-nums text-orange-600">{ws.underCount.toLocaleString()}</td>
+                            <td className="py-2 pr-4 text-right tabular-nums text-orange-600">{formatCurrency(ws.underValue)}</td>
+                            <td className={cn("py-2 text-right tabular-nums font-medium", net >= 0 ? "text-red-600" : "text-orange-600")}>
+                              {net >= 0 ? "+" : ""}{formatCurrency(net)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {consolidatedWarehouseStats.length > 1 && (
+                        <tr className="font-semibold border-t-2">
+                          <td className="py-2 pr-4">Total</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-red-600">{consolidated.overCount.toLocaleString()}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-red-600">{formatCurrency(consolidated.overValue)}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-orange-600">{consolidated.underCount.toLocaleString()}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-orange-600">{formatCurrency(consolidated.underValue)}</td>
+                          <td className={cn("py-2 text-right tabular-nums", consolidated.overValue - consolidated.underValue >= 0 ? "text-red-600" : "text-orange-600")}>
+                            {consolidated.overValue - consolidated.underValue >= 0 ? "+" : ""}{formatCurrency(consolidated.overValue - consolidated.underValue)}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Operational stats */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">

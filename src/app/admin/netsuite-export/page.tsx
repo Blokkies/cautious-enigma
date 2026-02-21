@@ -23,12 +23,13 @@ const VARIANCE_TYPES = [
   "variances_serialized_down",
 ] as const;
 
-const VARIANCE_FILENAMES: Record<string, string> = {
-  variances_nonserialized_up: "nonserialized_variances_up.xlsx",
-  variances_nonserialized_down: "nonserialized_variances_down.xlsx",
-  variances_serialized_up: "serialized_variances_up.xlsx",
-  variances_serialized_down: "serialized_variances_down.xlsx",
-};
+function extractFilename(contentDisposition: string | null, fallback: string): string {
+  if (contentDisposition) {
+    const match = contentDisposition.match(/filename="?([^";\n]+)"?/);
+    if (match) return match[1];
+  }
+  return fallback;
+}
 
 const statusColors: Record<string, string> = {
   setup: "bg-yellow-100 text-yellow-800",
@@ -116,7 +117,11 @@ export default function NetSuiteExportPage() {
               const res = await fetch(`/api/supervisor/export?${params}`);
               if (!res.ok) return null;
               const blob = await res.blob();
-              return { filename: VARIANCE_FILENAMES[type], blob };
+              const filename = extractFilename(
+                res.headers.get("Content-Disposition"),
+                `${type}.xlsx`
+              );
+              return { filename, blob };
             } catch {
               return null;
             } finally {

@@ -14,7 +14,7 @@ import { exportToExcel } from "@/lib/excel";
 function latestCountJoin(eventId: number) {
   return eq(
     counts.id,
-    sql`(SELECT c.id FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} ORDER BY c.counted_at DESC, c.id DESC LIMIT 1)`
+    sql`(SELECT c.id FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} AND (c.count_type = 'initial' OR (c.count_type = 'verification' AND c.check_status = 'accepted')) ORDER BY c.counted_at DESC, c.id DESC LIMIT 1)`
   );
 }
 

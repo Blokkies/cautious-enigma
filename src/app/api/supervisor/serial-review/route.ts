@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
     ? await db
         .select({ itemId: counts.itemId, countedQty: counts.countedQty })
         .from(counts)
-        .where(and(eq(counts.eventId, user.eventId), inArray(counts.itemId, serializedItemIds)))
+        .where(and(eq(counts.eventId, user.eventId), eq(counts.countType, "initial"), inArray(counts.itemId, serializedItemIds)))
     : [];
   const countByItemId = new Map(allSerialCounts.map((c) => [c.itemId, c.countedQty]));
 

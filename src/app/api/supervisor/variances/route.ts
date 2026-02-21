@@ -488,6 +488,17 @@ export async function PATCH(request: NextRequest) {
               checkStatus: "accepted",
             })
             .where(eq(counts.id, va.countId));
+
+          // Also mark the verification count row as accepted so the export
+          // can distinguish accepted vs unaccepted verification counts
+          await tx.update(counts)
+            .set({ checkStatus: "accepted" })
+            .where(
+              and(
+                eq(counts.verificationId, verificationId),
+                eq(counts.countType, "verification")
+              )
+            );
         } else {
           await tx.update(counts)
             .set({ checkStatus: "accepted" })

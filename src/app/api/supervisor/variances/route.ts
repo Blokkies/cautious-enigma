@@ -198,47 +198,35 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Batch-fetch item metadata for all discrepancy itemCodes (avoids N+1)
+    const openItemCodes = Array.from(new Set(openDiscrepancies.map((d) => d.itemCode)));
+    const refMap = new Map<string, { avgCost: number | null; internalId: string | null; warehouse: string | null; division: string | null; stockStatus: string | null }>();
+    if (openItemCodes.length > 0) {
+      const refRows = await db
+        .select({
+          itemCode: items.itemCode,
+          avgCost: items.avgCost,
+          internalId: items.internalId,
+          warehouse: items.warehouse,
+          division: items.division,
+          stockStatus: items.stockStatus,
+        })
+        .from(items)
+        .where(and(eq(items.eventId, eventId), inArray(items.itemCode, openItemCodes)));
+      for (const r of refRows) {
+        const existing = refMap.get(r.itemCode);
+        // Prefer items in selected warehouses
+        if (!existing || (warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse))) {
+          refMap.set(r.itemCode, r);
+        }
+      }
+    }
+
     for (const disc of openDiscrepancies) {
       const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
       if (unknowns.length === 0) continue;
 
-      // Look up source item metadata for this itemCode (prefer items in selected warehouses)
-      const [refItem] = await db
-        .select({
-          avgCost: items.avgCost,
-          internalId: items.internalId,
-          warehouse: items.warehouse,
-          division: items.division,
-          stockStatus: items.stockStatus,
-        })
-        .from(items)
-        .where(
-          and(
-            eq(items.eventId, eventId),
-            eq(items.itemCode, disc.itemCode),
-            warehouseFilter(warehouses),
-          )
-        )
-        .limit(1);
-
-      // If no item found in selected warehouses, try without warehouse filter
-      const finalRef = refItem ?? (await db
-        .select({
-          avgCost: items.avgCost,
-          internalId: items.internalId,
-          warehouse: items.warehouse,
-          division: items.division,
-          stockStatus: items.stockStatus,
-        })
-        .from(items)
-        .where(
-          and(
-            eq(items.eventId, eventId),
-            eq(items.itemCode, disc.itemCode),
-          )
-        )
-        .limit(1)
-      )[0];
+      const finalRef = refMap.get(disc.itemCode);
       const avgCost = finalRef?.avgCost ?? 0;
 
       // Parse verified serials if completed
@@ -304,44 +292,34 @@ export async function GET(request: NextRequest) {
         )
       );
 
+    // Batch-fetch item metadata for approved discrepancy itemCodes
+    const approvedItemCodes = Array.from(new Set(approvedDiscrepancies.map((d) => d.itemCode)));
+    const approvedRefMap = new Map<string, { avgCost: number | null; internalId: string | null; warehouse: string | null; division: string | null; stockStatus: string | null }>();
+    if (approvedItemCodes.length > 0) {
+      const refRows = await db
+        .select({
+          itemCode: items.itemCode,
+          avgCost: items.avgCost,
+          internalId: items.internalId,
+          warehouse: items.warehouse,
+          division: items.division,
+          stockStatus: items.stockStatus,
+        })
+        .from(items)
+        .where(and(eq(items.eventId, eventId), inArray(items.itemCode, approvedItemCodes)));
+      for (const r of refRows) {
+        const existing = approvedRefMap.get(r.itemCode);
+        if (!existing || (warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse))) {
+          approvedRefMap.set(r.itemCode, r);
+        }
+      }
+    }
+
     for (const disc of approvedDiscrepancies) {
       const approved: string[] = safeJsonParse<string[]>(disc.approvedSerials!, []);
       if (approved.length === 0) continue;
 
-      const [refItem2] = await db
-        .select({
-          avgCost: items.avgCost,
-          internalId: items.internalId,
-          warehouse: items.warehouse,
-          division: items.division,
-          stockStatus: items.stockStatus,
-        })
-        .from(items)
-        .where(
-          and(
-            eq(items.eventId, eventId),
-            eq(items.itemCode, disc.itemCode),
-            warehouseFilter(warehouses),
-          )
-        )
-        .limit(1);
-      const finalRef2 = refItem2 ?? (await db
-        .select({
-          avgCost: items.avgCost,
-          internalId: items.internalId,
-          warehouse: items.warehouse,
-          division: items.division,
-          stockStatus: items.stockStatus,
-        })
-        .from(items)
-        .where(
-          and(
-            eq(items.eventId, eventId),
-            eq(items.itemCode, disc.itemCode),
-          )
-        )
-        .limit(1)
-      )[0];
+      const finalRef2 = approvedRefMap.get(disc.itemCode);
       const avgCost = finalRef2?.avgCost ?? 0;
 
       for (let i = 0; i < approved.length; i++) {

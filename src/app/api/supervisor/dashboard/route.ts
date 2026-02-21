@@ -99,43 +99,44 @@ export async function GET(request: NextRequest) {
       )
     );
 
-  // Per-team stats
+  // Per-team stats (aggregated in 4 queries instead of 4×N)
   const teamList = await db.select().from(teams).where(eq(teams.eventId, eventId));
 
-  const teamProgress = await Promise.all(teamList.map(async (team) => {
-    const [teamTotal] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(items)
-      .where(and(eq(items.eventId, eventId), eq(items.teamId, team.id), warehouseFilter(warehouses)));
+  // Assigned items per team
+  const teamItemCounts = await db
+    .select({ teamId: items.teamId, count: sql<number>`count(*)` })
+    .from(items)
+    .where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses)))
+    .groupBy(items.teamId);
+  const teamItemMap = new Map(teamItemCounts.map((r) => [r.teamId, r.count]));
 
-    const [teamCounted] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), initialOnly, cwf));
+  // Counted per team
+  const teamCountedCounts = await db
+    .select({ teamId: counts.teamId, count: sql<number>`count(*)` })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), initialOnly, cwf))
+    .groupBy(counts.teamId);
+  const teamCountedMap = new Map(teamCountedCounts.map((r) => [r.teamId, r.count]));
 
-    const [teamVariances] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(counts)
-      .where(
-        and(
-          eq(counts.eventId, eventId),
-          eq(counts.teamId, team.id),
-          initialOnly,
-          eq(counts.isMatch, false),
-          cwf,
-        )
-      );
+  // Variances per team
+  const teamVarianceCounts = await db
+    .select({ teamId: counts.teamId, count: sql<number>`count(*)` })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), cwf))
+    .groupBy(counts.teamId);
+  const teamVarianceMap = new Map(teamVarianceCounts.map((r) => [r.teamId, r.count]));
 
-    const [lastCount] = await db
-      .select({ countedAt: counts.countedAt })
-      .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), cwf))
-      .orderBy(sql`counted_at DESC`)
-      .limit(1);
+  // Last activity per team
+  const teamLastActivity = await db
+    .select({ teamId: counts.teamId, lastAt: sql<string>`max(counted_at)` })
+    .from(counts)
+    .where(and(eq(counts.eventId, eventId), cwf))
+    .groupBy(counts.teamId);
+  const teamLastMap = new Map(teamLastActivity.map((r) => [r.teamId, r.lastAt]));
 
-    const total = teamTotal?.count || 0;
-    const counted = teamCounted?.count || 0;
-
+  const teamProgress = teamList.map((team) => {
+    const total = teamItemMap.get(team.id) || 0;
+    const counted = teamCountedMap.get(team.id) || 0;
     return {
       id: team.id,
       name: team.name,
@@ -143,11 +144,11 @@ export async function GET(request: NextRequest) {
       total,
       counted,
       pending: total - counted,
-      variances: teamVariances?.count || 0,
+      variances: teamVarianceMap.get(team.id) || 0,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
-      lastActivity: lastCount?.countedAt || null,
+      lastActivity: teamLastMap.get(team.id) || null,
     };
-  }));
+  });
 
   // Recent activity (last 20 counts)
   const recentActivity = await db

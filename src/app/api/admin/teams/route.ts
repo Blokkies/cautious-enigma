@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
@@ -31,23 +31,19 @@ export async function GET(request: NextRequest) {
     .from(teams)
     .where(eq(teams.eventId, eid));
 
-  // Count assigned items per team (filtered by event's selected warehouses)
-  const enriched = await Promise.all(teamList.map(async (team) => {
-    const assignedCountResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(items)
-      .where(
-        and(eq(items.eventId, eid), eq(items.teamId, team.id), warehouseFilter(warehouses))
-      );
+  // Count assigned items per team in a single GROUP BY query
+  const teamItemCounts = await db
+    .select({ teamId: items.teamId, count: sql<number>`count(*)` })
+    .from(items)
+    .where(and(eq(items.eventId, eid), isNotNull(items.teamId), warehouseFilter(warehouses)))
+    .groupBy(items.teamId);
+  const teamItemMap = new Map(teamItemCounts.map((r) => [r.teamId, r.count]));
 
-    const [assignedCount] = assignedCountResult;
-
-    return {
-      ...team,
-      pinHash: undefined, // Don't send hash to client
-      pinPlain: (user.type === "supervisor" || user.type === "admin") ? team.pinPlain : undefined,
-      assignedItems: assignedCount?.count || 0,
-    };
+  const enriched = teamList.map((team) => ({
+    ...team,
+    pinHash: undefined, // Don't send hash to client
+    pinPlain: (user.type === "supervisor" || user.type === "admin") ? team.pinPlain : undefined,
+    assignedItems: teamItemMap.get(team.id) || 0,
   }));
 
   const supervisorList = await db

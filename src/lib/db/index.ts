@@ -13,7 +13,7 @@ const globalForDb = globalThis as unknown as { pgClient: ReturnType<typeof postg
 if (!globalForDb.pgClient) {
   globalForDb.pgClient = postgres(connectionString, {
     prepare: false, // required for Supabase pgbouncer
-    max: 5,         // transaction mode pooler allows more concurrent connections
+    max: 10,        // transaction mode pooler allows more concurrent connections
   });
 }
 

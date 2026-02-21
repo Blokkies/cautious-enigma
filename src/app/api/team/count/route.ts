@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, auditLog, verificationAssignments } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { getApiUser, checkEventActive } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest) {
@@ -319,7 +319,22 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const { counts: countBatch } = await request.json();
+    const body = await request.json();
+    const countBatch: Array<{
+      itemId: number;
+      countedQty: number;
+      comment?: string;
+      clientId?: string;
+      countedAt?: string;
+    }> = body.counts || [];
+    const verificationBatch: Array<{
+      verificationId: number;
+      itemId: number;
+      countedQty: number;
+      comment?: string;
+      clientId?: string;
+      countedAt?: string;
+    }> = body.verificationCounts || [];
 
     if (!Array.isArray(countBatch)) {
       return NextResponse.json(
@@ -329,59 +344,104 @@ export async function PUT(request: NextRequest) {
     }
 
     const results: Array<{ itemId: number; success?: boolean; deduplicated?: boolean; error?: string }> = [];
+    const verificationResults: Array<{ verificationId: number; success?: boolean; deduplicated?: boolean; error?: string }> = [];
 
     await db.transaction(async (tx) => {
+      // ── Collect all IDs for bulk pre-fetch ──
+      const allClientIds = [
+        ...countBatch.filter((c) => c.clientId).map((c) => c.clientId!),
+        ...verificationBatch.filter((c) => c.clientId).map((c) => c.clientId!),
+      ];
+      const allItemIds = countBatch.map((c) => c.itemId).filter((id) => typeof id === "number");
+      const allVerificationIds = verificationBatch.map((v) => v.verificationId).filter((id) => typeof id === "number");
+
+      // ── Bulk pre-fetch: dedup (all clientIds in one query) ──
+      const dedupSet = new Set<string>();
+      if (allClientIds.length > 0) {
+        const dedupRows = await tx
+          .select({ clientId: counts.clientId })
+          .from(counts)
+          .where(and(inArray(counts.clientId, allClientIds), eq(counts.teamId, user.id)));
+        for (const row of dedupRows) {
+          if (row.clientId) dedupSet.add(row.clientId);
+        }
+      }
+
+      // ── Bulk pre-fetch: items for normal counts ──
+      const itemMap = new Map<number, typeof items.$inferSelect>();
+      if (allItemIds.length > 0) {
+        const itemRows = await tx
+          .select()
+          .from(items)
+          .where(
+            and(
+              inArray(items.id, allItemIds),
+              eq(items.teamId, user.id),
+              eq(items.eventId, user.eventId)
+            )
+          );
+        for (const row of itemRows) {
+          itemMap.set(row.id, row);
+        }
+      }
+
+      // ── Bulk pre-fetch: pending verification assignments (block edits) ──
+      const pendingVaSet = new Set<number>();
+      if (allItemIds.length > 0) {
+        const pendingVaRows = await tx
+          .select({ itemId: verificationAssignments.itemId })
+          .from(verificationAssignments)
+          .where(
+            and(
+              inArray(verificationAssignments.itemId, allItemIds),
+              eq(verificationAssignments.eventId, user.eventId),
+              eq(verificationAssignments.status, "pending")
+            )
+          );
+        for (const row of pendingVaRows) {
+          pendingVaSet.add(row.itemId);
+        }
+      }
+
+      // ── Bulk pre-fetch: existing initial counts for normal counts ──
+      const existingCountMap = new Map<number, typeof counts.$inferSelect>();
+      if (allItemIds.length > 0) {
+        const existingRows = await tx
+          .select()
+          .from(counts)
+          .where(
+            and(
+              inArray(counts.itemId, allItemIds),
+              eq(counts.teamId, user.id),
+              eq(counts.countType, "initial")
+            )
+          );
+        for (const row of existingRows) {
+          existingCountMap.set(row.itemId, row);
+        }
+      }
+
+      // ── Process normal counts (pure in-memory lookups + INSERT/UPDATE) ──
       for (const entry of countBatch) {
         const { itemId, countedQty, comment, clientId } = entry;
 
-        // Validate countedQty is a non-negative number
         if (typeof countedQty !== "number" || isNaN(countedQty) || countedQty < 0) {
           results.push({ itemId, error: "countedQty must be a non-negative number" });
           continue;
         }
 
-        // Dedup check (scoped to this team)
-        if (clientId) {
-          const [existing] = await tx
-            .select()
-            .from(counts)
-            .where(and(eq(counts.clientId, clientId), eq(counts.teamId, user.id)));
-
-          if (existing) {
-            results.push({ itemId, deduplicated: true });
-            continue;
-          }
+        if (clientId && dedupSet.has(clientId)) {
+          results.push({ itemId, deduplicated: true });
+          continue;
         }
 
-        const [item] = await tx
-          .select()
-          .from(items)
-          .where(
-            and(
-              eq(items.id, itemId),
-              eq(items.teamId, user.id),
-              eq(items.eventId, user.eventId)
-            )
-          );
-
+        const item = itemMap.get(itemId);
         if (!item) {
           results.push({ itemId, error: "Not found" });
           continue;
         }
 
-        // Block edits when item has pending verification
-        const [pendingVaBatch] = await tx
-          .select({ id: verificationAssignments.id })
-          .from(verificationAssignments)
-          .where(
-            and(
-              eq(verificationAssignments.itemId, itemId),
-              eq(verificationAssignments.eventId, user.eventId),
-              eq(verificationAssignments.status, "pending")
-            )
-          );
-
-        if (pendingVaBatch) {
+        if (pendingVaSet.has(itemId)) {
           results.push({ itemId, error: "Pending verification" });
           continue;
         }
@@ -390,19 +450,9 @@ export async function PUT(request: NextRequest) {
         const varianceValue = variance * (item.avgCost || 0);
         const computedIsMatch = variance === 0;
 
-        const [existingCount] = await tx
-          .select()
-          .from(counts)
-          .where(
-            and(
-              eq(counts.itemId, itemId),
-              eq(counts.teamId, user.id),
-              eq(counts.countType, "initial")
-            )
-          );
+        const existingCount = existingCountMap.get(itemId);
 
         if (existingCount) {
-          // Skip items reviewed by supervisor
           if (existingCount.checkStatus === "accepted") {
             results.push({ itemId, error: "Reviewed by supervisor" });
             continue;
@@ -439,9 +489,104 @@ export async function PUT(request: NextRequest) {
 
         results.push({ itemId, success: true });
       }
+
+      // ── Process verification counts (if any) ──
+      if (verificationBatch.length > 0) {
+        // Bulk pre-fetch: verification assignments
+        const vaMap = new Map<number, typeof verificationAssignments.$inferSelect>();
+        if (allVerificationIds.length > 0) {
+          const vaRows = await tx
+            .select()
+            .from(verificationAssignments)
+            .where(
+              and(
+                inArray(verificationAssignments.id, allVerificationIds),
+                eq(verificationAssignments.assignedTeamId, user.id),
+                eq(verificationAssignments.status, "pending")
+              )
+            );
+          for (const row of vaRows) {
+            vaMap.set(row.id, row);
+          }
+        }
+
+        // Bulk pre-fetch: items for verification (by itemId from assignments)
+        const vaItemIds = Array.from(new Set(Array.from(vaMap.values()).map((va) => va.itemId)));
+        const vaItemMap = new Map<number, typeof items.$inferSelect>();
+        if (vaItemIds.length > 0) {
+          const vaItemRows = await tx
+            .select()
+            .from(items)
+            .where(
+              and(
+                inArray(items.id, vaItemIds),
+                eq(items.eventId, user.eventId)
+              )
+            );
+          for (const row of vaItemRows) {
+            vaItemMap.set(row.id, row);
+          }
+        }
+
+        for (const entry of verificationBatch) {
+          const { verificationId, countedQty, comment, clientId } = entry;
+
+          if (typeof countedQty !== "number" || isNaN(countedQty) || countedQty < 0) {
+            verificationResults.push({ verificationId, error: "countedQty must be a non-negative number" });
+            continue;
+          }
+
+          if (clientId && dedupSet.has(clientId)) {
+            verificationResults.push({ verificationId, deduplicated: true });
+            continue;
+          }
+
+          const va = vaMap.get(verificationId);
+          if (!va) {
+            verificationResults.push({ verificationId, error: "Assignment not found or not pending" });
+            continue;
+          }
+
+          const item = vaItemMap.get(va.itemId);
+          if (!item) {
+            verificationResults.push({ verificationId, error: "Item not found" });
+            continue;
+          }
+
+          const variance = countedQty - (item.onHand || 0);
+          const varianceValue = variance * (item.avgCost || 0);
+          const computedIsMatch = variance === 0;
+
+          await tx.insert(counts)
+            .values({
+              itemId: va.itemId,
+              teamId: user.id,
+              eventId: user.eventId,
+              countedQty,
+              variance,
+              varianceValue,
+              isMatch: computedIsMatch,
+              comment: comment || null,
+              countedAt: new Date().toISOString(),
+              syncedAt: new Date().toISOString(),
+              clientId: clientId || null,
+              countType: "verification",
+              verificationId,
+            });
+
+          await tx.update(verificationAssignments)
+            .set({
+              status: "completed",
+              completedAt: new Date().toISOString(),
+            })
+            .where(eq(verificationAssignments.id, verificationId));
+
+          verificationResults.push({ verificationId, success: true });
+        }
+      }
     });
 
-    return NextResponse.json({ success: true, results });
+    return NextResponse.json({ success: true, results, verificationResults });
   } catch (error) {
     console.error("Batch sync error:", error);
     return NextResponse.json(

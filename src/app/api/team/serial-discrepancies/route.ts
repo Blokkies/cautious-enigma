@@ -16,7 +16,66 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { itemCode, description, binNumber, binInternalId, unknownSerials, clientId } = await request.json();
+    const body = await request.json();
+
+    // ── Batch mode: process array of discrepancies in one request ──
+    if (Array.isArray(body.batch)) {
+      const batchResults: Array<{ success: boolean; id?: number; deduplicated?: boolean; error?: string }> = [];
+
+      for (const entry of body.batch) {
+        const { itemCode, description, binNumber, binInternalId, unknownSerials, clientId } = entry;
+
+        if (!itemCode) {
+          batchResults.push({ success: false, error: "itemCode is required" });
+          continue;
+        }
+
+        if (!unknownSerials || !Array.isArray(unknownSerials) || unknownSerials.length === 0) {
+          batchResults.push({ success: false, error: "unknownSerials must be a non-empty array" });
+          continue;
+        }
+
+        // Dedup check
+        if (clientId) {
+          const existing = await db
+            .select({ id: serialDiscrepancies.id })
+            .from(serialDiscrepancies)
+            .where(
+              and(
+                eq(serialDiscrepancies.eventId, user.eventId),
+                eq(serialDiscrepancies.teamId, user.id),
+                eq(serialDiscrepancies.itemCode, itemCode),
+                eq(serialDiscrepancies.unknownSerials, JSON.stringify(unknownSerials))
+              )
+            );
+          if (existing.length > 0) {
+            batchResults.push({ success: true, id: existing[0].id, deduplicated: true });
+            continue;
+          }
+        }
+
+        const [{ id }] = await db
+          .insert(serialDiscrepancies)
+          .values({
+            eventId: user.eventId,
+            teamId: user.id,
+            itemCode,
+            description: description || null,
+            binNumber: binNumber || null,
+            binInternalId: binInternalId || null,
+            unknownSerials: JSON.stringify(unknownSerials),
+            status: "open",
+          })
+          .returning({ id: serialDiscrepancies.id });
+
+        batchResults.push({ success: true, id });
+      }
+
+      return NextResponse.json({ success: true, results: batchResults });
+    }
+
+    // ── Single-item mode (backwards compatible) ──
+    const { itemCode, description, binNumber, binInternalId, unknownSerials, clientId } = body;
 
     if (!itemCode) {
       return NextResponse.json(

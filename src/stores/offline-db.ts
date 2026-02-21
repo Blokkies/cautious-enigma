@@ -198,15 +198,13 @@ export async function syncToServer(): Promise<{
   let totalFailed = 0;
   let authExpired = false;
 
-  // ── Sync counts ──
+  // ── Sync counts (normal + verification in single PUT) ──
   const unsyncedCounts = await getUnsyncedCounts();
 
-  // Separate verification counts (must go via POST individually) from normal counts (batch PUT)
   const normalCounts = unsyncedCounts.filter((c) => !c.verificationId);
   const verificationCounts = unsyncedCounts.filter((c) => !!c.verificationId);
 
-  // Batch sync normal counts via PUT
-  if (normalCounts.length > 0) {
+  if (normalCounts.length > 0 || verificationCounts.length > 0) {
     try {
       const res = await fetch("/api/team/count", {
         method: "PUT",
@@ -220,12 +218,22 @@ export async function syncToServer(): Promise<{
             clientId: c.clientId,
             countedAt: c.countedAt,
           })),
+          verificationCounts: verificationCounts.map((c) => ({
+            verificationId: c.verificationId,
+            itemId: c.itemId,
+            countedQty: c.countedQty,
+            comment: c.comment,
+            clientId: c.clientId,
+            countedAt: c.countedAt,
+          })),
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
         const successIds: string[] = [];
+
+        // Process normal count results
         (data.results as Array<{ success?: boolean; deduplicated?: boolean }>).forEach(
           (r, i) => {
             if (r.success || r.deduplicated) {
@@ -234,81 +242,76 @@ export async function syncToServer(): Promise<{
           }
         );
 
+        // Process verification count results
+        (data.verificationResults as Array<{ success?: boolean; deduplicated?: boolean }>).forEach(
+          (r, i) => {
+            if (r.success || r.deduplicated) {
+              successIds.push(verificationCounts[i].clientId);
+            }
+          }
+        );
+
         await markSynced(successIds);
         totalSynced += successIds.length;
-        totalFailed += normalCounts.length - successIds.length;
+        totalFailed += (normalCounts.length + verificationCounts.length) - successIds.length;
       } else if (res.status === 401) {
         authExpired = true;
         return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
-        totalFailed += normalCounts.length;
+        totalFailed += normalCounts.length + verificationCounts.length;
       }
     } catch {
-      totalFailed += normalCounts.length;
+      totalFailed += normalCounts.length + verificationCounts.length;
     }
   }
 
-  // Sync verification counts individually via POST (handles verification-specific logic)
-  for (const vc of verificationCounts) {
-    try {
-      const res = await fetch("/api/team/count", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itemId: vc.itemId,
-          countedQty: vc.countedQty,
-          comment: vc.comment,
-          clientId: vc.clientId,
-          verificationId: vc.verificationId,
-        }),
-      });
-
-      if (res.ok) {
-        await markCountSynced(vc.clientId);
-        totalSynced++;
-      } else if (res.status === 401) {
-        authExpired = true;
-        return { synced: totalSynced, failed: totalFailed, authExpired };
-      } else {
-        totalFailed++;
-      }
-    } catch {
-      totalFailed++;
-    }
-  }
-
-  // ── Sync serial discrepancies ──
+  // ── Sync serial discrepancies (single batch POST) ──
   const unsyncedDisc = await offlineDb.serialDiscrepancies
     .where("synced")
     .equals(0)
     .toArray();
 
-  for (const disc of unsyncedDisc) {
+  if (unsyncedDisc.length > 0) {
     try {
       const res = await fetch("/api/team/serial-discrepancies", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          itemCode: disc.itemCode,
-          description: disc.description,
-          binNumber: disc.binNumber,
-          binInternalId: disc.binInternalId,
-          unknownSerials: disc.unknownSerials,
-          clientId: disc.clientId,
+          batch: unsyncedDisc.map((disc) => ({
+            itemCode: disc.itemCode,
+            description: disc.description,
+            binNumber: disc.binNumber,
+            binInternalId: disc.binInternalId,
+            unknownSerials: disc.unknownSerials,
+            clientId: disc.clientId,
+          })),
         }),
       });
 
       if (res.ok) {
-        await markDiscrepancySynced(disc.clientId);
-        totalSynced++;
+        const data = await res.json();
+        const successIds: string[] = [];
+        (data.results as Array<{ success: boolean; deduplicated?: boolean }>).forEach(
+          (r, i) => {
+            if (r.success || r.deduplicated) {
+              successIds.push(unsyncedDisc[i].clientId);
+            }
+          }
+        );
+
+        for (const cid of successIds) {
+          await markDiscrepancySynced(cid);
+        }
+        totalSynced += successIds.length;
+        totalFailed += unsyncedDisc.length - successIds.length;
       } else if (res.status === 401) {
         authExpired = true;
         return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
-        totalFailed++;
+        totalFailed += unsyncedDisc.length;
       }
     } catch {
-      totalFailed++;
+      totalFailed += unsyncedDisc.length;
     }
   }
 

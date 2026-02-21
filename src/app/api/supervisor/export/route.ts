@@ -410,11 +410,11 @@ export async function GET(request: NextRequest) {
   };
   const base = filenameBase[type] || filenameBase.full;
 
-  if (format === "csv") {
-    if (data.length === 0) {
-      return new NextResponse("No data", { status: 404 });
-    }
+  if (data.length === 0) {
+    return new NextResponse("No data", { status: 404 });
+  }
 
+  if (format === "csv") {
     const headers = Object.keys(data[0]);
     const csvRows = [
       headers.join(","),

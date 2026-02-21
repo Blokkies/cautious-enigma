@@ -11,6 +11,7 @@ import {
   ClipboardCheck,
   UserCog,
   FileSpreadsheet,
+  FileOutput,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ const navItems = [
   { href: "/admin/setup", icon: Settings, label: "Events" },
   { href: "/admin/summary", icon: ClipboardCheck, label: "Summary" },
   { href: "/admin/files", icon: FileSpreadsheet, label: "Files" },
+  { href: "/admin/netsuite-export", icon: FileOutput, label: "NetSuite" },
   { href: "/admin/settings", icon: UserCog, label: "Settings" },
 ];
 

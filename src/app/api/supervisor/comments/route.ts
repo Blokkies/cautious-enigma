@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull, inArray } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter, checkEventActive } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -69,6 +69,11 @@ export async function PATCH(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "supervisor") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const lockError = await checkEventActive(user.eventId);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 403 });
   }
 
   try {

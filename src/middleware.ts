@@ -106,6 +106,9 @@ export async function middleware(request: NextRequest) {
   response.headers.set("x-user-type", payload.type);
   response.headers.set("x-user-name", payload.name);
   response.headers.set("x-event-id", String(payload.eventId));
+  if (payload.eventStatus) {
+    response.headers.set("x-event-status", payload.eventStatus);
+  }
 
   return response;
 }

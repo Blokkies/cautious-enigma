@@ -7,17 +7,23 @@ export async function GET(request: NextRequest) {
   const type = request.nextUrl.searchParams.get("type");
   const eventIdParam = request.nextUrl.searchParams.get("eventId");
 
-  // List accessible events (active or setup)
+  // List accessible events (active or setup; also completed for supervisor/auditor)
   if (type === "events") {
+    const role = request.nextUrl.searchParams.get("role");
+    const includeCompleted = role === "supervisor" || role === "auditor";
+
+    const statusConditions = [
+      eq(stocktakeEvents.status, "active"),
+      eq(stocktakeEvents.status, "setup"),
+    ];
+    if (includeCompleted) {
+      statusConditions.push(eq(stocktakeEvents.status, "completed"));
+    }
+
     const eventList = await db
       .select()
       .from(stocktakeEvents)
-      .where(
-        or(
-          eq(stocktakeEvents.status, "active"),
-          eq(stocktakeEvents.status, "setup")
-        )
-      );
+      .where(or(...statusConditions));
 
     // Batch count queries to avoid exhausting the connection pool
     const eventIds = eventList.map((e) => e.id);

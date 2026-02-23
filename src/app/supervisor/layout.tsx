@@ -17,6 +17,7 @@ import {
   Grid3X3,
   BarChart3,
   Mail,
+  Lock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSupervisorNotifications } from "@/hooks/use-notifications";
@@ -69,6 +70,7 @@ export default function SupervisorLayout({
 
   const execMessageCount = counts.execMessages ?? 0;
   const isExecutive = user?.type === "executive";
+  const isReadOnly = user?.eventStatus === "completed" || user?.eventStatus === "locked";
 
   // Executive viewing supervisor pages: show minimal header with back link
   if (isExecutive) {
@@ -98,6 +100,10 @@ export default function SupervisorLayout({
     );
   }
 
+  const filteredNavItems = isReadOnly
+    ? navItems.filter((item) => item.href !== "/supervisor/teams/assign")
+    : navItems;
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
@@ -120,6 +126,13 @@ export default function SupervisorLayout({
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
+        {/* Read-only banner for completed/locked events */}
+        {isReadOnly && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800">
+            <Lock className="h-4 w-4 shrink-0" />
+            <span className="text-sm font-medium">This event has been completed. You have read-only access.</span>
+          </div>
+        )}
         {/* Persistent executive message banner — visible from every screen */}
         {execMessageCount > 0 && pathname !== "/supervisor/messages" && (
           <Link
@@ -141,7 +154,7 @@ export default function SupervisorLayout({
       {/* Bottom nav for mobile */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t md:hidden">
         <div className="flex items-center justify-around h-16">
-          {navItems.map(({ href, icon: Icon, label, badgeKey }) => {
+          {filteredNavItems.map(({ href, icon: Icon, label, badgeKey }) => {
             const isActive = pathname === href;
             const count = getBadgeCount(badgeKey);
             return (
@@ -168,7 +181,7 @@ export default function SupervisorLayout({
       {/* Side nav for desktop */}
       <div className="hidden md:flex">
         <aside className="w-48 fixed left-0 top-14 bottom-0 bg-white border-r p-3 space-y-1">
-          {navItems.map(({ href, icon: Icon, label, badgeKey }) => {
+          {filteredNavItems.map(({ href, icon: Icon, label, badgeKey }) => {
             const isActive = pathname === href;
             const count = getBadgeCount(badgeKey);
             return (

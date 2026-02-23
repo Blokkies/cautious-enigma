@@ -66,7 +66,7 @@ export default function LoginPage() {
     setLoadingEvents(true);
 
     try {
-      const res = await fetch("/api/auth/list?type=events");
+      const res = await fetch(`/api/auth/list?type=events&role=${type}`);
       const data = await res.json();
       const eventList: EventInfo[] = data.events || [];
 
@@ -182,6 +182,7 @@ export default function LoginPage() {
   const statusColors: Record<string, string> = {
     setup: "bg-blue-500/10 text-blue-400 border-blue-500/20",
     active: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    completed: "bg-slate-500/10 text-slate-400 border-slate-500/20",
   };
 
   return (

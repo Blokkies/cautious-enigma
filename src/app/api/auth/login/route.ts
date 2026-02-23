@@ -70,11 +70,12 @@ export async function POST(request: NextRequest) {
         name: team.name,
         eventId: event.id,
         eventName: event.name,
+        eventStatus: event.status,
       });
 
       const response = NextResponse.json({
         success: true,
-        user: { id: team.id, type: "team", name: team.name, eventId: event.id, eventName: event.name },
+        user: { id: team.id, type: "team", name: team.name, eventId: event.id, eventName: event.name, eventStatus: event.status },
       });
 
       response.cookies.set({
@@ -115,6 +116,7 @@ export async function POST(request: NextRequest) {
         name: supervisor.name,
         eventId: event.id,
         eventName: event.name,
+        eventStatus: event.status,
       });
 
       const response = NextResponse.json({
@@ -125,6 +127,7 @@ export async function POST(request: NextRequest) {
           name: supervisor.name,
           eventId: event.id,
           eventName: event.name,
+          eventStatus: event.status,
         },
       });
 
@@ -166,6 +169,7 @@ export async function POST(request: NextRequest) {
         name: auditor.name,
         eventId: event.id,
         eventName: event.name,
+        eventStatus: event.status,
       });
 
       const response = NextResponse.json({
@@ -176,6 +180,7 @@ export async function POST(request: NextRequest) {
           name: auditor.name,
           eventId: event.id,
           eventName: event.name,
+          eventStatus: event.status,
         },
       });
 

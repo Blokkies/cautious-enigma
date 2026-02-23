@@ -179,6 +179,11 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const lockError = await checkEventActive(user.eventId);
+  if (lockError) {
+    return NextResponse.json({ error: lockError }, { status: 403 });
+  }
+
   try {
     const { queryId } = await request.json();
 

@@ -16,6 +16,7 @@ export interface TokenPayload {
   name: string;
   eventId: number;
   eventName: string;
+  eventStatus?: string;
 }
 
 export async function createToken(payload: TokenPayload): Promise<string> {

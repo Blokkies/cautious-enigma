@@ -8,6 +8,7 @@ interface User {
   name: string;
   eventId?: number;
   eventName?: string;
+  eventStatus?: string;
 }
 
 interface AuthContextType {

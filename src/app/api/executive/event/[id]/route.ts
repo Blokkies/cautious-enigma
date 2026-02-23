@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull, inArray } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
 
 export async function GET(
   request: NextRequest,
@@ -68,6 +68,8 @@ export async function GET(
     .orderBy(sql`counted_at DESC`)
     .limit(20),
   ]);
+
+  const serialOverStats = await getSerialDiscrepancyOverStats(eventId, warehouses);
 
   const total = Number(totalItemsRow?.count ?? 0);
   const counted = Number(countedItemsRow?.count ?? 0);
@@ -136,13 +138,13 @@ export async function GET(
       total,
       counted,
       matched: Number(matchedItemsRow?.count ?? 0),
-      withVariance: Number(varianceItemsRow?.count ?? 0),
-      varianceValue: Number(varianceValueRow?.total ?? 0),
-      overCount: Number(overStats?.count ?? 0),
-      overValue: Number(overStats?.total ?? 0),
+      withVariance: Number(varianceItemsRow?.count ?? 0) + serialOverStats.overCount,
+      varianceValue: Number(varianceValueRow?.total ?? 0) + serialOverStats.overValue,
+      overCount: Number(overStats?.count ?? 0) + serialOverStats.overCount,
+      overValue: Number(overStats?.total ?? 0) + serialOverStats.overValue,
       underCount: Number(underStats?.count ?? 0),
       underValue: Number(underStats?.total ?? 0),
-      netVarianceValue: Number(overStats?.total ?? 0) - Number(underStats?.total ?? 0),
+      netVarianceValue: (Number(overStats?.total ?? 0) + serialOverStats.overValue) - Number(underStats?.total ?? 0),
       pending: total - counted,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
       openQueries: Number(openQueriesRow?.count ?? 0),

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -80,8 +80,10 @@ export async function GET(request: NextRequest) {
     .from(counts)
     .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), sql`variance < 0`, cwf));
 
-  const summaryOverCount = overStats?.count || 0;
-  const summaryOverValue = overStats?.total || 0;
+  const serialOverStats = await getSerialDiscrepancyOverStats(eventId, warehouses);
+
+  const summaryOverCount = (overStats?.count || 0) + serialOverStats.overCount;
+  const summaryOverValue = (overStats?.total || 0) + serialOverStats.overValue;
   const summaryUnderCount = underStats?.count || 0;
   const summaryUnderValue = underStats?.total || 0;
   const summaryNetVarianceValue = summaryOverValue - summaryUnderValue;
@@ -223,7 +225,8 @@ export async function GET(request: NextRequest) {
   const total = totalItems?.count || 0;
   const counted = totalCounted?.count || 0;
   const matched = totalMatched?.count || 0;
-  const variances = totalVariances?.count || 0;
+  const variances = (totalVariances?.count || 0) + serialOverStats.overCount;
+  const combinedVarianceValue = (totalVarianceValue?.total || 0) + serialOverStats.overValue;
 
   return NextResponse.json({
     event: {
@@ -242,7 +245,7 @@ export async function GET(request: NextRequest) {
       matched,
       matchPercent: counted > 0 ? Math.round((matched / counted) * 100) : 0,
       variances,
-      totalVarianceValue: totalVarianceValue?.total || 0,
+      totalVarianceValue: combinedVarianceValue,
       overCount: summaryOverCount,
       overValue: summaryOverValue,
       underCount: summaryUnderCount,
@@ -251,7 +254,7 @@ export async function GET(request: NextRequest) {
       totalStockValue: totalStockValue?.total || 0,
       variancePercent:
         (totalStockValue?.total || 0) > 0
-          ? ((totalVarianceValue?.total || 0) / (totalStockValue?.total || 0) * 100).toFixed(2)
+          ? (combinedVarianceValue / (totalStockValue?.total || 0) * 100).toFixed(2)
           : "0.00",
     },
     teamResults,

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, counts } from "@/lib/db/schema";
-import { eq, inArray, sql } from "drizzle-orm";
+import { stocktakeEvents, items, counts, serialDiscrepancies } from "@/lib/db/schema";
+import { eq, and, inArray, sql } from "drizzle-orm";
 
 export interface ApiUser {
   id: number;
@@ -91,4 +91,72 @@ export function countsWarehouseFilter(eventId: number, warehouses: string[] | nu
   if (!warehouses || warehouses.length === 0) return undefined;
   const whParams = sql.join(warehouses.map((w) => sql`${w}`), sql`, `);
   return sql`${counts.itemId} IN (SELECT id FROM items WHERE event_id = ${eventId} AND warehouse IN (${whParams}))`;
+}
+
+/**
+ * Compute serial discrepancy "over" stats for an event.
+ * Unknown + approved serials are surplus items (variance > 0).
+ * Returns { overCount, overValue } to be added to dashboard totals.
+ */
+export async function getSerialDiscrepancyOverStats(
+  eventId: number,
+  warehouses: string[] | null
+): Promise<{ overCount: number; overValue: number }> {
+  const discRows = await db
+    .select({
+      itemCode: serialDiscrepancies.itemCode,
+      unknownSerials: serialDiscrepancies.unknownSerials,
+      approvedSerials: serialDiscrepancies.approvedSerials,
+      status: serialDiscrepancies.status,
+      resolutionType: serialDiscrepancies.resolutionType,
+    })
+    .from(serialDiscrepancies)
+    .where(eq(serialDiscrepancies.eventId, eventId));
+
+  if (discRows.length === 0) return { overCount: 0, overValue: 0 };
+
+  // Look up avgCost for each unique itemCode
+  const uniqueCodes = Array.from(new Set(discRows.map((d) => d.itemCode)));
+  const refMap = new Map<string, { avgCost: number | null; warehouse: string | null }>();
+  if (uniqueCodes.length > 0) {
+    const refItems = await db
+      .select({
+        itemCode: items.itemCode,
+        avgCost: items.avgCost,
+        warehouse: items.warehouse,
+      })
+      .from(items)
+      .where(and(eq(items.eventId, eventId), inArray(items.itemCode, uniqueCodes)));
+    for (const r of refItems) {
+      const existing = refMap.get(r.itemCode);
+      if (!existing || (warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse))) {
+        refMap.set(r.itemCode, r);
+      }
+    }
+  }
+
+  let overCount = 0;
+  let overValue = 0;
+
+  for (const disc of discRows) {
+    // Skip fully dismissed discrepancies
+    if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
+      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+      if (approved.length === 0) continue;
+    }
+
+    const ref = refMap.get(disc.itemCode);
+
+    // Skip if warehouse-filtered out
+    if (warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse)) continue;
+
+    const avgCost = ref?.avgCost ?? 0;
+    const unknowns: string[] = JSON.parse(disc.unknownSerials);
+    const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
+
+    overCount += unknowns.length + approved.length;
+    overValue += (unknowns.length + approved.length) * avgCost;
+  }
+
+  return { overCount, overValue };
 }

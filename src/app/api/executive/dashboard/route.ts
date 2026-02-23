@@ -11,7 +11,7 @@ import {
   serialDiscrepancies,
 } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -95,10 +95,12 @@ export async function GET(request: NextRequest) {
       underValue: Number(r.underValue),
     }));
 
+    const serialOverStats = await getSerialDiscrepancyOverStats(event.id, warehouses);
+
     const totalItems = Number(totalItemsRow?.count ?? 0);
     const countedItems = Number(countedItemsRow?.count ?? 0);
-    const overCount = Number(overStats?.count ?? 0);
-    const overValue = Number(overStats?.total ?? 0);
+    const overCount = Number(overStats?.count ?? 0) + serialOverStats.overCount;
+    const overValue = Number(overStats?.total ?? 0) + serialOverStats.overValue;
     const underCount = Number(underStats?.count ?? 0);
     const underValue = Number(underStats?.total ?? 0);
 
@@ -111,8 +113,8 @@ export async function GET(request: NextRequest) {
       totalItems,
       countedItems,
       matchedItems: Number(matchedItemsRow?.count ?? 0),
-      varianceItems: Number(varianceItemsRow?.count ?? 0),
-      varianceValue: Number(varianceValueRow?.total ?? 0),
+      varianceItems: Number(varianceItemsRow?.count ?? 0) + serialOverStats.overCount,
+      varianceValue: Number(varianceValueRow?.total ?? 0) + serialOverStats.overValue,
       overCount,
       overValue,
       underCount,

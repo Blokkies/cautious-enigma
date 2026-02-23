@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -167,21 +167,28 @@ export async function GET(request: NextRequest) {
     .orderBy(sql`counted_at DESC`)
     .limit(20);
 
+  const serialOverStats = await getSerialDiscrepancyOverStats(eventId, warehouses);
+
   const total = totalItems?.count || 0;
   const counted = totalCounted?.count || 0;
+
+  const combinedOverCount = (overStats?.count || 0) + serialOverStats.overCount;
+  const combinedOverValue = (overStats?.total || 0) + serialOverStats.overValue;
+  const combinedUnderCount = underStats?.count || 0;
+  const combinedUnderValue = underStats?.total || 0;
 
   return NextResponse.json({
     overall: {
       total,
       counted,
       matched: totalMatched?.count || 0,
-      withVariance: totalVariance?.count || 0,
-      varianceValue: varianceValue?.total || 0,
-      overCount: overStats?.count || 0,
-      overValue: overStats?.total || 0,
-      underCount: underStats?.count || 0,
-      underValue: underStats?.total || 0,
-      netVarianceValue: (overStats?.total || 0) - (underStats?.total || 0),
+      withVariance: (totalVariance?.count || 0) + serialOverStats.overCount,
+      varianceValue: (varianceValue?.total || 0) + serialOverStats.overValue,
+      overCount: combinedOverCount,
+      overValue: combinedOverValue,
+      underCount: combinedUnderCount,
+      underValue: combinedUnderValue,
+      netVarianceValue: combinedOverValue - combinedUnderValue,
       pending: total - counted,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
       openQueries: openQueries?.count || 0,

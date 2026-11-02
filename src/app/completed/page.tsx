@@ -1,5 +1,7 @@
 "use client";
 
+import { Suspense } from "react";
+
 import React, { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,7 +91,7 @@ interface EventOption {
   status: string;
 }
 
-export default function CompletedDashboard() {
+function CompletedDashboardContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
@@ -526,5 +528,14 @@ function TopVariancesTable({ topVariances }: { topVariances: DashboardData["topV
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next 15+).
+export default function CompletedDashboard() {
+  return (
+    <Suspense fallback={null}>
+      <CompletedDashboardContent />
+    </Suspense>
   );
 }

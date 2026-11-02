@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +33,7 @@ interface EventOption {
   status: string;
 }
 
-export default function ImportPage() {
+function ImportPageContent() {
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
 
@@ -406,5 +406,14 @@ Continue and delete existing counts?`)) {
         </Card>
       )}
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next 15+).
+export default function ImportPage() {
+  return (
+    <Suspense fallback={null}>
+      <ImportPageContent />
+    </Suspense>
   );
 }

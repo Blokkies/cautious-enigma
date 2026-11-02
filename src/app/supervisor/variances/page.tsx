@@ -1,5 +1,7 @@
 "use client";
 
+import { Suspense } from "react";
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { Card, CardContent } from "@/components/ui/card";
@@ -83,7 +85,7 @@ interface EventOption {
   status: string;
 }
 
-export default function VariancesPage() {
+function VariancesPageContent() {
   const { user } = useAuth();
   const isAuditor = user?.type === "auditor" || user?.type === "executive";
   const isExecutive = user?.type === "executive";
@@ -2496,5 +2498,14 @@ function renderSubRow(v: VarianceItem, props: RowProps) {
         </TableCell>
       )}
     </TableRow>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next 15+).
+export default function VariancesPage() {
+  return (
+    <Suspense fallback={null}>
+      <VariancesPageContent />
+    </Suspense>
   );
 }

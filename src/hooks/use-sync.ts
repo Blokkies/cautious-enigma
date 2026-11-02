@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useOnlineStatus } from "./use-online-status";
 import { useAuth } from "@/contexts/auth-context";
 import {
@@ -22,12 +22,15 @@ export function useSync() {
   const isOnline = useOnlineStatus();
   const { user } = useAuth();
   // Only sync/count records belonging to the logged-in team + event
-  const scopeRef = useRef<OfflineScope | null>(null);
-  scopeRef.current =
-    user?.type === "team" && user.eventId != null
-      ? { eventId: user.eventId, teamId: user.id }
-      : null;
-  const scopeKey = scopeRef.current ? `${scopeRef.current.eventId}:${scopeRef.current.teamId}` : "";
+  const scopeEventId = user?.type === "team" ? user.eventId : null;
+  const scopeTeamId = user?.type === "team" ? user.id : null;
+  const scopeKey = scopeEventId != null && scopeTeamId != null ? `${scopeEventId}:${scopeTeamId}` : "";
+  const scope = useMemo<OfflineScope | null>(
+    () => (scopeEventId != null && scopeTeamId != null ? { eventId: scopeEventId, teamId: scopeTeamId } : null),
+    [scopeEventId, scopeTeamId]
+  );
+  // Latest-value refs for the stable callbacks below; updated in an effect (not during render).
+  const scopeRef = useRef<OfflineScope | null>(scope);
   const [state, setState] = useState<SyncState>({
     pendingCount: 0,
     syncing: false,
@@ -40,7 +43,12 @@ export function useSync() {
   const authExpiredRef = useRef(false);
   const syncingRef = useRef(false);
   const isOnlineRef = useRef(isOnline);
-  isOnlineRef.current = isOnline;
+
+  // Declared first so it runs before the sync effects below in the same commit.
+  useEffect(() => {
+    scopeRef.current = scope;
+    isOnlineRef.current = isOnline;
+  }, [scope, isOnline]);
 
   const updatePendingCount = useCallback(async () => {
     try {

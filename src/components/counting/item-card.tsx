@@ -40,7 +40,7 @@ interface ActiveItemCardProps {
   onSkip: () => void;
   comment: string;
   onCommentChange: (value: string) => void;
-  inputRef: React.RefObject<HTMLInputElement>;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   isSubmitting: boolean;
   showSuccessFlash?: boolean;
   onFlashComplete?: () => void;

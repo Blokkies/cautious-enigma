@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,7 +95,7 @@ interface BinItem {
   serial_number: string;
 }
 
-export default function AssignPage() {
+function AssignPageContent() {
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
 
@@ -1112,5 +1112,14 @@ export default function AssignPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next 15+).
+export default function AssignPage() {
+  return (
+    <Suspense fallback={null}>
+      <AssignPageContent />
+    </Suspense>
   );
 }

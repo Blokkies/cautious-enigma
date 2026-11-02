@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +33,7 @@ interface ReadinessCheck {
   unassignedCount: number;
 }
 
-export default function ActivatePage() {
+function ActivatePageContent() {
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
 
@@ -392,5 +392,14 @@ export default function ActivatePage() {
         </Card>
       )}
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next 15+).
+export default function ActivatePage() {
+  return (
+    <Suspense fallback={null}>
+      <ActivatePageContent />
+    </Suspense>
   );
 }

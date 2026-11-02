@@ -1,9 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
-  experimental: {
-    missingSuspenseWithCSRBailout: false,
-  },
   // CORS headers - restrict to same origin; override CORS_ORIGIN env var for local network access
   async headers() {
     const origin = process.env.CORS_ORIGIN || "";

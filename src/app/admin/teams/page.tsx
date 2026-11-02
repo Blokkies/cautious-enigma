@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,7 +52,7 @@ interface EventOption {
   status: string;
 }
 
-export default function TeamsPage() {
+function TeamsPageContent() {
   const searchParams = useSearchParams();
   const urlEventId = searchParams.get("eventId");
 
@@ -814,5 +814,14 @@ export default function TeamsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering (Next 15+).
+export default function TeamsPage() {
+  return (
+    <Suspense fallback={null}>
+      <TeamsPageContent />
+    </Suspense>
   );
 }

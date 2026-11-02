@@ -8,17 +8,7 @@ import {
 } from "@/lib/db/schema";
 import { eq, and, isNotNull, sql } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
-
-const VALID_STATUSES = ["setup", "active", "completed", "locked"] as const;
-
-// Status transitions allowed via this endpoint (mirrors the admin UI).
-// setup -> active must go through POST /api/admin/activate.
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  setup: [],
-  active: ["setup", "completed"],
-  completed: ["locked"],
-  locked: ["active"],
-};
+import { EVENT_STATUSES as VALID_STATUSES, checkEventsPutTransition } from "@/lib/event-status";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -128,19 +118,12 @@ export async function PUT(request: NextRequest) {
           { status: 400 }
         );
       }
-      if (status !== existing.status) {
-        if (existing.status === "setup" && status === "active") {
-          return NextResponse.json(
-            { error: "Use the Activate action to activate an event" },
-            { status: 400 }
-          );
-        }
-        if (!(ALLOWED_TRANSITIONS[existing.status] || []).includes(status)) {
-          return NextResponse.json(
-            { error: `Cannot change event status from ${existing.status} to ${status}` },
-            { status: 400 }
-          );
-        }
+      // setup -> active must go through POST /api/admin/activate.
+      const transition = checkEventsPutTransition(existing.status, status);
+      if (!transition.ok) {
+        return NextResponse.json({ error: transition.error }, { status: 400 });
+      }
+      if (transition.changed) {
         updates.status = status;
       }
     }

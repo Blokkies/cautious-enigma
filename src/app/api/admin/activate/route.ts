@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { stocktakeEvents, items, teams, supervisors, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
 import { eq, and, sql, isNull } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
+import { ACTIVATE_PUT_TARGETS, canActivate, checkActivatePutTransition } from "@/lib/event-status";
 
 // GET: Check readiness
 export async function GET(request: NextRequest) {
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
 
-    if (event.status !== "setup") {
+    if (!canActivate(event.status)) {
       return NextResponse.json(
         { error: "Event is not in setup phase" },
         { status: 400 }
@@ -116,7 +117,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    if (!["setup", "completed", "locked"].includes(status)) {
+    if (!ACTIVATE_PUT_TARGETS.includes(status)) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
@@ -128,12 +129,9 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
     // Allowed: active -> setup (cancel), active -> completed, completed -> locked
-    const allowedFrom: Record<string, string> = { setup: "active", completed: "active", locked: "completed" };
-    if (existing.status !== status && allowedFrom[status] !== existing.status) {
-      return NextResponse.json(
-        { error: `Cannot change event status from ${existing.status} to ${status}` },
-        { status: 400 }
-      );
+    const transition = checkActivatePutTransition(existing.status, status);
+    if (!transition.ok) {
+      return NextResponse.json({ error: transition.error }, { status: 400 });
     }
 
     await db.update(stocktakeEvents)

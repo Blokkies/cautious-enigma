@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { uploads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { getApiUser } from "@/lib/api-auth";
+import { attachmentContentDisposition } from "@/lib/content-disposition";
 
 export async function GET(
   request: NextRequest,
@@ -31,10 +32,7 @@ export async function GET(
       upload.mimeType ||
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-    // ASCII fallback (no quotes/backslashes/control/non-ASCII chars) + RFC 5987 UTF-8 name
-    const filename = upload.filename || "upload.xlsx";
-    const asciiName = filename.replace(/[^\x20-\x7E]|["\\]/g, "_");
-    const contentDisposition = `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+    const contentDisposition = attachmentContentDisposition(upload.filename || "upload.xlsx");
 
     return new NextResponse(fileBuffer as unknown as BodyInit, {
       headers: {

@@ -124,9 +124,8 @@ export async function buildItemRefMap(
   itemCodes: string[],
   warehouses: string[] | null
 ): Promise<Map<string, ItemRef>> {
-  const refMap = new Map<string, ItemRef>();
   const unique = Array.from(new Set(itemCodes));
-  if (unique.length === 0) return refMap;
+  if (unique.length === 0) return new Map<string, ItemRef>();
 
   const refItems = await db
     .select({
@@ -142,6 +141,15 @@ export async function buildItemRefMap(
     .from(items)
     .where(and(eq(items.eventId, eventId), inArray(items.itemCode, unique)));
 
+  return pickItemRefs(refItems, warehouses);
+}
+
+/**
+ * Pick one reference row per itemCode. The first row seen wins, unless a later
+ * row lies in the selected warehouses and the current pick does not.
+ */
+export function pickItemRefs(refItems: ItemRef[], warehouses: string[] | null): Map<string, ItemRef> {
+  const refMap = new Map<string, ItemRef>();
   for (const r of refItems) {
     const existing = refMap.get(r.itemCode);
     const inSelected = !!(warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse));

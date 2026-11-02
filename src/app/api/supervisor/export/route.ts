@@ -7,7 +7,7 @@ import {
 } from "@/lib/db/schema";
 import { eq, and, sql, inArray, asc, desc } from "drizzle-orm";
 import {
-  getApiUser, getEventWarehouses, warehouseFilter,
+  requireUser, getEventWarehouses, warehouseFilter,
   buildItemRefMap, isRefOutsideWarehouses, getCountableDiscrepancySerials,
 } from "@/lib/api-auth";
 import { safeJsonParse } from "@/lib/utils";
@@ -163,10 +163,9 @@ async function buildDiscrepancyVariances(eventId: number, warehouses: string[] |
 }
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "admin" && user.type !== "auditor" && user.type !== "executive")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "admin", "auditor", "executive"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const format = request.nextUrl.searchParams.get("format") || "xlsx";
   const type = request.nextUrl.searchParams.get("type") || "full";

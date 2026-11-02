@@ -142,7 +142,24 @@ function normalizeColumnName(col: string): string {
   return col
     .toLowerCase()
     .replace(/[^a-z0-9\s_]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+// COLUMN_MAP keyed by normalized name, so headers and keys normalize identically
+// (e.g. "Serial/Lot Number" and "serial/lot number" both become "seriallot number").
+const NORMALIZED_COLUMN_MAP: Record<string, keyof ImportedItem> = Object.fromEntries(
+  Object.entries(COLUMN_MAP).map(([key, field]) => [normalizeColumnName(key), field])
+);
+
+/**
+ * Parse a numeric cell. Text cells may use thousands separators ("1,234",
+ * "1 234.5"); separators are stripped, decimals kept. Unparseable -> 0.
+ */
+export function parseNumericCell(val: unknown): number {
+  if (typeof val === "number") return Number.isFinite(val) ? val : 0;
+  const cleaned = String(val).replace(/[,\s]/g, "");
+  return parseFloat(cleaned) || 0;
 }
 
 /** Strip leading formula-injection characters from imported cell values */
@@ -181,7 +198,7 @@ export function parseExcel(buffer: ArrayBuffer): {
 
   for (const header of headers) {
     const normalized = normalizeColumnName(header);
-    const mapped = COLUMN_MAP[normalized];
+    const mapped = NORMALIZED_COLUMN_MAP[normalized];
     if (mapped) {
       headerMapping[header] = mapped;
       mappedFields.push(`${header} -> ${mapped}`);
@@ -213,7 +230,7 @@ export function parseExcel(buffer: ArrayBuffer): {
       if (val === undefined || val === null) continue;
 
       if (field === "onHand" || field === "avgCost" || field === "totalValue") {
-        item[field] = typeof val === "number" ? val : parseFloat(String(val)) || 0;
+        item[field] = parseNumericCell(val);
       } else {
         item[field] = sanitizeCellValue(String(val).trim());
       }

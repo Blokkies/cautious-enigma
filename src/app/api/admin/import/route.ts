@@ -3,23 +3,22 @@ import { db } from "@/lib/db";
 import { items, stocktakeEvents, uploads, counts, verificationAssignments, serialDiscrepancies, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, execMessages } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
+import { countInt, countDistinctInt, sumFloat } from "@/lib/db/aggregates";
 
 // Number of counts already recorded for an event (imports wipe them).
 async function existingCountCount(eventId: number): Promise<number> {
   const [row] = await db
-    .select({ count: sql<number>`count(*)`.mapWith(Number) })
+    .select({ count: countInt() })
     .from(counts)
     .where(eq(counts.eventId, eventId));
-  return Number(row?.count || 0);
+  return row?.count || 0;
 }
 
 // GET: List events that have imported items (for "copy from" feature)
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"] });
+  if (auth.response) return auth.response;
 
   try {
     const allEvents = await db
@@ -33,10 +32,10 @@ export async function GET(request: NextRequest) {
     const eventsWithItems = await Promise.all(
       allEvents.map(async (event) => {
         const [countRow] = await db
-          .select({ count: sql<number>`count(*)`.mapWith(Number) })
+          .select({ count: countInt() })
           .from(items)
           .where(eq(items.eventId, event.id));
-        return { ...event, itemCount: Number(countRow?.count || 0) };
+        return { ...event, itemCount: countRow?.count || 0 };
       })
     );
 
@@ -51,10 +50,8 @@ export async function GET(request: NextRequest) {
 
 // PUT: Copy items from one event to another
 export async function PUT(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const body = await request.json();
@@ -153,10 +150,10 @@ export async function PUT(request: NextRequest) {
     });
 
     // Summary stats
-    const [totalImported] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
-    const [uniqueBins] = await db.select({ count: sql<number>`count(DISTINCT bin_number)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
-    const [uniqueBrands] = await db.select({ count: sql<number>`count(DISTINCT brand)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
-    const [totalValue] = await db.select({ total: sql<number>`sum(total_value)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [totalImported] = await db.select({ count: countInt() }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [uniqueBins] = await db.select({ count: countDistinctInt(sql`bin_number`) }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [uniqueBrands] = await db.select({ count: countDistinctInt(sql`brand`) }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [totalValue] = await db.select({ total: sumFloat(sql`total_value`) }).from(items).where(eq(items.eventId, Number(targetEventId)));
 
     return NextResponse.json({
       success: true,
@@ -175,10 +172,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const formData = await request.formData();
@@ -317,22 +313,22 @@ export async function POST(request: NextRequest) {
 
     // Get import summary
     const [totalImported] = await db
-      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .select({ count: countInt() })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
     const [uniqueBins] = await db
-      .select({ count: sql<number>`count(DISTINCT bin_number)`.mapWith(Number) })
+      .select({ count: countDistinctInt(sql`bin_number`) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
     const [uniqueBrands] = await db
-      .select({ count: sql<number>`count(DISTINCT brand)`.mapWith(Number) })
+      .select({ count: countDistinctInt(sql`brand`) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
     const [totalValue] = await db
-      .select({ total: sql<number>`sum(total_value)`.mapWith(Number) })
+      .select({ total: sumFloat(sql`total_value`) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 

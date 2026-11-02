@@ -1,33 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { eq, and } from "drizzle-orm";
+import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { countInt } from "@/lib/db/aggregates";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const warehouses = await getEventWarehouses(user.eventId);
 
   const [totalItems] = await db
-    .select({ count: sql<number>`count(*)` })
+    .select({ count: countInt() })
     .from(items)
     .where(
       and(eq(items.eventId, user.eventId), eq(items.teamId, user.id), warehouseFilter(warehouses))
     );
 
   const [countedItems] = await db
-    .select({ count: sql<number>`count(*)` })
+    .select({ count: countInt() })
     .from(counts)
     .where(
       and(eq(counts.eventId, user.eventId), eq(counts.teamId, user.id), eq(counts.countType, "initial"), countsWarehouseFilter(user.eventId, warehouses))
     );
 
   const [matchedItems] = await db
-    .select({ count: sql<number>`count(*)` })
+    .select({ count: countInt() })
     .from(counts)
     .where(
       and(
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     );
 
   const [varianceItems] = await db
-    .select({ count: sql<number>`count(*)` })
+    .select({ count: countInt() })
     .from(counts)
     .where(
       and(

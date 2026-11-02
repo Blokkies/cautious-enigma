@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { exportToExcel, parseExcel } from "./excel";
+import { exportToExcel, parseExcel, parseNumericCell } from "./excel";
 import { generateTeamTemplate, parseTeamExcel } from "./team-excel";
 
 function workbookFromRows(rows: unknown[][], sheetName = "Sheet1"): ArrayBuffer {
@@ -73,19 +73,46 @@ describe("parseExcel", () => {
     });
   });
 
-  it("does not map 'Serial/Lot Number' headers", () => {
-    // BUG: COLUMN_MAP has "serial/lot number", "serial/lot #" and "serial/lot", but
-    // normalizeColumnName strips "/" first ("seriallot number"), so those keys can never
-    // match and a NetSuite "Serial/Lot Number" column is silently left unmapped.
-    const result = parseExcel(workbookFromRows([["Item", "Serial/Lot Number"], ["A1", "SN-9"]]));
-    expect(result.unmappedHeaders).toEqual(["Serial/Lot Number"]);
-    expect(result.items[0].serialNumber).toBe("");
+  it.each(["Serial/Lot Number", "Serial/Lot #", "Serial/Lot", "SERIAL/LOT NUMBER"])(
+    "maps the '%s' header to serialNumber",
+    (header) => {
+      // Headers and COLUMN_MAP keys are normalized the same way, so "/" can't break the lookup.
+      const result = parseExcel(workbookFromRows([["Item", header], ["A1", "SN-9"]]));
+      expect(result.unmappedHeaders).toEqual([]);
+      expect(result.items[0].serialNumber).toBe("SN-9");
+    }
+  );
+
+  it("maps headers whose punctuation leaves runs of spaces", () => {
+    const result = parseExcel(workbookFromRows([["Item", "Bin Location : Internal ID"], ["A1", "77"]]));
+    expect(result.unmappedHeaders).toEqual([]);
+    expect(result.items[0].binInternalId).toBe("77");
   });
 
-  it("parses thousands-separated text numbers only up to the comma", () => {
-    // Characterisation: parseFloat("1,234") === 1 for text cells.
-    const result = parseExcel(workbookFromRows([["Item", "Qty"], ["A1", "1,234"]]));
-    expect(result.items[0].onHand).toBe(1);
+  it("parses thousands-separated text numbers, keeping decimals", () => {
+    const result = parseExcel(
+      workbookFromRows([
+        ["Item", "Qty", "Avg Cost", "Total Value"],
+        ["A1", "1,234", "1,000.50", "1 234 567.25"],
+      ])
+    );
+    expect(result.items[0]).toMatchObject({ onHand: 1234, avgCost: 1000.5, totalValue: 1234567.25 });
+  });
+});
+
+describe("parseNumericCell", () => {
+  it.each([
+    [42, 42],
+    [1.5, 1.5],
+    [Number.NaN, 0],
+    ["1,234", 1234],
+    ["-1,234.5", -1234.5],
+    [" 12 ", 12],
+    ["1 234", 1234],
+    ["abc", 0],
+    ["", 0],
+  ] as const)("%j -> %j", (input, expected) => {
+    expect(parseNumericCell(input)).toBe(expected);
   });
 });
 

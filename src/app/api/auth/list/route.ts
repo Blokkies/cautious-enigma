@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams, supervisors, stocktakeEvents } from "@/lib/db/schema";
-import { eq, or, and, sql } from "drizzle-orm";
+import { eq, or, and } from "drizzle-orm";
+import { countInt } from "@/lib/db/aggregates";
 
 export async function GET(request: NextRequest) {
   const type = request.nextUrl.searchParams.get("type");
@@ -30,22 +31,22 @@ export async function GET(request: NextRequest) {
 
     const teamCounts = eventIds.length
       ? await db
-          .select({ eventId: teams.eventId, count: sql<number>`count(*)` })
+          .select({ eventId: teams.eventId, count: countInt() })
           .from(teams)
           .groupBy(teams.eventId)
       : [];
 
     const supCounts = eventIds.length
       ? await db
-          .select({ eventId: supervisors.eventId, role: supervisors.role, count: sql<number>`count(*)` })
+          .select({ eventId: supervisors.eventId, role: supervisors.role, count: countInt() })
           .from(supervisors)
           .groupBy(supervisors.eventId, supervisors.role)
       : [];
 
-    const teamMap = new Map(teamCounts.map((r) => [r.eventId, Number(r.count)]));
+    const teamMap = new Map(teamCounts.map((r) => [r.eventId, r.count]));
     const supMap = new Map<string, number>();
     for (const r of supCounts) {
-      supMap.set(`${r.eventId}:${r.role}`, Number(r.count));
+      supMap.set(`${r.eventId}:${r.role}`, r.count);
     }
 
     const enriched = eventList.map((event) => ({

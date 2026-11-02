@@ -2,16 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull, inArray } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
+import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
+import { countInt, sumFloat } from "@/lib/db/aggregates";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "executive" && user.type !== "admin")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["executive", "admin"], status: 401 });
+  if (auth.response) return auth.response;
 
   const { id } = await params;
   const eventId = Number(id);
@@ -43,16 +42,16 @@ export async function GET(
     recentActivity,
   ] = await Promise.all([
     db.select().from(teams).where(eq(teams.eventId, eventId)),
-    db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses))),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), cwf)),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, true), cwf)),
-    db.select({ count: sql<number>`count(*)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf)),
-    db.select({ total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf)),
-    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance > 0`, cwf)),
-    db.select({ count: sql<number>`count(*)`, total: sql<number>`COALESCE(sum(abs(variance_value)), 0)` }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance < 0`, cwf)),
-    db.select({ count: sql<number>`count(*)` }).from(queries).where(and(eq(queries.eventId, eventId), eq(queries.status, "open"))),
-    db.select({ count: sql<number>`count(*)` }).from(breakdowns).where(and(eq(breakdowns.eventId, eventId), eq(breakdowns.approvalStatus, "pending"))),
-    db.select({ count: sql<number>`count(*)` }).from(serialDiscrepancies).where(and(eq(serialDiscrepancies.eventId, eventId), eq(serialDiscrepancies.status, "open"))),
+    db.select({ count: countInt() }).from(items).where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses))),
+    db.select({ count: countInt() }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), cwf)),
+    db.select({ count: countInt() }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, true), cwf)),
+    db.select({ count: countInt() }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf)),
+    db.select({ total: sumFloat(sql`abs(variance_value)`) }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf)),
+    db.select({ count: countInt(), total: sumFloat(sql`abs(variance_value)`) }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance > 0`, cwf)),
+    db.select({ count: countInt(), total: sumFloat(sql`abs(variance_value)`) }).from(counts).where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), eq(counts.isMatch, false), sql`variance < 0`, cwf)),
+    db.select({ count: countInt() }).from(queries).where(and(eq(queries.eventId, eventId), eq(queries.status, "open"))),
+    db.select({ count: countInt() }).from(breakdowns).where(and(eq(breakdowns.eventId, eventId), eq(breakdowns.approvalStatus, "pending"))),
+    db.select({ count: countInt() }).from(serialDiscrepancies).where(and(eq(serialDiscrepancies.eventId, eventId), eq(serialDiscrepancies.status, "open"))),
     db.select({
       teamName: teams.name,
       itemCode: items.itemCode,
@@ -71,8 +70,8 @@ export async function GET(
 
   const serialOverStats = await getSerialDiscrepancyOverStats(eventId, warehouses);
 
-  const total = Number(totalItemsRow?.count ?? 0);
-  const counted = Number(countedItemsRow?.count ?? 0);
+  const total = totalItemsRow?.count ?? 0;
+  const counted = countedItemsRow?.count ?? 0;
 
   // Per-team stats — batch with GROUP BY
   const teamIds = teamList.map((t) => t.id);
@@ -84,15 +83,15 @@ export async function GET(
 
   if (teamIds.length > 0) {
     const [tt, tc, tv, tl] = await Promise.all([
-      db.select({ teamId: items.teamId, count: sql<number>`count(*)` })
+      db.select({ teamId: items.teamId, count: countInt() })
         .from(items)
         .where(and(eq(items.eventId, eventId), inArray(items.teamId, teamIds), warehouseFilter(warehouses)))
         .groupBy(items.teamId),
-      db.select({ teamId: counts.teamId, count: sql<number>`count(*)` })
+      db.select({ teamId: counts.teamId, count: countInt() })
         .from(counts)
         .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), eq(counts.countType, "initial"), cwf))
         .groupBy(counts.teamId),
-      db.select({ teamId: counts.teamId, count: sql<number>`count(*)` })
+      db.select({ teamId: counts.teamId, count: countInt() })
         .from(counts)
         .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf))
         .groupBy(counts.teamId),
@@ -108,9 +107,9 @@ export async function GET(
   }
 
   const teamProgress = teamList.map((team) => {
-    const t = Number(teamTotalRows.find((r) => r.teamId === team.id)?.count ?? 0);
-    const c = Number(teamCountedRows.find((r) => r.teamId === team.id)?.count ?? 0);
-    const v = Number(teamVarianceRows.find((r) => r.teamId === team.id)?.count ?? 0);
+    const t = teamTotalRows.find((r) => r.teamId === team.id)?.count ?? 0;
+    const c = teamCountedRows.find((r) => r.teamId === team.id)?.count ?? 0;
+    const v = teamVarianceRows.find((r) => r.teamId === team.id)?.count ?? 0;
     const lastActivity = teamLastCountRows.find((r) => r.teamId === team.id)?.countedAt || null;
 
     return {
@@ -137,19 +136,19 @@ export async function GET(
     overall: {
       total,
       counted,
-      matched: Number(matchedItemsRow?.count ?? 0),
-      withVariance: Number(varianceItemsRow?.count ?? 0) + serialOverStats.overCount,
-      varianceValue: Number(varianceValueRow?.total ?? 0) + serialOverStats.overValue,
-      overCount: Number(overStats?.count ?? 0) + serialOverStats.overCount,
-      overValue: Number(overStats?.total ?? 0) + serialOverStats.overValue,
-      underCount: Number(underStats?.count ?? 0),
-      underValue: Number(underStats?.total ?? 0),
-      netVarianceValue: (Number(overStats?.total ?? 0) + serialOverStats.overValue) - Number(underStats?.total ?? 0),
+      matched: matchedItemsRow?.count ?? 0,
+      withVariance: (varianceItemsRow?.count ?? 0) + serialOverStats.overCount,
+      varianceValue: (varianceValueRow?.total ?? 0) + serialOverStats.overValue,
+      overCount: (overStats?.count ?? 0) + serialOverStats.overCount,
+      overValue: (overStats?.total ?? 0) + serialOverStats.overValue,
+      underCount: underStats?.count ?? 0,
+      underValue: underStats?.total ?? 0,
+      netVarianceValue: (overStats?.total ?? 0) + serialOverStats.overValue - (underStats?.total ?? 0),
       pending: total - counted,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
-      openQueries: Number(openQueriesRow?.count ?? 0),
-      pendingBreakdowns: Number(pendingBreakdownsRow?.count ?? 0),
-      openSerialDiscrepancies: Number(openSerialsRow?.count ?? 0),
+      openQueries: openQueriesRow?.count ?? 0,
+      pendingBreakdowns: pendingBreakdownsRow?.count ?? 0,
+      openSerialDiscrepancies: openSerialsRow?.count ?? 0,
     },
     teamProgress,
     recentActivity,

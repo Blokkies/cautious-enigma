@@ -5,6 +5,34 @@ import { eq, and } from "drizzle-orm";
 import { verifyPin, createToken, getTokenCookieOptions } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 
+// PIN logins: teams live in `teams`; supervisors and auditors share `supervisors`
+// and are told apart by `role`. Each account must belong to the chosen event.
+const PIN_LOGIN_TYPES = ["team", "supervisor", "auditor"] as const;
+type PinLoginType = (typeof PIN_LOGIN_TYPES)[number];
+
+function isPinLoginType(type: unknown): type is PinLoginType {
+  return PIN_LOGIN_TYPES.includes(type as PinLoginType);
+}
+
+async function findPinAccount(
+  type: PinLoginType,
+  id: number,
+  eventId: number
+): Promise<{ id: number; name: string; pinHash: string } | undefined> {
+  if (type === "team") {
+    const [team] = await db
+      .select({ id: teams.id, name: teams.name, pinHash: teams.pinHash })
+      .from(teams)
+      .where(and(eq(teams.id, id), eq(teams.eventId, eventId)));
+    return team;
+  }
+  const [supervisor] = await db
+    .select({ id: supervisors.id, name: supervisors.name, pinHash: supervisors.pinHash })
+    .from(supervisors)
+    .where(and(eq(supervisors.id, id), eq(supervisors.eventId, eventId), eq(supervisors.role, type)));
+  return supervisor;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Rate limit by IP: 10 attempts per minute
@@ -49,150 +77,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (type === "team") {
-      const [team] = await db
-        .select()
-        .from(teams)
-        .where(and(eq(teams.id, Number(id)), eq(teams.eventId, event.id)));
-
-      if (!team) {
-        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
-      }
-
-      const valid = await verifyPin(pin, team.pinHash);
-      if (!valid) {
-        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
-      }
-
-      const token = await createToken({
-        id: team.id,
-        type: "team",
-        name: team.name,
-        eventId: event.id,
-        eventName: event.name,
-        eventStatus: event.status,
-      });
-
-      const response = NextResponse.json({
-        success: true,
-        user: { id: team.id, type: "team", name: team.name, eventId: event.id, eventName: event.name, eventStatus: event.status },
-      });
-
-      response.cookies.set({
-        ...getTokenCookieOptions(),
-        value: token,
-      });
-
-      return response;
+    if (!isPinLoginType(type)) {
+      return NextResponse.json({ error: "Invalid login type" }, { status: 400 });
     }
 
-    if (type === "supervisor") {
-      const [supervisor] = await db
-        .select()
-        .from(supervisors)
-        .where(
-          and(
-            eq(supervisors.id, Number(id)),
-            eq(supervisors.eventId, event.id),
-            eq(supervisors.role, "supervisor")
-          )
-        );
-
-      if (!supervisor) {
-        return NextResponse.json(
-          { error: "Invalid credentials" },
-          { status: 401 }
-        );
-      }
-
-      const valid = await verifyPin(pin, supervisor.pinHash);
-      if (!valid) {
-        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
-      }
-
-      const token = await createToken({
-        id: supervisor.id,
-        type: "supervisor",
-        name: supervisor.name,
-        eventId: event.id,
-        eventName: event.name,
-        eventStatus: event.status,
-      });
-
-      const response = NextResponse.json({
-        success: true,
-        user: {
-          id: supervisor.id,
-          type: "supervisor",
-          name: supervisor.name,
-          eventId: event.id,
-          eventName: event.name,
-          eventStatus: event.status,
-        },
-      });
-
-      response.cookies.set({
-        ...getTokenCookieOptions(),
-        value: token,
-      });
-
-      return response;
+    const account = await findPinAccount(type, Number(id), event.id);
+    if (!account || !(await verifyPin(pin, account.pinHash))) {
+      return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }
 
-    if (type === "auditor") {
-      const [auditor] = await db
-        .select()
-        .from(supervisors)
-        .where(
-          and(
-            eq(supervisors.id, Number(id)),
-            eq(supervisors.eventId, event.id),
-            eq(supervisors.role, "auditor")
-          )
-        );
+    const user = {
+      id: account.id,
+      type,
+      name: account.name,
+      eventId: event.id,
+      eventName: event.name,
+      eventStatus: event.status,
+    };
+    const token = await createToken(user);
 
-      if (!auditor) {
-        return NextResponse.json(
-          { error: "Invalid credentials" },
-          { status: 401 }
-        );
-      }
-
-      const valid = await verifyPin(pin, auditor.pinHash);
-      if (!valid) {
-        return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
-      }
-
-      const token = await createToken({
-        id: auditor.id,
-        type: "auditor",
-        name: auditor.name,
-        eventId: event.id,
-        eventName: event.name,
-        eventStatus: event.status,
-      });
-
-      const response = NextResponse.json({
-        success: true,
-        user: {
-          id: auditor.id,
-          type: "auditor",
-          name: auditor.name,
-          eventId: event.id,
-          eventName: event.name,
-          eventStatus: event.status,
-        },
-      });
-
-      response.cookies.set({
-        ...getTokenCookieOptions(),
-        value: token,
-      });
-
-      return response;
-    }
-
-    return NextResponse.json({ error: "Invalid login type" }, { status: 400 });
+    const response = NextResponse.json({ success: true, user });
+    response.cookies.set({
+      ...getTokenCookieOptions(),
+      value: token,
+    });
+    return response;
   } catch (error) {
     console.error("Login error:", error);
     return NextResponse.json(

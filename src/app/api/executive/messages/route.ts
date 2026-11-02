@@ -2,13 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { execMessages, executives, admins, supervisors } from "@/lib/db/schema";
 import { eq, sql, inArray } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "executive" && user.type !== "admin")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["executive", "admin"], status: 401 });
+  if (auth.response) return auth.response;
 
   const { searchParams } = new URL(request.url);
   const supervisorId = searchParams.get("supervisorId");
@@ -75,10 +73,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "executive" && user.type !== "admin")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["executive", "admin"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const { supervisorId, message } = await request.json();

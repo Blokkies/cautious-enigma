@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, teams, supervisors, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
 import { eq, and, sql, isNull } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
+import { countInt } from "@/lib/db/aggregates";
+import { checkEventWritable } from "../event-guard";
 import { ACTIVATE_PUT_TARGETS, canActivate, checkActivatePutTransition } from "@/lib/event-status";
 
 // GET: Check readiness
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"] });
+  if (auth.response) return auth.response;
 
   const eventId = request.nextUrl.searchParams.get("eventId");
   if (!eventId) {
@@ -20,10 +20,10 @@ export async function GET(request: NextRequest) {
   const eid = Number(eventId);
 
   const [[itemCount], [teamCount], [supervisorCount], [unassignedCount]] = await Promise.all([
-    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(eq(items.eventId, eid)),
-    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(teams).where(eq(teams.eventId, eid)),
-    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(supervisors).where(eq(supervisors.eventId, eid)),
-    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(and(eq(items.eventId, eid), isNull(items.teamId))),
+    db.select({ count: countInt() }).from(items).where(eq(items.eventId, eid)),
+    db.select({ count: countInt() }).from(teams).where(eq(teams.eventId, eid)),
+    db.select({ count: countInt() }).from(supervisors).where(eq(supervisors.eventId, eid)),
+    db.select({ count: countInt() }).from(items).where(and(eq(items.eventId, eid), isNull(items.teamId))),
   ]);
 
   return NextResponse.json({
@@ -37,10 +37,8 @@ export async function GET(request: NextRequest) {
 
 // POST: Activate event
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { eventId } = await request.json();
@@ -80,10 +78,8 @@ export async function POST(request: NextRequest) {
 
 // PUT: Change status (complete/lock/setup) or reset stocktake
 export async function PUT(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { eventId, status, action } = await request.json();
@@ -91,6 +87,14 @@ export async function PUT(request: NextRequest) {
 
     // Full reset: delete all operational data but keep imported items and event
     if (action === "reset") {
+      // Reset deletes counts: never allowed on a completed/locked event.
+      const guardError = await checkEventWritable(eid, "admin", true);
+      if (guardError) {
+        return NextResponse.json(
+          { error: guardError },
+          { status: guardError === "Event not found" ? 404 : 403 }
+        );
+      }
       await db.transaction(async (tx) => {
         // Delete operational data in correct order (children first)
         await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
@@ -150,10 +154,8 @@ export async function PUT(request: NextRequest) {
 
 // DELETE: Delete an event and all associated data
 export async function DELETE(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { eventId } = await request.json();

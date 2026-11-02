@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 // Each db.select(...).from(...).where(...) resolves to the next queued result.
-const { selectResults, selectCalls } = vi.hoisted(() => ({
+const { selectResults, selectCalls, fromTables } = vi.hoisted(() => ({
   selectResults: [] as unknown[][],
   selectCalls: { count: 0 },
+  fromTables: [] as unknown[],
 }));
 
 vi.mock("@/lib/db", () => {
   const chain = {
-    from: () => chain,
+    from: (table: unknown) => {
+      fromTables.push(table);
+      return chain;
+    },
     where: () => {
       selectCalls.count++;
       return Promise.resolve(selectResults.shift() ?? []);
@@ -28,13 +32,19 @@ import {
   getSerialDiscrepancyOverStats,
   isRefOutsideWarehouses,
   pickItemRefs,
+  principalExists,
+  requireUser,
+  resolveEventId,
   warehouseFilter,
+  type ApiUser,
   type ItemRef,
 } from "./api-auth";
+import { admins, executives, supervisors, teams } from "@/lib/db/schema";
 
 beforeEach(() => {
   selectResults.length = 0;
   selectCalls.count = 0;
+  fromTables.length = 0;
 });
 
 function req(headers: Record<string, string>) {
@@ -281,5 +291,107 @@ describe("getEventWarehouses", () => {
   ])("rows %j → %j", async (rows, expected) => {
     selectResults.push(rows);
     expect(await getEventWarehouses(1)).toEqual(expected);
+  });
+});
+
+describe("principalExists", () => {
+  it.each([
+    ["admin", admins],
+    ["executive", executives],
+    ["supervisor", supervisors],
+    ["auditor", supervisors],
+    ["team", teams],
+  ] as const)("%s is looked up by primary key in its own table", async (type, table) => {
+    selectResults.push([{ id: 7 }]);
+    expect(await principalExists({ id: 7, type })).toBe(true);
+    expect(fromTables).toEqual([table]);
+    expect(selectCalls.count).toBe(1);
+  });
+
+  it("is false when the row is gone", async () => {
+    selectResults.push([]);
+    expect(await principalExists({ id: 7, type: "admin" })).toBe(false);
+  });
+
+  it.each([0, -1, Number.NaN, 1.5])("is false without a DB call for invalid id %s", async (id) => {
+    expect(await principalExists({ id, type: "admin" })).toBe(false);
+    expect(selectCalls.count).toBe(0);
+  });
+});
+
+describe("requireUser", () => {
+  const as = (type: string, extra: Record<string, string> = {}) =>
+    req({ ...validHeaders, "x-user-type": type, ...extra });
+
+  it("returns the user when the role is allowed and the principal exists", async () => {
+    selectResults.push([{ id: 7 }]);
+    const auth = await requireUser(as("supervisor"), { roles: ["supervisor"] });
+    expect(auth.response).toBeUndefined();
+    expect(auth.user).toEqual({ id: 7, type: "supervisor", name: "Alice", eventId: 3 });
+    expect(selectCalls.count).toBe(1);
+  });
+
+  it("defaults to 403 for missing identity and does not hit the DB", async () => {
+    const auth = await requireUser(req({}), { roles: ["admin"] });
+    expect(auth.response?.status).toBe(403);
+    expect(await auth.response?.json()).toEqual({ error: "Unauthorized" });
+    expect(selectCalls.count).toBe(0);
+  });
+
+  it.each([401, 403] as const)("uses status %i for a disallowed role", async (status) => {
+    const auth = await requireUser(as("team"), { roles: ["admin", "supervisor"], status });
+    expect(auth.response?.status).toBe(status);
+    expect(await auth.response?.json()).toEqual({ error: "Unauthorized" });
+    expect(selectCalls.count).toBe(0);
+  });
+
+  it.each(["auditor", "executive"])("write: rejects read-only role %s with 403", async (type) => {
+    const auth = await requireUser(as(type), { roles: ["supervisor", "auditor", "executive"], status: 401, write: true });
+    expect(auth.response?.status).toBe(403);
+    expect(await auth.response?.json()).toEqual({ error: "Read-only access" });
+    expect(selectCalls.count).toBe(0);
+  });
+
+  it("write: lets writable roles through", async () => {
+    selectResults.push([{ id: 7 }]);
+    const auth = await requireUser(as("supervisor"), { roles: ["supervisor", "auditor"], write: true });
+    expect(auth.user?.type).toBe("supervisor");
+  });
+
+  it("checks the role before the read-only rule", async () => {
+    const auth = await requireUser(as("auditor"), { roles: ["supervisor"], status: 401, write: true });
+    expect(auth.response?.status).toBe(401);
+  });
+
+  it("returns 401 and clears the session cookie when the principal was deleted", async () => {
+    selectResults.push([]);
+    const auth = await requireUser(as("admin", { "x-event-id": "0" }), { roles: ["admin"] });
+    expect(auth.response?.status).toBe(401);
+    expect(await auth.response?.json()).toEqual({ error: "Account no longer exists" });
+    const cookie = auth.response?.cookies.get("stocktake-token");
+    expect(cookie?.value).toBe("");
+    expect(cookie?.maxAge).toBe(0);
+  });
+});
+
+describe("resolveEventId", () => {
+  const user = (type: ApiUser["type"], eventId: number): ApiUser => ({ id: 1, type, name: "U", eventId });
+
+  it.each(["team", "supervisor", "auditor"] as const)("%s is pinned to the token event", (type) => {
+    expect(resolveEventId(user(type, 3), "99")).toBe(3);
+    expect(resolveEventId(user(type, 3), undefined)).toBe(3);
+  });
+
+  it.each(["admin", "executive"] as const)("%s picks the requested event", (type) => {
+    expect(resolveEventId(user(type, 0), "5")).toBe(5);
+    expect(resolveEventId(user(type, 0), 6)).toBe(6);
+  });
+
+  it.each(["admin", "executive"] as const)("%s without a usable request gets null (or its token event)", (type) => {
+    expect(resolveEventId(user(type, 0), null)).toBeNull();
+    expect(resolveEventId(user(type, 0), "")).toBeNull();
+    expect(resolveEventId(user(type, 0), "abc")).toBeNull();
+    expect(resolveEventId(user(type, 0), "0")).toBeNull();
+    expect(resolveEventId(user(type, 4), null)).toBe(4);
   });
 });

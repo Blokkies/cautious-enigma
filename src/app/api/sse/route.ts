@@ -2,23 +2,19 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { counts, items, teams, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { verifyToken } from "@/lib/token";
-import { getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
+import { countInt } from "@/lib/db/aggregates";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const token = request.cookies.get("stocktake-token")?.value;
-  if (!token) {
-    return new Response("Unauthorized", { status: 401 });
+  const auth = await requireUser(request, { roles: ["supervisor"], status: 401 });
+  if (auth.response) {
+    // SSE clients get a plain-text body (EventSource ignores it anyway).
+    return new Response("Unauthorized", { status: auth.response.status });
   }
 
-  const payload = await verifyToken(token);
-  if (!payload || payload.type !== "supervisor") {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  const eventId = payload.eventId;
+  const eventId = auth.user.eventId;
   let lastCheckTime = new Date().toISOString();
 
   const MAX_DURATION_MS = 30 * 60 * 1000; // 30 minutes max connection
@@ -116,17 +112,17 @@ export async function GET(request: NextRequest) {
 
           // Overall progress (only assigned items in the event's selected warehouses)
           const [totalItems] = await db
-            .select({ count: sql<number>`count(*)` })
+            .select({ count: countInt() })
             .from(items)
             .where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses)));
 
           const [totalCounted] = await db
-            .select({ count: sql<number>`count(*)` })
+            .select({ count: countInt() })
             .from(counts)
             .where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), cwf));
 
-          const total = Number(totalItems?.count ?? 0);
-          const counted = Number(totalCounted?.count ?? 0);
+          const total = totalItems?.count ?? 0;
+          const counted = totalCounted?.count ?? 0;
 
           sendEvent("progress", {
             total,

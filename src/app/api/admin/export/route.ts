@@ -3,13 +3,11 @@ import { db } from "@/lib/db";
 import { items, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import * as XLSX from "xlsx";
-import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { requireUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"] });
+  if (auth.response) return auth.response;
 
   const eventId = request.nextUrl.searchParams.get("eventId");
   if (!eventId) {

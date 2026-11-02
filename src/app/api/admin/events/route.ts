@@ -7,14 +7,13 @@ import {
   auditLog, serialDiscrepancies, execMessages,
 } from "@/lib/db/schema";
 import { eq, and, isNotNull, sql } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 import { EVENT_STATUSES as VALID_STATUSES, checkEventsPutTransition } from "@/lib/event-status";
+import { countInt } from "@/lib/db/aggregates";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"] });
+  if (auth.response) return auth.response;
 
   const events = await db
     .select()
@@ -22,10 +21,10 @@ export async function GET(request: NextRequest) {
 
   const enriched = await Promise.all(events.map(async (event) => {
     const [[totalItemCountRow], [assignedItemCountRow], [teamCountRow], [supervisorCountRow]] = await Promise.all([
-      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(eq(items.eventId, event.id)),
-      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(and(eq(items.eventId, event.id), isNotNull(items.teamId))),
-      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(teams).where(eq(teams.eventId, event.id)),
-      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(supervisors).where(eq(supervisors.eventId, event.id)),
+      db.select({ count: countInt() }).from(items).where(eq(items.eventId, event.id)),
+      db.select({ count: countInt() }).from(items).where(and(eq(items.eventId, event.id), isNotNull(items.teamId))),
+      db.select({ count: countInt() }).from(teams).where(eq(teams.eventId, event.id)),
+      db.select({ count: countInt() }).from(supervisors).where(eq(supervisors.eventId, event.id)),
     ]);
 
     return {
@@ -41,10 +40,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { name, location, startDate, endDate } = await request.json();
@@ -81,10 +78,8 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const body = await request.json();
@@ -147,10 +142,8 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { id } = await request.json();

@@ -2,18 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
-import { getApiUser, getEventWarehouses } from "@/lib/api-auth";
+import { requireUser, resolveEventId, getEventWarehouses } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "admin" && user.type !== "auditor" && user.type !== "executive")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "admin", "auditor", "executive"] });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   // Admins/executives have eventId=0 and must pass ?eventId (read-only route)
-  const eid = user.type === "admin" || (user.type === "executive" && !user.eventId)
-    ? Number(request.nextUrl.searchParams.get("eventId"))
-    : user.eventId;
+  const eid = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
 
   if (!eid) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });

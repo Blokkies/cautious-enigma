@@ -2,20 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { executives } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
-
-function getAdminUser(request: NextRequest) {
-  const id = request.headers.get("x-user-id");
-  const type = request.headers.get("x-user-type");
-  if (!id || type !== "admin") return null;
-  return { id: Number(id) };
-}
+import { eq } from "drizzle-orm";
+import { requireUser } from "@/lib/api-auth";
+import { countInt } from "@/lib/db/aggregates";
 
 export async function GET(request: NextRequest) {
-  const user = getAdminUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], status: 401 });
+  if (auth.response) return auth.response;
 
   const allExecs = await db
     .select({
@@ -29,10 +22,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = getAdminUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const { name, password } = await request.json();
@@ -62,10 +54,8 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const user = getAdminUser(request);
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], status: 401, write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { id } = await request.json();
@@ -76,7 +66,7 @@ export async function DELETE(request: NextRequest) {
 
     const result = await db.transaction(async (tx) => {
       const [count] = await tx
-        .select({ count: sql<number>`count(*)`.mapWith(Number) })
+        .select({ count: countInt() })
         .from(executives);
 
       if ((count?.count || 0) <= 1) {

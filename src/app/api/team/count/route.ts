@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, auditLog, verificationAssignments } from "@/lib/db/schema";
 import { eq, and, inArray, asc } from "drizzle-orm";
-import { getApiUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser, checkEventActive } from "@/lib/api-auth";
 
 /**
  * Use the client's countedAt (when the count was actually taken, possibly
@@ -34,10 +34,9 @@ function resolveComment(incoming: unknown, existing: string | null): string | nu
 }
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {
@@ -407,10 +406,9 @@ export async function POST(request: NextRequest) {
 
 // Batch sync endpoint
 export async function PUT(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {

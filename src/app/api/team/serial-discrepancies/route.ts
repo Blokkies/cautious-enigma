@@ -2,17 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { serialDiscrepancies, auditLog } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getApiUser, checkEventActive } from "@/lib/api-auth";
-
-function safeJsonParse<T>(json: string, fallback: T): T {
-  try { return JSON.parse(json) as T; } catch { return fallback; }
-}
+import { requireUser, checkEventActive } from "@/lib/api-auth";
+import { safeJsonParse } from "@/lib/utils";
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {
@@ -141,10 +137,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {

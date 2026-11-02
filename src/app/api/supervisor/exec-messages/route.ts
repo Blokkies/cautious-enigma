@@ -2,15 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { execMessages, executives, admins } from "@/lib/db/schema";
 import { eq, inArray } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
   // Executives have their own thread endpoint (/api/executive/messages); their ids
   // come from a different table, so filtering by supervisorId would leak another thread.
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "auditor"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const messages = await db
     .select()
@@ -48,10 +47,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "auditor"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const { message } = await request.json();

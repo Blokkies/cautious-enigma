@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 import { sql } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const { searchParams } = new URL(request.url);
   const lastSeenQueries = searchParams.get("lastSeenQueries") || "1970-01-01T00:00:00Z";

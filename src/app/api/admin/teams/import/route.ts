@@ -3,17 +3,16 @@ import { db } from "@/lib/db";
 import { teams } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 import { parseTeamExcel } from "@/lib/team-excel";
 import { checkEventWritable } from "../../event-guard";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const formData = await request.formData();

@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { queries, teams, items, queryMessages, supervisors, auditLog } from "@/lib/db/schema";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
-import { getApiUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser, checkEventActive } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor" && user.type !== "executive")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "auditor", "executive"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const allQueries = await db
     .select({
@@ -92,10 +91,9 @@ export async function GET(request: NextRequest) {
 
 // Respond to a query
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "supervisor") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {
@@ -183,10 +181,9 @@ export async function POST(request: NextRequest) {
 
 // Delete a query
 export async function DELETE(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "supervisor") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {

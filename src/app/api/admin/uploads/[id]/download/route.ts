@@ -2,17 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { uploads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 import { attachmentContentDisposition } from "@/lib/content-disposition";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"] });
+  if (auth.response) return auth.response;
 
   try {
     const { id } = await params;

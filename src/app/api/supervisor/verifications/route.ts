@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { counts, verificationAssignments, items, teams, auditLog } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
-import { getApiUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser, checkEventActive } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "supervisor") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {
@@ -142,10 +141,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor" && user.type !== "executive")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "auditor", "executive"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const statusFilter = request.nextUrl.searchParams.get("status") as
     | "pending"

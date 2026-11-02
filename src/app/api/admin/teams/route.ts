@@ -3,24 +3,16 @@ import { db } from "@/lib/db";
 import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
-import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { requireUser, resolveEventId, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 import { checkEventWritable } from "../event-guard";
-
-function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
-  const user = getApiUser(request);
-  if (!user) return null;
-  if (user.type === "admin") return clientEventId ? Number(clientEventId) : null;
-  if (user.type === "supervisor" || user.type === "auditor") return user.eventId;
-  return null;
-}
+import { countInt } from "@/lib/db/aggregates";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor" && user.type !== "auditor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor", "auditor"] });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
-  const eid = getAuthorizedEventId(request, request.nextUrl.searchParams.get("eventId"));
+  const eid = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
   if (!eid) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });
   }
@@ -34,7 +26,7 @@ export async function GET(request: NextRequest) {
 
   // Count assigned items per team in a single GROUP BY query
   const teamItemCounts = await db
-    .select({ teamId: items.teamId, count: sql<number>`count(*)`.mapWith(Number) })
+    .select({ teamId: items.teamId, count: countInt() })
     .from(items)
     .where(and(eq(items.eventId, eid), isNotNull(items.teamId), warehouseFilter(warehouses)))
     .groupBy(items.teamId);
@@ -66,15 +58,14 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const body = await request.json();
     const { type, name, members, pin, role } = body;
-    const eid = getAuthorizedEventId(request, body.eventId);
+    const eid = resolveEventId(user, body.eventId);
 
     if (!eid || !name || !pin) {
       return NextResponse.json(
@@ -134,10 +125,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const { id, name, members, pin } = await request.json();
@@ -185,10 +175,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const { id, type } = await request.json();

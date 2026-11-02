@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, verificationAssignments, serialDiscrepancies, teams } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { requireUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "team") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["team"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const warehouses = await getEventWarehouses(user.eventId);
 

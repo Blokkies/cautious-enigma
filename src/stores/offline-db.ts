@@ -36,6 +36,7 @@ export interface OfflineCount {
   verificationId?: number | null; // for verification counts
   eventId?: number; // prevent cross-session contamination
   teamId?: number; // prevent cross-session contamination
+  seq?: number; // monotonic local save order; breaks countedAt ties (absent on legacy rows)
 }
 
 /** The logged-in team session that owns offline records. */
@@ -62,6 +63,18 @@ export function isServiceWorkerOffline(res: Response): boolean {
   return res.headers.get("X-SW-Offline") === "1";
 }
 
+/**
+ * Oldest-first save order: by countedAt, then by local save sequence. Rows
+ * without a seq (legacy) sort before sequenced ones on a tie; Array.sort is
+ * stable, so remaining ties keep their input (clientId) order.
+ */
+export function compareCountsBySaveOrder(
+  a: Pick<OfflineCount, "countedAt" | "seq">,
+  b: Pick<OfflineCount, "countedAt" | "seq">
+): number {
+  return a.countedAt.localeCompare(b.countedAt) || (a.seq ?? 0) - (b.seq ?? 0);
+}
+
 // Records written before eventId/teamId were stored have no scope; they are
 // still synced (server validates team ownership) rather than silently dropped.
 function inScope(c: { eventId?: number; teamId?: number }, scope?: OfflineScope | null): boolean {
@@ -78,7 +91,10 @@ export interface OfflineSerialDiscrepancy {
   binInternalId: string | null;
   unknownSerials: string[];
   createdAt: string;
-  synced: number; // 0 = unsynced, 1 = synced
+  synced: number; // 0 = unsynced, 1 = synced, 2 = rejected by server
+  syncError?: string; // server rejection reason when synced = 2
+  eventId?: number; // prevent cross-session contamination (absent on legacy rows)
+  teamId?: number;
 }
 
 export interface SyncMeta {
@@ -119,6 +135,23 @@ class StocktakeOfflineDB extends Dexie {
       counts: "clientId, itemId, synced",
       serialDiscrepancies: "clientId, synced",
       meta: "key",
+    });
+
+    // v4: index counts.seq (monotonic local save order) for same-countedAt tie-breaks.
+    // Additive: existing rows get a seq in their current (countedAt, clientId) order,
+    // so pre-upgrade tie-breaking is preserved.
+    this.version(4).stores({
+      items: "id, binNumber, itemCode, brand",
+      counts: "clientId, itemId, synced, seq",
+      serialDiscrepancies: "clientId, synced",
+      meta: "key",
+    }).upgrade(async (tx) => {
+      const rows = (await tx.table("counts").toArray()) as OfflineCount[];
+      rows.sort(compareCountsBySaveOrder);
+      let seq = 0;
+      for (const row of rows) {
+        await tx.table("counts").update(row.clientId, { seq: ++seq });
+      }
     });
   }
 }
@@ -175,8 +208,13 @@ export async function preloadItems(): Promise<number> {
 }
 
 // ─── Save a count locally ───────────────────────────────────────────────────
-export async function saveCountLocally(count: Omit<OfflineCount, "synced">): Promise<void> {
-  await offlineDb.counts.put({ ...count, synced: SYNCED_PENDING });
+export async function saveCountLocally(count: Omit<OfflineCount, "synced" | "seq">): Promise<void> {
+  // Allocate the next save sequence inside the write transaction so it stays
+  // monotonic even across tabs.
+  await offlineDb.transaction("rw", offlineDb.counts, async () => {
+    const last = await offlineDb.counts.orderBy("seq").last();
+    await offlineDb.counts.put({ ...count, synced: SYNCED_PENDING, seq: (last?.seq ?? 0) + 1 });
+  });
 
   // Update the local item record
   const localItem = await offlineDb.items.get(count.itemId);
@@ -212,7 +250,7 @@ export async function getUnsyncedCounts(scope?: OfflineScope | null): Promise<Of
     .equals(SYNCED_PENDING)
     .filter((c) => inScope(c, scope))
     .toArray();
-  return rows.sort((a, b) => a.countedAt.localeCompare(b.countedAt));
+  return rows.sort(compareCountsBySaveOrder);
 }
 
 // ─── Mark counts as synced ──────────────────────────────────────────────────
@@ -225,15 +263,46 @@ export async function markSynced(clientIds: string[]): Promise<void> {
 }
 
 // ─── Save a serial discrepancy locally ──────────────────────────────────────
+// Pass the session scope so the record is only ever synced by the team that
+// created it. Without a complete scope it is stored unscoped (legacy behaviour:
+// any session may sync it).
 export async function saveDiscrepancyLocally(
-  discrepancy: Omit<OfflineSerialDiscrepancy, "synced">
+  discrepancy: Omit<OfflineSerialDiscrepancy, "synced" | "syncError" | "eventId" | "teamId">,
+  scope?: Partial<OfflineScope> | null
 ): Promise<void> {
-  await offlineDb.serialDiscrepancies.put({ ...discrepancy, synced: 0 });
+  const record: OfflineSerialDiscrepancy = { ...discrepancy, synced: SYNCED_PENDING };
+  if (scope?.eventId !== undefined && scope?.teamId !== undefined) {
+    record.eventId = scope.eventId;
+    record.teamId = scope.teamId;
+  }
+  await offlineDb.serialDiscrepancies.put(record);
+}
+
+// ─── Get unsynced serial discrepancies (scoped to the current session) ──────
+export async function getUnsyncedDiscrepancies(
+  scope?: OfflineScope | null
+): Promise<OfflineSerialDiscrepancy[]> {
+  return offlineDb.serialDiscrepancies
+    .where("synced")
+    .equals(SYNCED_PENDING)
+    .filter((d) => inScope(d, scope))
+    .toArray();
 }
 
 // ─── Mark a single discrepancy as synced ────────────────────────────────────
 export async function markDiscrepancySynced(clientId: string): Promise<void> {
-  await offlineDb.serialDiscrepancies.update(clientId, { synced: 1 });
+  await offlineDb.serialDiscrepancies.update(clientId, { synced: SYNCED_DONE });
+}
+
+/** Server-provided error message for a rejected batch, or a generic reason. */
+async function rejectionReason(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (data && typeof data.error === "string" && data.error) return data.error;
+  } catch {
+    // non-JSON body
+  }
+  return `Rejected by server (HTTP ${res.status})`;
 }
 
 // ─── Sync queue - push unsynced counts to server ────────────────────────────
@@ -323,6 +392,14 @@ export async function syncToServer(scope?: OfflineScope | null): Promise<{
         authExpired = true;
         return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
+        // A definitive whole-batch rejection (e.g. 400/403) will never succeed on
+        // retry: mark the batch rejected instead of resending it forever.
+        if (isDefinitiveRejection(res.status)) {
+          await markCountsRejected(
+            [...normalCounts, ...verificationCounts].map((c) => c.clientId),
+            await rejectionReason(res)
+          );
+        }
         totalFailed += normalCounts.length + verificationCounts.length;
       }
     } catch {
@@ -331,10 +408,7 @@ export async function syncToServer(scope?: OfflineScope | null): Promise<{
   }
 
   // ── Sync serial discrepancies (single batch POST) ──
-  const unsyncedDisc = await offlineDb.serialDiscrepancies
-    .where("synced")
-    .equals(0)
-    .toArray();
+  const unsyncedDisc = await getUnsyncedDiscrepancies(scope);
 
   if (unsyncedDisc.length > 0) {
     try {
@@ -373,6 +447,13 @@ export async function syncToServer(scope?: OfflineScope | null): Promise<{
         authExpired = true;
         return { synced: totalSynced, failed: totalFailed, authExpired };
       } else {
+        if (isDefinitiveRejection(res.status)) {
+          const syncError = await rejectionReason(res);
+          await offlineDb.serialDiscrepancies
+            .where("clientId")
+            .anyOf(unsyncedDisc.map((d) => d.clientId))
+            .modify({ synced: SYNCED_REJECTED, syncError });
+        }
         totalFailed += unsyncedDisc.length;
       }
     } catch {
@@ -395,7 +476,11 @@ export async function getPendingSyncCount(scope?: OfflineScope | null): Promise<
     .equals(SYNCED_PENDING)
     .filter((c) => inScope(c, scope))
     .count();
-  const pendingDisc = await offlineDb.serialDiscrepancies.where("synced").equals(0).count();
+  const pendingDisc = await offlineDb.serialDiscrepancies
+    .where("synced")
+    .equals(SYNCED_PENDING)
+    .filter((d) => inScope(d, scope))
+    .count();
   return pendingCounts + pendingDisc;
 }
 
@@ -405,7 +490,9 @@ export async function clearSessionOfflineData(scope: OfflineScope): Promise<void
   await offlineDb.counts
     .filter((c) => inScope(c, scope) && c.synced !== SYNCED_PENDING)
     .delete();
-  await offlineDb.serialDiscrepancies.where("synced").equals(1).delete();
+  await offlineDb.serialDiscrepancies
+    .filter((d) => inScope(d, scope) && d.synced !== SYNCED_PENDING)
+    .delete();
   await offlineDb.items.clear();
   await offlineDb.meta.clear();
 }

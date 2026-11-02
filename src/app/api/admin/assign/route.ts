@@ -2,25 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, teams } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { getEventWarehouses, getApiUser } from "@/lib/api-auth";
+import { getEventWarehouses, requireUser, resolveEventId } from "@/lib/api-auth";
 import { checkEventWritable } from "../event-guard";
-
-function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
-  const user = getApiUser(request);
-  if (!user) return null;
-  if (user.type === "admin") return clientEventId ? Number(clientEventId) : null;
-  if (user.type === "supervisor" || user.type === "auditor") return user.eventId;
-  return null;
-}
 
 // GET: Get assignment overview - unassigned bins and per-team bin breakdown
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor" && user.type !== "auditor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor", "auditor"] });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
-  const eid = getAuthorizedEventId(request, request.nextUrl.searchParams.get("eventId"));
+  const eid = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
   if (!eid) {
     return NextResponse.json({ error: "eventId required" }, { status: 400 });
   }
@@ -147,14 +138,13 @@ export async function GET(request: NextRequest) {
 
 // POST: Assign bins to a team or auto-balance
 export async function POST(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const body = await request.json();
-    const eid = getAuthorizedEventId(request, body.eventId);
+    const eid = resolveEventId(user, body.eventId);
 
     if (!eid) {
       return NextResponse.json({ error: "eventId required" }, { status: 400 });
@@ -235,14 +225,13 @@ export async function POST(request: NextRequest) {
 
 // DELETE: Unassign items - either specific bins or all items from a team
 export async function DELETE(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const body = await request.json();
-    const eid = getAuthorizedEventId(request, body.eventId);
+    const eid = resolveEventId(user, body.eventId);
     const { teamId, bins, clearCounts } = body;
 
     if (!eid || !teamId) {
@@ -323,14 +312,13 @@ export async function DELETE(request: NextRequest) {
 
 // PATCH: Re-assign uncounted bins from one team to another
 export async function PATCH(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "admin" && user.type !== "supervisor")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   try {
     const body = await request.json();
-    const eid = getAuthorizedEventId(request, body.eventId);
+    const eid = resolveEventId(user, body.eventId);
     const { fromTeamId, toTeamId, bins, clearCounts } = body;
 
     if (!eid || !fromTeamId || !toTeamId || !bins || !Array.isArray(bins) || bins.length === 0) {

@@ -2,19 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull, inArray } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter, checkEventActive } from "@/lib/api-auth";
+import { requireUser, resolveEventId, getEventWarehouses, warehouseFilter, checkEventActive } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor" && user.type !== "executive")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor", "auditor", "executive"], status: 401 });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
-  let eventId = user.eventId;
-  if (user.type === "executive" && user.eventId === 0) {
-    const paramEventId = request.nextUrl.searchParams.get("eventId");
-    if (paramEventId) eventId = Number(paramEventId);
-  }
+  const eventId = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
   if (!eventId) {
     return NextResponse.json({ error: "eventId is required" }, { status: 400 });
   }
@@ -66,10 +61,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "supervisor") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireUser(request, { roles: ["supervisor"], status: 401, write: true });
+  if (auth.response) return auth.response;
+  const { user } = auth;
 
   const lockError = await checkEventActive(user.eventId);
   if (lockError) {

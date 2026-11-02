@@ -6,8 +6,10 @@ import {
   SYNCED_REJECTED,
   clearOfflineData,
   clearSessionOfflineData,
+  compareCountsBySaveOrder,
   getPendingSyncCount,
   getUnsyncedCounts,
+  getUnsyncedDiscrepancies,
   isDefinitiveRejection,
   isServiceWorkerOffline,
   markCountsRejected,
@@ -59,6 +61,18 @@ function item(id: number, overrides: Partial<OfflineItem> = {}): OfflineItem {
     comment: "server comment",
     countedAt: null,
     ...overrides,
+  };
+}
+
+function disc(clientId: string) {
+  return {
+    clientId,
+    itemCode: "X",
+    description: null,
+    binNumber: null,
+    binInternalId: null,
+    unknownSerials: ["S"],
+    createdAt: "2026-01-01T00:00:00.000Z",
   };
 }
 
@@ -131,18 +145,12 @@ describe("getUnsyncedCounts / getPendingSyncCount scope filtering", () => {
     expect(rows.map((r) => r.clientId)).not.toContain("c-half");
   });
 
-  it("counts pending counts in scope plus ALL pending discrepancies", async () => {
-    await saveDiscrepancyLocally({
-      clientId: "d1",
-      itemCode: "X",
-      description: null,
-      binNumber: null,
-      binInternalId: null,
-      unknownSerials: ["S"],
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    expect(await getPendingSyncCount(SCOPE)).toBe(3 + 1);
-    expect(await getPendingSyncCount()).toBe(4 + 1);
+  it("counts pending counts and discrepancies in scope (plus legacy unscoped ones)", async () => {
+    await saveDiscrepancyLocally(disc("d-mine"), SCOPE);
+    await saveDiscrepancyLocally(disc("d-other"), OTHER);
+    await saveDiscrepancyLocally(disc("d-legacy"));
+    expect(await getPendingSyncCount(SCOPE)).toBe(3 + 2);
+    expect(await getPendingSyncCount()).toBe(4 + 3);
   });
 });
 
@@ -218,9 +226,17 @@ describe("syncToServer", () => {
     expect(result).toEqual({ synced: 2, failed: 0, authExpired: false });
   });
 
-  it("breaks countedAt ties by clientId order, not insertion order", async () => {
-    // Pending rows come back from the 'synced' index in primary-key (clientId) order and
-    // the sort is stable, so with identical timestamps the larger clientId wins.
+  it("breaks countedAt ties by save order: the count saved last wins", async () => {
+    const at = "2026-01-01T10:00:00.000Z";
+    await saveCountLocally({ clientId: "zzz", itemId: 1, countedQty: 1, isMatch: false, countedAt: at, ...SCOPE });
+    await saveCountLocally({ clientId: "aaa", itemId: 1, countedQty: 2, isMatch: false, countedAt: at, ...SCOPE });
+    fetchMock.mockResolvedValue(jsonResponse({ results: [{ success: true }] }));
+    await syncToServer(SCOPE);
+    expect(sentBody().counts.map((c: { clientId: string }) => c.clientId)).toEqual(["aaa"]);
+    expect(await syncedState("zzz")).toBe(SYNCED_DONE); // superseded
+  });
+
+  it("legacy rows without a save sequence still tie-break by clientId order", async () => {
     await offlineDb.counts.bulkPut([
       count("zzz", { countedQty: 1, countedAt: "2026-01-01T10:00:00.000Z" }),
       count("aaa", { countedQty: 2, countedAt: "2026-01-01T10:00:00.000Z" }),
@@ -290,11 +306,35 @@ describe("syncToServer", () => {
     expect(await syncedState("c1")).toBe(SYNCED_PENDING);
   });
 
-  it("keeps counts pending even on a whole-batch 4xx (isDefinitiveRejection is not applied here)", async () => {
-    // NOTE: unlike the online count path in the team count page, a batch-level 400/403
-    // is retried on every sync rather than marked rejected.
+  it.each([400, 403])("marks the whole batch rejected on a definitive %i", async (status) => {
+    await offlineDb.counts.bulkPut([
+      count("c1", { itemId: 1 }),
+      count("v1", { itemId: 2, verificationId: 5 }),
+    ]);
+    fetchMock.mockResolvedValue(jsonResponse({ error: "Event locked" }, status));
+    expect(await syncToServer(SCOPE)).toEqual({ synced: 0, failed: 2, authExpired: false });
+    expect(await offlineDb.counts.get("c1")).toMatchObject({ synced: SYNCED_REJECTED, syncError: "Event locked" });
+    expect(await offlineDb.counts.get("v1")).toMatchObject({ synced: SYNCED_REJECTED, syncError: "Event locked" });
+
+    // Never resent
+    fetchMock.mockClear();
+    await syncToServer(SCOPE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses a generic reason when a rejected batch has no JSON error", async () => {
     await offlineDb.counts.put(count("c1"));
-    fetchMock.mockResolvedValue(jsonResponse({ error: "bad" }, 400));
+    fetchMock.mockResolvedValue(new Response("nope", { status: 400 }));
+    await syncToServer(SCOPE);
+    expect(await offlineDb.counts.get("c1")).toMatchObject({
+      synced: SYNCED_REJECTED,
+      syncError: "Rejected by server (HTTP 400)",
+    });
+  });
+
+  it.each([408, 429])("keeps counts pending on a retryable %i", async (status) => {
+    await offlineDb.counts.put(count("c1"));
+    fetchMock.mockResolvedValue(jsonResponse({ error: "later" }, status));
     expect(await syncToServer(SCOPE)).toEqual({ synced: 0, failed: 1, authExpired: false });
     expect(await syncedState("c1")).toBe(SYNCED_PENDING);
   });
@@ -333,6 +373,65 @@ describe("syncToServer", () => {
     expect((await offlineDb.serialDiscrepancies.get("d2"))?.synced).toBe(0);
     expect(result).toEqual({ synced: 1, failed: 1, authExpired: false });
   });
+
+  it("only sends serial discrepancies in scope (plus legacy unscoped)", async () => {
+    await saveDiscrepancyLocally(disc("d-mine"), SCOPE);
+    await saveDiscrepancyLocally(disc("d-other"), OTHER);
+    await saveDiscrepancyLocally(disc("d-legacy"));
+    fetchMock.mockResolvedValue(jsonResponse({ results: [{ success: true }, { success: true }] }));
+
+    await syncToServer(SCOPE);
+    const sent = sentBody().batch.map((d: { clientId: string }) => d.clientId).sort();
+    expect(sent).toEqual(["d-legacy", "d-mine"]);
+    expect(sentBody().batch[0]).not.toHaveProperty("eventId");
+    expect((await offlineDb.serialDiscrepancies.get("d-other"))?.synced).toBe(SYNCED_PENDING);
+  });
+
+  it("marks a discrepancy batch rejected on a definitive 4xx", async () => {
+    await saveDiscrepancyLocally(disc("d1"), SCOPE);
+    fetchMock.mockResolvedValue(jsonResponse({ error: "Event locked" }, 403));
+    expect(await syncToServer(SCOPE)).toEqual({ synced: 0, failed: 1, authExpired: false });
+    expect(await offlineDb.serialDiscrepancies.get("d1")).toMatchObject({
+      synced: SYNCED_REJECTED,
+      syncError: "Event locked",
+    });
+    expect(await getPendingSyncCount(SCOPE)).toBe(0);
+  });
+});
+
+describe("saveDiscrepancyLocally", () => {
+  it("stores the session scope when given a complete one", async () => {
+    await saveDiscrepancyLocally(disc("d1"), SCOPE);
+    expect(await offlineDb.serialDiscrepancies.get("d1")).toMatchObject({ synced: SYNCED_PENDING, ...SCOPE });
+  });
+
+  it.each([undefined, null, { eventId: 1 }, { teamId: 10 }])("stores an unscoped record for scope %j", async (scope) => {
+    await saveDiscrepancyLocally(disc("d1"), scope);
+    const row = await offlineDb.serialDiscrepancies.get("d1");
+    expect(row?.eventId).toBeUndefined();
+    expect(row?.teamId).toBeUndefined();
+    expect(await getUnsyncedDiscrepancies(SCOPE)).toHaveLength(1); // legacy: any session syncs it
+  });
+});
+
+describe("compareCountsBySaveOrder / save sequence", () => {
+  it("orders by countedAt, then seq, with unsequenced rows first on a tie", () => {
+    const rows = [
+      { id: "b", countedAt: "t1", seq: 2 },
+      { id: "late", countedAt: "t2", seq: 1 },
+      { id: "a", countedAt: "t1", seq: 1 },
+      { id: "legacy", countedAt: "t1" },
+    ];
+    expect(rows.sort(compareCountsBySaveOrder).map((r) => r.id)).toEqual(["legacy", "a", "b", "late"]);
+  });
+
+  it("assigns a strictly increasing seq to each local save", async () => {
+    for (const id of ["c", "a", "b"]) {
+      await saveCountLocally({ clientId: id, itemId: 1, countedQty: 1, isMatch: true, countedAt: "t", ...SCOPE });
+    }
+    const seqs = await Promise.all(["c", "a", "b"].map(async (id) => (await offlineDb.counts.get(id))?.seq));
+    expect(seqs).toEqual([1, 2, 3]);
+  });
 });
 
 describe("clearSessionOfflineData", () => {
@@ -346,8 +445,15 @@ describe("clearSessionOfflineData", () => {
     ]);
     await offlineDb.items.put(item(1));
     await offlineDb.meta.put({ key: "lastSync", value: "x" });
+    await saveDiscrepancyLocally(disc("d-pending"), SCOPE);
+    await saveDiscrepancyLocally(disc("d-done"), SCOPE);
+    await saveDiscrepancyLocally(disc("d-other-done"), OTHER);
+    await offlineDb.serialDiscrepancies.where("clientId").anyOf(["d-done", "d-other-done"]).modify({ synced: SYNCED_DONE });
 
     await clearSessionOfflineData(SCOPE);
+
+    const remainingDisc = (await offlineDb.serialDiscrepancies.toArray()).map((d) => d.clientId).sort();
+    expect(remainingDisc).toEqual(["d-other-done", "d-pending"]);
 
     const remaining = (await offlineDb.counts.toArray()).map((c) => c.clientId).sort();
     expect(remaining).toEqual(["other-done", "pending"]);

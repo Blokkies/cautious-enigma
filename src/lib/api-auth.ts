@@ -1,6 +1,15 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, counts, serialDiscrepancies } from "@/lib/db/schema";
+import {
+  stocktakeEvents,
+  items,
+  counts,
+  serialDiscrepancies,
+  admins,
+  executives,
+  supervisors,
+  teams,
+} from "@/lib/db/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { safeJsonParse } from "@/lib/utils";
 
@@ -37,6 +46,96 @@ export function getApiUser(request: NextRequest): ApiUser | null {
     name: safeDecode(name),
     eventId: Number(eventId),
   };
+}
+
+export type UserRole = ApiUser["type"];
+
+export interface RequireUserOptions {
+  /** Roles allowed on this handler. */
+  roles: readonly UserRole[];
+  /**
+   * Status returned when identity headers are missing or the role is not allowed.
+   * Handlers historically use either 401 or 403; default 403.
+   */
+  status?: 401 | 403;
+  /** Mutating handler: auditors and executives (read-only roles) get 403. */
+  write?: boolean;
+}
+
+export type RequireUserResult =
+  | { user: ApiUser; response?: undefined }
+  | { user?: undefined; response: NextResponse };
+
+/** Read-only roles: may view but never mutate. */
+export const READ_ONLY_ROLES: readonly UserRole[] = ["auditor", "executive"];
+
+/** Does the principal behind this token still exist? One primary-key lookup. */
+export async function principalExists(user: Pick<ApiUser, "id" | "type">): Promise<boolean> {
+  if (!Number.isInteger(user.id) || user.id <= 0) return false;
+  let rows: { id: number }[];
+  switch (user.type) {
+    case "admin":
+      rows = await db.select({ id: admins.id }).from(admins).where(eq(admins.id, user.id));
+      break;
+    case "executive":
+      rows = await db.select({ id: executives.id }).from(executives).where(eq(executives.id, user.id));
+      break;
+    case "supervisor":
+    case "auditor":
+      rows = await db.select({ id: supervisors.id }).from(supervisors).where(eq(supervisors.id, user.id));
+      break;
+    case "team":
+      rows = await db.select({ id: teams.id }).from(teams).where(eq(teams.id, user.id));
+      break;
+    default:
+      return false;
+  }
+  return rows.length > 0;
+}
+
+/**
+ * Authenticate and authorize a route handler.
+ * Order: identity headers + role (opts.status) -> read-only check (403) ->
+ * principal still exists in the DB (401, clears the session cookie).
+ *
+ * Usage:
+ *   const auth = await requireUser(request, { roles: ["admin"] });
+ *   if (auth.response) return auth.response;
+ *   const { user } = auth;
+ */
+export async function requireUser(
+  request: NextRequest,
+  opts: RequireUserOptions
+): Promise<RequireUserResult> {
+  const user = getApiUser(request);
+  if (!user || !opts.roles.includes(user.type)) {
+    return { response: NextResponse.json({ error: "Unauthorized" }, { status: opts.status ?? 403 }) };
+  }
+  if (opts.write && READ_ONLY_ROLES.includes(user.type)) {
+    return { response: NextResponse.json({ error: "Read-only access" }, { status: 403 }) };
+  }
+  if (!(await principalExists(user))) {
+    const response = NextResponse.json({ error: "Account no longer exists" }, { status: 401 });
+    response.cookies.set({ name: "stocktake-token", value: "", maxAge: 0, path: "/" });
+    return { response };
+  }
+  return { user };
+}
+
+/**
+ * Resolve the event a request operates on.
+ * Admins and executives log in with eventId 0 and pick an event per request
+ * (`requested`, from ?eventId or the body); everyone else is pinned to the
+ * event in their token. Returns null when no usable event id is available.
+ */
+export function resolveEventId(user: ApiUser, requested?: unknown): number | null {
+  if (user.type === "admin" || user.type === "executive") {
+    if (requested !== undefined && requested !== null && requested !== "") {
+      return Number(requested) || null;
+    }
+    return user.eventId || null;
+  }
+  return user.eventId;
 }
 
 /**

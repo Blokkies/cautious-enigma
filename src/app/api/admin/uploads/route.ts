@@ -2,14 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { uploads, stocktakeEvents } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
-import { getApiUser } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
 
 // GET: List all uploads with linked events
 export async function GET(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"] });
+  if (auth.response) return auth.response;
 
   try {
     // Get all uploads (without file_data to keep response small)
@@ -50,10 +48,8 @@ export async function GET(request: NextRequest) {
 
 // DELETE: Delete an upload by id (only if no events reference it)
 export async function DELETE(request: NextRequest) {
-  const user = getApiUser(request);
-  if (!user || user.type !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-  }
+  const auth = await requireUser(request, { roles: ["admin"], write: true });
+  if (auth.response) return auth.response;
 
   try {
     const { id } = await request.json();

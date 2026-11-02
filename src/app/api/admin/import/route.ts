@@ -5,6 +5,15 @@ import { eq, sql } from "drizzle-orm";
 import { parseExcel } from "@/lib/excel";
 import { getApiUser } from "@/lib/api-auth";
 
+// Number of counts already recorded for an event (imports wipe them).
+async function existingCountCount(eventId: number): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)`.mapWith(Number) })
+    .from(counts)
+    .where(eq(counts.eventId, eventId));
+  return Number(row?.count || 0);
+}
+
 // GET: List events that have imported items (for "copy from" feature)
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -24,7 +33,7 @@ export async function GET(request: NextRequest) {
     const eventsWithItems = await Promise.all(
       allEvents.map(async (event) => {
         const [countRow] = await db
-          .select({ count: sql<number>`count(*)` })
+          .select({ count: sql<number>`count(*)`.mapWith(Number) })
           .from(items)
           .where(eq(items.eventId, event.id));
         return { ...event, itemCount: Number(countRow?.count || 0) };
@@ -49,7 +58,7 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { sourceEventId, targetEventId } = body;
+    const { sourceEventId, targetEventId, confirm } = body;
 
     if (!sourceEventId || !targetEventId) {
       return NextResponse.json({ error: "sourceEventId and targetEventId required" }, { status: 400 });
@@ -59,6 +68,14 @@ export async function PUT(request: NextRequest) {
     const [targetEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, Number(targetEventId)));
     if (!targetEvent) return NextResponse.json({ error: "Target event not found" }, { status: 404 });
     if (targetEvent.status !== "setup") return NextResponse.json({ error: "Can only import during setup phase" }, { status: 400 });
+
+    const existingCounts = await existingCountCount(Number(targetEventId));
+    if (existingCounts > 0 && confirm !== true) {
+      return NextResponse.json(
+        { error: `This event already has ${existingCounts} recorded counts. Importing will permanently delete them.`, existingCounts, requiresConfirm: true },
+        { status: 409 }
+      );
+    }
 
     // Verify source event exists and has items
     const [sourceEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, Number(sourceEventId)));
@@ -70,7 +87,7 @@ export async function PUT(request: NextRequest) {
 
     // Clear existing items and all dependent records, then copy items — all in one transaction
     const eid = Number(targetEventId);
-    await db.transaction(async (tx) => {
+    const warehouses = await db.transaction(async (tx) => {
       await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
       await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
       await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
@@ -109,36 +126,37 @@ export async function PUT(request: NextRequest) {
           }))
         );
       }
+
+      // Copy warehouse config from source
+      const warehouseRows = await tx
+        .select({ warehouse: items.warehouse })
+        .from(items)
+        .where(eq(items.eventId, eid))
+        .groupBy(items.warehouse);
+
+      const whs = warehouseRows
+        .map((r) => r.warehouse)
+        .filter((w): w is string => !!w && w.trim().length > 0)
+        .sort();
+
+      // Link same upload file if source event has one
+      if (sourceEvent.uploadId) {
+        await tx.update(stocktakeEvents)
+          .set({ warehouses: JSON.stringify(whs), uploadId: sourceEvent.uploadId })
+          .where(eq(stocktakeEvents.id, eid));
+      } else {
+        await tx.update(stocktakeEvents)
+          .set({ warehouses: JSON.stringify(whs) })
+          .where(eq(stocktakeEvents.id, eid));
+      }
+      return whs;
     });
 
-    // Copy warehouse config from source
-    const warehouseRows = await db
-      .select({ warehouse: items.warehouse })
-      .from(items)
-      .where(eq(items.eventId, Number(targetEventId)))
-      .groupBy(items.warehouse);
-
-    const warehouses = warehouseRows
-      .map((r) => r.warehouse)
-      .filter((w): w is string => !!w && w.trim().length > 0)
-      .sort();
-
-    // Link same upload file if source event has one
-    if (sourceEvent.uploadId) {
-      await db.update(stocktakeEvents)
-        .set({ warehouses: JSON.stringify(warehouses), uploadId: sourceEvent.uploadId })
-        .where(eq(stocktakeEvents.id, Number(targetEventId)));
-    } else {
-      await db.update(stocktakeEvents)
-        .set({ warehouses: JSON.stringify(warehouses) })
-        .where(eq(stocktakeEvents.id, Number(targetEventId)));
-    }
-
     // Summary stats
-    const [totalImported] = await db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
-    const [uniqueBins] = await db.select({ count: sql<number>`count(DISTINCT bin_number)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
-    const [uniqueBrands] = await db.select({ count: sql<number>`count(DISTINCT brand)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
-    const [totalValue] = await db.select({ total: sql<number>`sum(total_value)` }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [totalImported] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [uniqueBins] = await db.select({ count: sql<number>`count(DISTINCT bin_number)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [uniqueBrands] = await db.select({ count: sql<number>`count(DISTINCT brand)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
+    const [totalValue] = await db.select({ total: sql<number>`sum(total_value)`.mapWith(Number) }).from(items).where(eq(items.eventId, Number(targetEventId)));
 
     return NextResponse.json({
       success: true,
@@ -166,6 +184,7 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get("file") as File;
     const eventId = formData.get("eventId") as string;
+    const confirm = formData.get("confirm") === "true";
 
     if (!file || !eventId) {
       return NextResponse.json(
@@ -202,6 +221,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const existingCounts = await existingCountCount(Number(eventId));
+    if (existingCounts > 0 && !confirm) {
+      return NextResponse.json(
+        { error: `This event already has ${existingCounts} recorded counts. Importing will permanently delete them.`, existingCounts, requiresConfirm: true },
+        { status: 409 }
+      );
+    }
+
     const buffer = await file.arrayBuffer();
     const parsed = parseExcel(buffer);
 
@@ -219,7 +246,8 @@ export async function POST(request: NextRequest) {
 
     // Clear existing items and all dependent records, then insert — all in one transaction
     const eid = Number(eventId);
-    await db.transaction(async (tx) => {
+    const fileBase64 = Buffer.from(buffer).toString("base64");
+    const { upload, warehouses } = await db.transaction(async (tx) => {
       await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
       await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
       await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
@@ -258,54 +286,55 @@ export async function POST(request: NextRequest) {
             }))
           );
       }
-    });
 
-    // Store uploaded file in database
-    const fileBase64 = Buffer.from(buffer).toString("base64");
-    const [upload] = await db.insert(uploads).values({
-      filename: file.name,
-      fileSize: file.size,
-      fileData: fileBase64,
-      mimeType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      uploadedBy: user.id ? Number(user.id) : null,
-    }).returning({ id: uploads.id });
+      // Store uploaded file in database
+      const [up] = await tx.insert(uploads).values({
+        filename: file.name,
+        fileSize: file.size,
+        fileData: fileBase64,
+        mimeType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        uploadedBy: user.id ? Number(user.id) : null,
+      }).returning({ id: uploads.id });
+
+      // Auto-populate event warehouses from distinct warehouse values in imported items
+      const warehouseRows = await tx
+        .select({ warehouse: items.warehouse })
+        .from(items)
+        .where(eq(items.eventId, eid))
+        .groupBy(items.warehouse);
+
+      const whs = warehouseRows
+        .map((r) => r.warehouse)
+        .filter((w): w is string => !!w && w.trim().length > 0)
+        .sort();
+
+      await tx.update(stocktakeEvents)
+        .set({ warehouses: JSON.stringify(whs), uploadId: up.id })
+        .where(eq(stocktakeEvents.id, eid));
+
+      return { upload: up, warehouses: whs };
+    });
 
     // Get import summary
     const [totalImported] = await db
-      .select({ count: sql<number>`count(*)` })
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
     const [uniqueBins] = await db
-      .select({ count: sql<number>`count(DISTINCT bin_number)` })
+      .select({ count: sql<number>`count(DISTINCT bin_number)`.mapWith(Number) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
     const [uniqueBrands] = await db
-      .select({ count: sql<number>`count(DISTINCT brand)` })
+      .select({ count: sql<number>`count(DISTINCT brand)`.mapWith(Number) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
 
     const [totalValue] = await db
-      .select({ total: sql<number>`sum(total_value)` })
+      .select({ total: sql<number>`sum(total_value)`.mapWith(Number) })
       .from(items)
       .where(eq(items.eventId, Number(eventId)));
-
-    // Auto-populate event warehouses from distinct warehouse values in imported items
-    const warehouseRows = await db
-      .select({ warehouse: items.warehouse })
-      .from(items)
-      .where(eq(items.eventId, Number(eventId)))
-      .groupBy(items.warehouse);
-
-    const warehouses = warehouseRows
-      .map((r) => r.warehouse)
-      .filter((w): w is string => !!w && w.trim().length > 0)
-      .sort();
-
-    await db.update(stocktakeEvents)
-      .set({ warehouses: JSON.stringify(warehouses), uploadId: upload.id })
-      .where(eq(stocktakeEvents.id, Number(eventId)));
 
     return NextResponse.json({
       success: true,

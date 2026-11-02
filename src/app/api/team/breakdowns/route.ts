@@ -108,6 +108,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (typeof quantity !== "number" || !Number.isFinite(quantity) || quantity < 0) {
+      return NextResponse.json(
+        { error: "quantity must be a valid non-negative number" },
+        { status: 400 }
+      );
+    }
+
     let resolvedItemId: number | null = null;
     if (itemCode) {
       const [item] = await db

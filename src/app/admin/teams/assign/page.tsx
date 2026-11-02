@@ -474,16 +474,37 @@ export default function AssignPage() {
     return selectedTeamBins[teamId]?.size || 0;
   };
 
+  // DELETE /api/admin/assign; if the bins have counts (409), confirm and retry with clearCounts
+  const sendUnassign = async (payload: { teamId: number; bins?: string[] }): Promise<boolean> => {
+    const send = (clearCounts: boolean) =>
+      fetch("/api/admin/assign", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId: Number(eventId), ...payload, ...(clearCounts ? { clearCounts: true } : {}) }),
+      });
+    let res = await send(false);
+    if (res.status === 409) {
+      const data = await res.json().catch(() => ({}));
+      if (!data.hasCountedItems) {
+        toast.error(data.error || "Failed to unassign");
+        return false;
+      }
+      if (!confirm(`${data.countedCount} count(s) already recorded in these bins will be permanently deleted. Unassign anyway?`)) return false;
+      res = await send(true);
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast.error(data.error || "Failed to unassign");
+      return false;
+    }
+    return true;
+  };
+
   const handleBulkUnassign = async (teamId: number) => {
     const bins = Array.from(selectedTeamBins[teamId] || []);
     if (bins.length === 0) return;
     try {
-      const res = await fetch("/api/admin/assign", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventId: Number(eventId), teamId, bins }),
-      });
-      if (res.ok) {
+      if (await sendUnassign({ teamId, bins })) {
         toast.success(`Removed ${bins.length} bin(s)`);
         setSelectedTeamBins((prev) => ({ ...prev, [teamId]: new Set() }));
         loadData();
@@ -528,12 +549,7 @@ export default function AssignPage() {
 
   const handleUnassignBins = async (teamId: number, bins: string[]) => {
     try {
-      const res = await fetch("/api/admin/assign", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventId: Number(eventId), teamId, bins }),
-      });
-      if (res.ok) {
+      if (await sendUnassign({ teamId, bins })) {
         toast.success(`Removed ${bins.length} bin(s)`);
         loadData();
       }
@@ -545,12 +561,7 @@ export default function AssignPage() {
   const handleUnassignAll = async (teamId: number) => {
     if (!confirm("Unassign ALL items from this team?")) return;
     try {
-      const res = await fetch("/api/admin/assign", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventId: Number(eventId), teamId }),
-      });
-      if (res.ok) {
+      if (await sendUnassign({ teamId })) {
         toast.success("All items unassigned");
         setSelectedTeamBins((prev) => ({ ...prev, [teamId]: new Set() }));
         loadData();

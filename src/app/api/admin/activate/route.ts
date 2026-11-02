@@ -19,10 +19,10 @@ export async function GET(request: NextRequest) {
   const eid = Number(eventId);
 
   const [[itemCount], [teamCount], [supervisorCount], [unassignedCount]] = await Promise.all([
-    db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.eventId, eid)),
-    db.select({ count: sql<number>`count(*)` }).from(teams).where(eq(teams.eventId, eid)),
-    db.select({ count: sql<number>`count(*)` }).from(supervisors).where(eq(supervisors.eventId, eid)),
-    db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, eid), isNull(items.teamId))),
+    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(eq(items.eventId, eid)),
+    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(teams).where(eq(teams.eventId, eid)),
+    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(supervisors).where(eq(supervisors.eventId, eid)),
+    db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(and(eq(items.eventId, eid), isNull(items.teamId))),
   ]);
 
   return NextResponse.json({
@@ -118,6 +118,22 @@ export async function PUT(request: NextRequest) {
 
     if (!["setup", "completed", "locked"].includes(status)) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
+    }
+
+    const [existing] = await db
+      .select({ status: stocktakeEvents.status })
+      .from(stocktakeEvents)
+      .where(eq(stocktakeEvents.id, eid));
+    if (!existing) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+    // Allowed: active -> setup (cancel), active -> completed, completed -> locked
+    const allowedFrom: Record<string, string> = { setup: "active", completed: "active", locked: "completed" };
+    if (existing.status !== status && allowedFrom[status] !== existing.status) {
+      return NextResponse.json(
+        { error: `Cannot change event status from ${existing.status} to ${status}` },
+        { status: 400 }
+      );
     }
 
     await db.update(stocktakeEvents)

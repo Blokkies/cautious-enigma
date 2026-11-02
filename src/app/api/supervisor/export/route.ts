@@ -6,15 +6,22 @@ import {
   breakdownMessages, auditLog, supervisors, admins, executives,
 } from "@/lib/db/schema";
 import { eq, and, sql, inArray, asc, desc } from "drizzle-orm";
-import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import {
+  getApiUser, getEventWarehouses, warehouseFilter,
+  buildItemRefMap, isRefOutsideWarehouses, getCountableDiscrepancySerials,
+} from "@/lib/api-auth";
+import { safeJsonParse } from "@/lib/utils";
 import { exportToExcel } from "@/lib/excel";
 
-// Correlated subquery: pick the latest count (highest id) per item for this event.
-// This prevents duplicate rows when an item has both initial + verification counts.
-function latestCountJoin(eventId: number) {
+// Correlated subquery: pick the initial count per item for this event.
+// The initial count is the source of truth (same as the dashboard and variances page):
+// accepting a verification copies its values onto the initial count, and supervisor
+// edits/reopens update the initial count only. Using one row per item also prevents
+// duplicate rows when an item has both initial + verification counts.
+function initialCountJoin(eventId: number) {
   return eq(
     counts.id,
-    sql`(SELECT c.id FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} AND (c.count_type = 'initial' OR (c.count_type = 'verification' AND c.check_status = 'accepted')) ORDER BY c.counted_at DESC, c.id DESC LIMIT 1)`
+    sql`(SELECT c.id FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} AND c.count_type = 'initial' ORDER BY c.id DESC LIMIT 1)`
   );
 }
 
@@ -52,7 +59,7 @@ async function buildItemVariances(
       "Counted At": counts.countedAt,
     })
     .from(items)
-    .innerJoin(counts, and(latestCountJoin(eventId), eq(counts.isMatch, false)))
+    .innerJoin(counts, and(initialCountJoin(eventId), eq(counts.isMatch, false)))
     .leftJoin(teams, eq(items.teamId, teams.id))
     .where(and(
       eq(items.eventId, eventId),
@@ -86,23 +93,19 @@ async function buildDiscrepancyVariances(eventId: number, warehouses: string[] |
     .where(eq(serialDiscrepancies.eventId, eventId));
 
   // Look up source item metadata for each unique itemCode
-  const refMap = await buildRefMap(eventId, discRows.map((d) => d.itemCode));
+  const refMap = await buildItemRefMap(eventId, discRows.map((d) => d.itemCode), warehouses);
 
   const rows: Record<string, unknown>[] = [];
   for (const disc of discRows) {
-    // Skip fully dismissed discrepancies (resolved + dismissed + no approved serials)
-    if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
-      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
-      if (approved.length === 0) continue;
-    }
-
-    const ref = refMap[disc.itemCode];
+    const ref = refMap.get(disc.itemCode);
 
     // Skip if source item's warehouse is not in the event's selected warehouses
-    if (warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse)) continue;
+    if (isRefOutsideWarehouses(ref, warehouses)) continue;
+
+    // Resolved discrepancies contribute only their approved serials
+    const { unknowns, approved } = getCountableDiscrepancySerials(disc);
 
     // Open unknowns
-    const unknowns = JSON.parse(disc.unknownSerials) as string[];
     for (const serial of unknowns) {
       rows.push({
         "Item Internal ID": ref?.internalId ?? null,
@@ -130,7 +133,6 @@ async function buildDiscrepancyVariances(eventId: number, warehouses: string[] |
     }
 
     // Approved serials
-    const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
     for (const serial of approved) {
       rows.push({
         "Item Internal ID": ref?.internalId ?? null,
@@ -158,42 +160,6 @@ async function buildDiscrepancyVariances(eventId: number, warehouses: string[] |
     }
   }
   return rows;
-}
-
-// Look up source item metadata by itemCode
-async function buildRefMap(eventId: number, itemCodes: string[]) {
-  const unique = Array.from(new Set(itemCodes));
-  const refMap: Record<string, {
-    internalId: string | null;
-    warehouse: string | null;
-    division: string | null;
-    stockStatus: string | null;
-    brand: string | null;
-    category: string | null;
-    avgCost: number | null;
-  }> = {};
-  if (unique.length === 0) return refMap;
-
-  const refItems = await db
-    .select({
-      itemCode: items.itemCode,
-      internalId: items.internalId,
-      warehouse: items.warehouse,
-      division: items.division,
-      stockStatus: items.stockStatus,
-      brand: items.brand,
-      category: items.category,
-      avgCost: items.avgCost,
-    })
-    .from(items)
-    .where(and(eq(items.eventId, eventId), inArray(items.itemCode, unique)));
-
-  for (const ref of refItems) {
-    if (!refMap[ref.itemCode]) {
-      refMap[ref.itemCode] = ref;
-    }
-  }
-  return refMap;
 }
 
 export async function GET(request: NextRequest) {
@@ -289,7 +255,7 @@ export async function GET(request: NextRequest) {
         "Counted At": counts.countedAt,
       })
       .from(items)
-      .leftJoin(counts, latestCountJoin(eventId))
+      .leftJoin(counts, initialCountJoin(eventId))
       .leftJoin(teams, eq(items.teamId, teams.id))
       .where(and(eq(items.eventId, eventId), warehouseFilter(warehouses)))
       .orderBy(items.binNumber, items.itemCode);
@@ -312,23 +278,19 @@ export async function GET(request: NextRequest) {
       .where(eq(serialDiscrepancies.eventId, eventId));
 
     // Look up source item metadata for unknown serial rows
-    const fullRefMap = await buildRefMap(eventId, discRows.map((d) => d.itemCode));
+    const fullRefMap = await buildItemRefMap(eventId, discRows.map((d) => d.itemCode), warehouses);
 
     const unknownRows: Record<string, unknown>[] = [];
     for (const disc of discRows) {
-      // Skip fully dismissed discrepancies (resolved + dismissed + no approved serials)
-      if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
-        const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
-        if (approved.length === 0) continue;
-      }
-
-      const ref = fullRefMap[disc.itemCode];
+      const ref = fullRefMap.get(disc.itemCode);
 
       // Skip if source item's warehouse is not in selected warehouses
-      if (warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse)) continue;
+      if (isRefOutsideWarehouses(ref, warehouses)) continue;
+
+      // Resolved discrepancies contribute only their approved serials
+      const { unknowns, approved } = getCountableDiscrepancySerials(disc);
 
       // Open unknowns — included as "Unknown Serial"
-      const unknowns = JSON.parse(disc.unknownSerials) as string[];
       for (const serial of unknowns) {
         unknownRows.push({
           "Item Internal ID": ref?.internalId ?? null,
@@ -359,7 +321,6 @@ export async function GET(request: NextRequest) {
       }
 
       // Approved serials — included as "Approved Unknown Serial"
-      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
       for (const serial of approved) {
         unknownRows.push({
           "Item Internal ID": ref?.internalId ?? null,
@@ -476,7 +437,7 @@ async function buildSerialExport(eventId: number, warehouses: string[] | null): 
       teamName: teams.name,
     })
     .from(items)
-    .leftJoin(counts, latestCountJoin(eventId))
+    .leftJoin(counts, initialCountJoin(eventId))
     .leftJoin(teams, eq(items.teamId, teams.id))
     .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true), warehouseFilter(warehouses)))
     .orderBy(items.itemCode, items.binNumber, items.serialNumber);
@@ -511,7 +472,7 @@ async function buildSerialExport(eventId: number, warehouses: string[] | null): 
   }
 
   // Ref map for unknown serial metadata
-  const refMap = await buildRefMap(eventId, discrepancyRows.map((d) => d.itemCode));
+  const refMap = await buildItemRefMap(eventId, discrepancyRows.map((d) => d.itemCode), warehouses);
 
   const rows: Record<string, unknown>[] = [];
 
@@ -555,13 +516,13 @@ async function buildSerialExport(eventId: number, warehouses: string[] | null): 
 
   // Add unknown + approved serial rows from discrepancies
   for (const disc of discrepancyRows) {
-    if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
-      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
-      if (approved.length === 0) continue;
-    }
+    const ref = refMap.get(disc.itemCode);
 
-    const ref = refMap[disc.itemCode];
-    const unknowns = JSON.parse(disc.unknownSerials) as string[];
+    // Skip if source item's warehouse is not in the event's selected warehouses
+    if (isRefOutsideWarehouses(ref, warehouses)) continue;
+
+    // Resolved discrepancies contribute only their approved serials
+    const { unknowns, approved } = getCountableDiscrepancySerials(disc);
     const discStatus = disc.status === "resolved" ? "Resolved" : "Open";
     const verTeamName = disc.verificationTeamId ? (verTeamNameMap[disc.verificationTeamId] ?? "") : "";
     const parsedVerified = disc.verifiedSerials ? safeJsonParse<{ serial: string; status: string }[]>(disc.verifiedSerials, []) : [];
@@ -595,7 +556,6 @@ async function buildSerialExport(eventId: number, warehouses: string[] | null): 
       });
     }
 
-    const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
     for (const serial of approved) {
       rows.push({
         "Item Code": disc.itemCode,
@@ -1106,6 +1066,3 @@ async function buildAuditLogExport(eventId: number): Promise<Record<string, unkn
   });
 }
 
-function safeJsonParse<T>(json: string, fallback: T): T {
-  try { return JSON.parse(json) as T; } catch { return fallback; }
-}

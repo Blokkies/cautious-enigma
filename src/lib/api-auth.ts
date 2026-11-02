@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, counts, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
+import { safeJsonParse } from "@/lib/utils";
 
 export interface ApiUser {
   id: number;
@@ -11,6 +12,15 @@ export interface ApiUser {
 }
 
 const VALID_USER_TYPES: ApiUser["type"][] = ["team", "supervisor", "admin", "auditor", "executive"];
+
+/** Middleware URI-encodes the user name so non-Latin-1 names fit in a header. */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 export function getApiUser(request: NextRequest): ApiUser | null {
   const id = request.headers.get("x-user-id");
@@ -24,7 +34,7 @@ export function getApiUser(request: NextRequest): ApiUser | null {
   return {
     id: Number(id),
     type: type as ApiUser["type"],
-    name: name || "",
+    name: safeDecode(name),
     eventId: Number(eventId),
   };
 }
@@ -93,6 +103,76 @@ export function countsWarehouseFilter(eventId: number, warehouses: string[] | nu
   return sql`${counts.itemId} IN (SELECT id FROM items WHERE event_id = ${eventId} AND warehouse IN (${whParams}))`;
 }
 
+export interface ItemRef {
+  itemCode: string;
+  internalId: string | null;
+  warehouse: string | null;
+  division: string | null;
+  stockStatus: string | null;
+  brand: string | null;
+  category: string | null;
+  avgCost: number | null;
+}
+
+/**
+ * Look up source item metadata for serial discrepancy itemCodes.
+ * When an itemCode exists in several warehouses, prefer a row in the event's
+ * selected warehouses.
+ */
+export async function buildItemRefMap(
+  eventId: number,
+  itemCodes: string[],
+  warehouses: string[] | null
+): Promise<Map<string, ItemRef>> {
+  const refMap = new Map<string, ItemRef>();
+  const unique = Array.from(new Set(itemCodes));
+  if (unique.length === 0) return refMap;
+
+  const refItems = await db
+    .select({
+      itemCode: items.itemCode,
+      internalId: items.internalId,
+      warehouse: items.warehouse,
+      division: items.division,
+      stockStatus: items.stockStatus,
+      brand: items.brand,
+      category: items.category,
+      avgCost: items.avgCost,
+    })
+    .from(items)
+    .where(and(eq(items.eventId, eventId), inArray(items.itemCode, unique)));
+
+  for (const r of refItems) {
+    const existing = refMap.get(r.itemCode);
+    const inSelected = !!(warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse));
+    const existingInSelected = !!(existing && warehouses && warehouses.length > 0 && existing.warehouse && warehouses.includes(existing.warehouse));
+    if (!existing || (inSelected && !existingInSelected)) {
+      refMap.set(r.itemCode, r);
+    }
+  }
+  return refMap;
+}
+
+/** True if the discrepancy's source item lies outside the event's selected warehouses. */
+export function isRefOutsideWarehouses(ref: { warehouse: string | null } | undefined, warehouses: string[] | null): boolean {
+  return !!(warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse));
+}
+
+/**
+ * Serials of a discrepancy that count as surplus ("over") variances.
+ * Once a discrepancy is resolved, only approved serials count — any leftover
+ * unknowns are no longer outstanding, regardless of resolutionType.
+ */
+export function getCountableDiscrepancySerials(disc: {
+  status: string | null;
+  unknownSerials: string | null;
+  approvedSerials: string | null;
+}): { unknowns: string[]; approved: string[] } {
+  const approved = safeJsonParse<string[]>(disc.approvedSerials, []);
+  const unknowns = disc.status === "resolved" ? [] : safeJsonParse<string[]>(disc.unknownSerials, []);
+  return { unknowns, approved };
+}
+
 /**
  * Compute serial discrepancy "over" stats for an event.
  * Unknown + approved serials are surplus items (variance > 0).
@@ -108,54 +188,30 @@ export async function getSerialDiscrepancyOverStats(
       unknownSerials: serialDiscrepancies.unknownSerials,
       approvedSerials: serialDiscrepancies.approvedSerials,
       status: serialDiscrepancies.status,
-      resolutionType: serialDiscrepancies.resolutionType,
     })
     .from(serialDiscrepancies)
     .where(eq(serialDiscrepancies.eventId, eventId));
 
   if (discRows.length === 0) return { overCount: 0, overValue: 0 };
 
-  // Look up avgCost for each unique itemCode
-  const uniqueCodes = Array.from(new Set(discRows.map((d) => d.itemCode)));
-  const refMap = new Map<string, { avgCost: number | null; warehouse: string | null }>();
-  if (uniqueCodes.length > 0) {
-    const refItems = await db
-      .select({
-        itemCode: items.itemCode,
-        avgCost: items.avgCost,
-        warehouse: items.warehouse,
-      })
-      .from(items)
-      .where(and(eq(items.eventId, eventId), inArray(items.itemCode, uniqueCodes)));
-    for (const r of refItems) {
-      const existing = refMap.get(r.itemCode);
-      if (!existing || (warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse))) {
-        refMap.set(r.itemCode, r);
-      }
-    }
-  }
+  const refMap = await buildItemRefMap(eventId, discRows.map((d) => d.itemCode), warehouses);
 
   let overCount = 0;
   let overValue = 0;
 
   for (const disc of discRows) {
-    // Skip fully dismissed discrepancies
-    if (disc.status === "resolved" && disc.resolutionType === "dismissed") {
-      const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
-      if (approved.length === 0) continue;
-    }
-
     const ref = refMap.get(disc.itemCode);
 
     // Skip if warehouse-filtered out
-    if (warehouses && warehouses.length > 0 && ref?.warehouse && !warehouses.includes(ref.warehouse)) continue;
+    if (isRefOutsideWarehouses(ref, warehouses)) continue;
+
+    const { unknowns, approved } = getCountableDiscrepancySerials(disc);
+    const n = unknowns.length + approved.length;
+    if (n === 0) continue;
 
     const avgCost = ref?.avgCost ?? 0;
-    const unknowns: string[] = JSON.parse(disc.unknownSerials);
-    const approved: string[] = disc.approvedSerials ? JSON.parse(disc.approvedSerials) : [];
-
-    overCount += unknowns.length + approved.length;
-    overValue += (unknowns.length + approved.length) * avgCost;
+    overCount += n;
+    overValue += n * avgCost;
   }
 
   return { overCount, overValue };

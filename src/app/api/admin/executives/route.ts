@@ -76,7 +76,7 @@ export async function DELETE(request: NextRequest) {
 
     const result = await db.transaction(async (tx) => {
       const [count] = await tx
-        .select({ count: sql<number>`count(*)` })
+        .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(executives);
 
       if ((count?.count || 0) <= 1) {

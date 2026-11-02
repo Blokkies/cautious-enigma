@@ -4,6 +4,7 @@ import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, 
 import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
 import { getApiUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { checkEventWritable } from "../event-guard";
 
 function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
   const user = getApiUser(request);
@@ -33,7 +34,7 @@ export async function GET(request: NextRequest) {
 
   // Count assigned items per team in a single GROUP BY query
   const teamItemCounts = await db
-    .select({ teamId: items.teamId, count: sql<number>`count(*)` })
+    .select({ teamId: items.teamId, count: sql<number>`count(*)`.mapWith(Number) })
     .from(items)
     .where(and(eq(items.eventId, eid), isNotNull(items.teamId), warehouseFilter(warehouses)))
     .groupBy(items.teamId);
@@ -81,6 +82,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = await checkEventWritable(eid, user.type);
+    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
 
     const pinHashed = await hashPin(pin);
 
@@ -145,13 +149,16 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Supervisor: verify team belongs to their event
-    if (user.type === "supervisor") {
-      const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
-      if (!team || team.eventId !== user.eventId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-      }
+    const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
+    if (!team) {
+      return NextResponse.json({ error: "Team not found" }, { status: 404 });
     }
+    // Supervisor: verify team belongs to their event
+    if (user.type === "supervisor" && team.eventId !== user.eventId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+    const guard = await checkEventWritable(team.eventId, user.type);
+    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
 
     const updateData: { name: string; members: string | null; pinHash?: string; pinPlain?: string } = {
       name,
@@ -202,21 +209,28 @@ export async function DELETE(request: NextRequest) {
         await tx.delete(supervisors).where(eq(supervisors.id, id));
       });
     } else {
-      // Supervisor: verify team belongs to their event
-      if (user.type === "supervisor") {
-        const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
-        if (!team || team.eventId !== user.eventId) {
-          return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-        }
+      const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
+      if (!team) {
+        return NextResponse.json({ error: "Team not found" }, { status: 404 });
       }
+      // Supervisor: verify team belongs to their event
+      if (user.type === "supervisor" && team.eventId !== user.eventId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+      }
+      // Deleting a team deletes its counts
+      const guard = await checkEventWritable(team.eventId, user.type, true);
+      if (guard) return NextResponse.json({ error: guard }, { status: 403 });
       // Cascade delete team's dependent data in a transaction
       await db.transaction(async (tx) => {
         // Messages on queries/breakdowns for this team
         await tx.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE team_id = ${id})`);
         await tx.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE team_id = ${id})`);
-        // Verification assignments, serial discrepancies
+        // Verification assignments (assigned to this team, or pointing at this team's counts)
         await tx.delete(verificationAssignments).where(eq(verificationAssignments.assignedTeamId, id));
+        await tx.delete(verificationAssignments).where(sql`count_id IN (SELECT id FROM counts WHERE team_id = ${id})`);
+        // Serial discrepancies owned by this team; clear verification refs from other teams' discrepancies
         await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.teamId, id));
+        await tx.update(serialDiscrepancies).set({ verificationTeamId: null }).where(eq(serialDiscrepancies.verificationTeamId, id));
         // Counts, queries, breakdowns
         await tx.delete(counts).where(eq(counts.teamId, id));
         await tx.delete(queries).where(eq(queries.teamId, id));

@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useOnlineStatus } from "./use-online-status";
+import { useAuth } from "@/contexts/auth-context";
 import {
   syncToServer,
   getPendingSyncCount,
   preloadItems,
+  type OfflineScope,
 } from "@/stores/offline-db";
 
 interface SyncState {
@@ -18,6 +20,14 @@ interface SyncState {
 
 export function useSync() {
   const isOnline = useOnlineStatus();
+  const { user } = useAuth();
+  // Only sync/count records belonging to the logged-in team + event
+  const scopeRef = useRef<OfflineScope | null>(null);
+  scopeRef.current =
+    user?.type === "team" && user.eventId != null
+      ? { eventId: user.eventId, teamId: user.id }
+      : null;
+  const scopeKey = scopeRef.current ? `${scopeRef.current.eventId}:${scopeRef.current.teamId}` : "";
   const [state, setState] = useState<SyncState>({
     pendingCount: 0,
     syncing: false,
@@ -34,7 +44,7 @@ export function useSync() {
 
   const updatePendingCount = useCallback(async () => {
     try {
-      const count = await getPendingSyncCount();
+      const count = await getPendingSyncCount(scopeRef.current);
       pendingCountRef.current = count;
       setState((prev) => ({ ...prev, pendingCount: count }));
     } catch {
@@ -44,12 +54,13 @@ export function useSync() {
 
   const doSync = useCallback(async () => {
     if (!isOnlineRef.current || authExpiredRef.current) return;
+    if (!scopeRef.current) return; // wait until the team session is known
     if (syncingRef.current) return; // mutex: prevent concurrent syncs
     syncingRef.current = true;
 
     setState((prev) => ({ ...prev, syncing: true }));
     try {
-      const result = await syncToServer();
+      const result = await syncToServer(scopeRef.current);
       if (result.authExpired) {
         authExpiredRef.current = true;
         setState((prev) => ({ ...prev, authExpired: true, syncing: false }));
@@ -82,12 +93,12 @@ export function useSync() {
     }
   }, [isOnline, state.preloaded]);
 
-  // Auto-sync when coming online
+  // Auto-sync when coming online (or once the team session is known)
   useEffect(() => {
-    if (isOnline) {
+    if (isOnline && scopeKey) {
       doSync();
     }
-  }, [isOnline, doSync]);
+  }, [isOnline, doSync, scopeKey]);
 
   // Periodic sync every 15 seconds when online
   useEffect(() => {
@@ -106,7 +117,7 @@ export function useSync() {
     updatePendingCount();
     const interval = setInterval(updatePendingCount, 5000);
     return () => clearInterval(interval);
-  }, [updatePendingCount]);
+  }, [updatePendingCount, scopeKey]);
 
   // Warn user before closing tab if there are unsynced counts
   useEffect(() => {

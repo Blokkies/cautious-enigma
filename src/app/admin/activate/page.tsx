@@ -129,6 +129,9 @@ export default function ActivatePage() {
       if (res.ok) {
         toast.success("Stocktake marked as completed");
         loadEvents();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to update status");
       }
     } catch {
       toast.error("Failed to update status");
@@ -150,6 +153,9 @@ export default function ActivatePage() {
         toast.success("Stocktake reset to setup");
         loadEvents();
         checkReadiness();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to update status");
       }
     } catch {
       toast.error("Failed to cancel stocktake");

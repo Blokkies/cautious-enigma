@@ -637,8 +637,13 @@ export default function VariancesPage() {
 
   // Bulk accept selected variances
   const handleBulkAccept = async () => {
-    const ids = Array.from(selectedCountIds);
-    if (ids.length === 0) return;
+    // Unknown-serial rows use synthetic negative ids and can't be bulk-accepted
+    const ids = Array.from(selectedCountIds).filter((id) => id > 0);
+    if (ids.length === 0) {
+      toast.error("No count variances selected — unknown serials must be approved individually");
+      setShowBulkAcceptDialog(false);
+      return;
+    }
     setBulkAccepting(true);
     try {
       const res = await fetch("/api/supervisor/variances", {
@@ -677,7 +682,7 @@ export default function VariancesPage() {
       const res = await fetch("/api/supervisor/variances", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "approve_unknown_serial", countId: v.countId }),
+        body: JSON.stringify({ action: "approve_unknown_serial", countId: v.countId, serial: v.serialNumber }),
       });
 
       if (!res.ok) {
@@ -702,7 +707,7 @@ export default function VariancesPage() {
       const res = await fetch("/api/supervisor/variances", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "dismiss_unknown_serial", countId: v.countId }),
+        body: JSON.stringify({ action: "dismiss_unknown_serial", countId: v.countId, serial: v.serialNumber }),
       });
 
       if (!res.ok) {
@@ -751,6 +756,7 @@ export default function VariancesPage() {
         body: JSON.stringify({
           action: editingSerialItem.isApprovedSerial ? "edit_approved_serial" : "edit_unknown_serial",
           countId: editingSerialItem.countId,
+          serial: editingSerialItem.serialNumber,
           newSerial: trimmed,
         }),
       });

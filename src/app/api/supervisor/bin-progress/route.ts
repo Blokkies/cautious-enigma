@@ -10,7 +10,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
-  const eid = user.type === "admin"
+  // Admins/executives have eventId=0 and must pass ?eventId (read-only route)
+  const eid = user.type === "admin" || (user.type === "executive" && !user.eventId)
     ? Number(request.nextUrl.searchParams.get("eventId"))
     : user.eventId;
 

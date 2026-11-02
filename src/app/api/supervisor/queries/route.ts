@@ -112,6 +112,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Ensure the query belongs to this supervisor's event
+    const [owned] = await db
+      .select({ id: queries.id })
+      .from(queries)
+      .where(and(eq(queries.id, queryId), eq(queries.eventId, user.eventId)));
+    if (!owned) {
+      return NextResponse.json({ error: "Query not found" }, { status: 404 });
+    }
+
     // If a response text was provided, add it as a message
     if (response) {
       await db.insert(queryMessages)

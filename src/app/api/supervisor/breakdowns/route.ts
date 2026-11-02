@@ -112,6 +112,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Ensure the breakdown belongs to this supervisor's event
+    const [owned] = await db
+      .select({ id: breakdowns.id })
+      .from(breakdowns)
+      .where(and(eq(breakdowns.id, breakdownId), eq(breakdowns.eventId, user.eventId)));
+    if (!owned) {
+      return NextResponse.json({ error: "Breakdown not found" }, { status: 404 });
+    }
+
     // If a message was provided, add it
     if (message) {
       await db.insert(breakdownMessages)

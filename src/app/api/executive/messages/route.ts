@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
           (SELECT message FROM exec_messages em2 WHERE em2.supervisor_id = em.supervisor_id ORDER BY em2.created_at DESC LIMIT 1) as last_message,
           (SELECT sender_type FROM exec_messages em2 WHERE em2.supervisor_id = em.supervisor_id ORDER BY em2.created_at DESC LIMIT 1) as last_sender_type,
           (SELECT created_at FROM exec_messages em2 WHERE em2.supervisor_id = em.supervisor_id ORDER BY em2.created_at DESC LIMIT 1) as last_message_at,
-          COUNT(*) as message_count
+          COUNT(*)::int as message_count
         FROM exec_messages em
         INNER JOIN supervisors s ON s.id = em.supervisor_id
         INNER JOIN stocktake_events se ON se.id = em.event_id
@@ -81,10 +81,19 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { supervisorId, eventId, message } = await request.json();
+    const { supervisorId, message } = await request.json();
 
-    if (!supervisorId || !eventId || !message?.trim()) {
-      return NextResponse.json({ error: "supervisorId, eventId, and message are required" }, { status: 400 });
+    if (!supervisorId || !message?.trim()) {
+      return NextResponse.json({ error: "supervisorId and message are required" }, { status: 400 });
+    }
+
+    // Derive the event from the supervisor rather than trusting the client
+    const [supervisor] = await db
+      .select({ id: supervisors.id, eventId: supervisors.eventId })
+      .from(supervisors)
+      .where(eq(supervisors.id, Number(supervisorId)));
+    if (!supervisor) {
+      return NextResponse.json({ error: "Supervisor not found" }, { status: 404 });
     }
 
     const [inserted] = await db
@@ -92,8 +101,8 @@ export async function POST(request: NextRequest) {
       .values({
         senderId: user.id,
         senderType: user.type,
-        supervisorId: Number(supervisorId),
-        eventId: Number(eventId),
+        supervisorId: supervisor.id,
+        eventId: supervisor.eventId,
         message: message.trim(),
       })
       .returning({ id: execMessages.id });

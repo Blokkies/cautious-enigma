@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
 import { getApiUser } from "@/lib/api-auth";
 import { parseTeamExcel } from "@/lib/team-excel";
+import { checkEventWritable } from "../../event-guard";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -27,6 +28,9 @@ export async function POST(request: NextRequest) {
     }
 
     const eventId = user.type === "admin" ? Number(eventIdStr) : user.eventId;
+
+    const guard = await checkEventWritable(eventId, user.type);
+    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
 
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(

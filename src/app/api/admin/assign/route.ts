@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { items, teams } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { getEventWarehouses, getApiUser } from "@/lib/api-auth";
+import { checkEventWritable } from "../event-guard";
 
 function getAuthorizedEventId(request: NextRequest, clientEventId?: number | string | null): number | null {
   const user = getApiUser(request);
@@ -159,6 +160,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "eventId required" }, { status: 400 });
     }
 
+    const guard = await checkEventWritable(eid, user.type);
+    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
+
     // Auto-balance: assign multiple teams at once in a transaction
     if (body.action === "auto-balance") {
       const { assignments } = body as { assignments: Array<{ teamId: number; bins: string[] }> };
@@ -239,7 +243,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const body = await request.json();
     const eid = getAuthorizedEventId(request, body.eventId);
-    const { teamId, bins } = body;
+    const { teamId, bins, clearCounts } = body;
 
     if (!eid || !teamId) {
       return NextResponse.json(
@@ -248,25 +252,66 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const tid = Number(teamId);
+    const guard = await checkEventWritable(eid, user.type, !!clearCounts);
+    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
 
-    if (bins && Array.isArray(bins) && bins.length > 0) {
-      // Unassign specific bins
-      const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
-      await db.execute(
-        sql`UPDATE items SET team_id = NULL WHERE event_id = ${eid} AND team_id = ${tid} AND bin_number IN (${binList})`
+    const tid = Number(teamId);
+    const hasBins = bins && Array.isArray(bins) && bins.length > 0;
+    const binFilter = hasBins
+      ? sql` AND i.bin_number IN (${sql.join(bins.map((b: string) => sql`${b}`), sql`, `)})`
+      : sql``;
+
+    // Check if items being unassigned have counts (same rule as PATCH)
+    const countedCheck = await db.execute(
+      sql`SELECT count(*)::int as cnt FROM counts c
+          JOIN items i ON i.id = c.item_id
+          WHERE i.event_id = ${eid} AND i.team_id = ${tid}${binFilter}`
+    ) as { cnt: number }[];
+    const countedCount = Number(countedCheck[0]?.cnt) || 0;
+
+    if (countedCount > 0 && !clearCounts) {
+      return NextResponse.json(
+        { error: "Cannot unassign bins that have counted items", hasCountedItems: true, countedCount },
+        { status: 409 }
       );
-    } else {
-      // Unassign all items from this team
-      await db
-        .update(items)
-        .set({ teamId: null })
-        .where(
-          and(eq(items.eventId, eid), eq(items.teamId, tid))
-        );
     }
 
-    return NextResponse.json({ success: true });
+    await db.transaction(async (tx) => {
+      if (countedCount > 0 && clearCounts) {
+        await tx.execute(
+          sql`DELETE FROM verification_assignments WHERE count_id IN (
+            SELECT c.id FROM counts c
+            JOIN items i ON i.id = c.item_id
+            WHERE i.event_id = ${eid} AND i.team_id = ${tid}${binFilter}
+          )`
+        );
+        await tx.execute(
+          sql`DELETE FROM counts WHERE id IN (
+            SELECT c.id FROM counts c
+            JOIN items i ON i.id = c.item_id
+            WHERE i.event_id = ${eid} AND i.team_id = ${tid}${binFilter}
+          )`
+        );
+      }
+
+      if (hasBins) {
+        // Unassign specific bins
+        const binList = sql.join(bins.map((b: string) => sql`${b}`), sql`, `);
+        await tx.execute(
+          sql`UPDATE items SET team_id = NULL WHERE event_id = ${eid} AND team_id = ${tid} AND bin_number IN (${binList})`
+        );
+      } else {
+        // Unassign all items from this team
+        await tx
+          .update(items)
+          .set({ teamId: null })
+          .where(
+            and(eq(items.eventId, eid), eq(items.teamId, tid))
+          );
+      }
+    });
+
+    return NextResponse.json({ success: true, clearedCounts: countedCount > 0 ? countedCount : 0 });
   } catch (error) {
     console.error("Unassign error:", error);
     return NextResponse.json(
@@ -294,6 +339,9 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = await checkEventWritable(eid, user.type, !!clearCounts);
+    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
 
     if (fromTeamId === toTeamId) {
       return NextResponse.json(

@@ -26,7 +26,7 @@ import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 import { useSettings } from "@/contexts/settings-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
-import { saveCountLocally, markCountSynced, saveDiscrepancyLocally, markDiscrepancySynced } from "@/stores/offline-db";
+import { saveCountLocally, markCountSynced, markCountsRejected, isDefinitiveRejection, isServiceWorkerOffline, saveDiscrepancyLocally, markDiscrepancySynced } from "@/stores/offline-db";
 import { feedbackMatch, feedbackVariance, feedbackBinComplete } from "@/lib/feedback";
 
 type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
@@ -104,6 +104,11 @@ export default function CountingPage() {
   const { settings, updateSettings } = useSettings();
   const er = settings.easyRead;
   const sessionKey = `stocktake-last-bin-${user?.id ?? "unknown"}`;
+  // Tag offline records with the owning session so they never sync under another team/event
+  const offlineScope = useMemo(
+    () => (user?.type === "team" && user.eventId != null ? { eventId: user.eventId, teamId: user.id } : {}),
+    [user]
+  );
 
   useEffect(() => {
     markNotificationSeen("verifications");
@@ -158,6 +163,8 @@ export default function CountingPage() {
   const [comment, setComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isSubmittingRef = useRef(false);
+  // Reuse the same clientId when a verification submit is retried (server dedups on it)
+  const verificationClientIdsRef = useRef(new Map<number, string>());
   const [showFlash, setShowFlash] = useState(false);
   const [showBinComplete, setShowBinComplete] = useState(false);
   const [queueSearch, setQueueSearch] = useState("");
@@ -580,20 +587,21 @@ export default function CountingPage() {
 
   // ---------- Core functions ----------
   const handleCount = useCallback(
-    async (itemId: number, qty: number, countComment?: string, silent?: boolean) => {
+    /** Resolves true if the count was saved (on the server, or queued offline for sync). */
+    async (itemId: number, qty: number, countComment?: string, silent?: boolean): Promise<boolean> => {
       const item = items.find((i) => i.id === itemId);
-      if (!item) return;
+      if (!item) return false;
 
       // Block changes to items reviewed by supervisor
       if (item.checkStatus === "accepted") {
         if (!silent) toast.error("This item has been reviewed by a supervisor and cannot be changed");
-        return;
+        return false;
       }
 
       // Block changes to items with pending verification
       if (item.hasPendingVerification) {
         if (!silent) toast.error("This item has a pending verification and cannot be edited");
-        return;
+        return false;
       }
 
       const clientId = uuidv4();
@@ -609,8 +617,10 @@ export default function CountingPage() {
           itemId,
           countedQty: qty,
           isMatch,
-          comment: countComment || null,
+          // undefined = keep the existing server comment when synced
+          comment: countComment,
           countedAt,
+          ...offlineScope,
         });
       } catch {
         // IndexedDB unavailable — continue with server POST anyway
@@ -634,7 +644,7 @@ export default function CountingPage() {
                 countedQty: qty,
                 variance,
                 isMatch,
-                comment: countComment || i.comment,
+                comment: countComment === undefined ? i.comment : countComment || null,
                 countedAt,
               }
             : i
@@ -662,11 +672,33 @@ export default function CountingPage() {
             isMatch,
             comment: countComment,
             clientId,
+            countedAt,
           }),
         });
 
+        if (!res.ok && !isDefinitiveRejection(res.status)) {
+          // Offline (service worker), session expired, or transient server error:
+          // the count is queued in IndexedDB and useSync will retry — keep optimistic state.
+          if (!silent) {
+            if (isServiceWorkerOffline(res)) {
+              toast.info("Saved offline — will sync when back online");
+            } else if (res.status === 401) {
+              toast.warning("Session expired — count saved on this device, log in again to sync");
+            } else {
+              toast.info("Server busy — count saved and will retry automatically");
+            }
+          }
+          return true;
+        }
+
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
+          // Definitive server rejection: never retry this record
+          try {
+            await markCountsRejected([clientId], errData.error);
+          } catch {
+            // IndexedDB unavailable
+          }
           // Revert optimistic update on server rejection
           setItems((prev) =>
             prev.map((i) =>
@@ -694,7 +726,7 @@ export default function CountingPage() {
             }));
           }
           if (!silent) toast.error(errData.error || "Failed to save count");
-          return;
+          return false;
         }
 
         const data = await res.json();
@@ -727,12 +759,14 @@ export default function CountingPage() {
         if (!isMatch && !silent) {
           toast.warning(`Variance: ${variance > 0 ? "+" : ""}${variance}`);
         }
+        return true;
       } catch {
         // Network failed — count is safely in IndexedDB, useSync will retry
         if (!silent) toast.info("Saved offline — will sync when back online");
+        return true;
       }
     },
-    [items]
+    [items, offlineScope]
   );
 
   const submitCount = useCallback(() => {
@@ -766,23 +800,31 @@ export default function CountingPage() {
 
   const submitSerializedGroup = useCallback(
     async (results: SerialGroupResult[], unknownSerials?: string[]) => {
-      if (isSubmitting) return;
+      if (isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
       setIsSubmitting(true);
       try {
         // Submit all serials silently (no individual toasts)
-        await Promise.all(
+        const saved = await Promise.all(
           results.map(({ itemId, qty }) =>
             handleCount(itemId, qty, comment || undefined, true)
           )
         );
 
-        // Show consolidated summary toast
-        const found = results.filter((r) => r.qty > 0).length;
-        const notFound = results.filter((r) => r.qty === 0).length;
-        if (notFound > 0) {
+        // Show consolidated summary toast built from what was actually saved
+        const savedResults = results.filter((_, i) => saved[i]);
+        const skipped = results.length - savedResults.length;
+        const found = savedResults.filter((r) => r.qty > 0).length;
+        const notFound = savedResults.filter((r) => r.qty === 0).length;
+        if (savedResults.length === 0) {
+          toast.error("No serials were saved (reviewed, pending verification, or rejected)");
+        } else if (notFound > 0) {
           toast.warning(`${found} found, ${notFound} not found (-${notFound} variance)`);
         } else {
           toast.success(`All ${found} serials matched`);
+        }
+        if (skipped > 0 && savedResults.length > 0) {
+          toast.error(`${skipped} serial(s) not saved (reviewed, pending verification, or rejected)`);
         }
 
         // Send unknown serials as a single discrepancy record to supervisor
@@ -811,7 +853,7 @@ export default function CountingPage() {
             const res = await fetch("/api/team/serial-discrepancies", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(discData),
+              body: JSON.stringify({ ...discData, clientId: discClientId }),
             });
             if (!res.ok) throw new Error("Failed");
             try { await markDiscrepancySynced(discClientId); } catch { /* ok */ }
@@ -823,10 +865,11 @@ export default function CountingPage() {
 
         setShowFlash(true);
       } finally {
+        isSubmittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [isSubmitting, handleCount, comment, currentEntry, selectedBin]
+    [handleCount, comment, currentEntry, selectedBin]
   );
 
   const skipItem = useCallback(() => {
@@ -878,7 +921,7 @@ export default function CountingPage() {
 
       setPageState(pending.length > 0 ? "counting" : "reviewing");
     },
-    [items]
+    [items, sessionKey]
   );
 
   function goBackToBinSelection() {
@@ -913,16 +956,24 @@ export default function CountingPage() {
   }, [verificationItems]);
 
   const submitVerificationCount = useCallback(async () => {
-    if (!currentVerificationItem || isSubmitting) return;
+    if (!currentVerificationItem || isSubmittingRef.current) return;
     const qty = parseFloat(verificationQtyValue);
     if (isNaN(qty) || qty < 0) {
       toast.error("Please enter a valid quantity");
       return;
     }
 
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
-    const clientId = uuidv4();
+    const verificationId = currentVerificationItem.verificationId;
+    // Reuse the clientId across retries so the server dedups instead of double-inserting
+    let clientId = verificationClientIdsRef.current.get(verificationId);
+    if (!clientId) {
+      clientId = uuidv4();
+      verificationClientIdsRef.current.set(verificationId, clientId);
+    }
     const isMatch = qty === (currentVerificationItem.onHand ?? 0);
+    const countedAt = new Date().toISOString();
 
     // Save to IndexedDB first so data survives network failures
     try {
@@ -932,35 +983,54 @@ export default function CountingPage() {
         countedQty: qty,
         isMatch,
         comment: verificationComment || null,
-        countedAt: new Date().toISOString(),
-        verificationId: currentVerificationItem.verificationId,
+        countedAt,
+        verificationId,
+        ...offlineScope,
       });
     } catch {
       // IndexedDB unavailable — continue with server POST
     }
 
     try {
-      const res = await fetch("/api/team/count", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itemId: currentVerificationItem.itemId,
-          countedQty: qty,
-          isMatch,
-          comment: verificationComment || undefined,
-          clientId,
-          verificationId: currentVerificationItem.verificationId,
-        }),
-      });
+      let savedOffline = false;
+      try {
+        const res = await fetch("/api/team/count", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            itemId: currentVerificationItem.itemId,
+            countedQty: qty,
+            isMatch,
+            comment: verificationComment || undefined,
+            clientId,
+            countedAt,
+            verificationId,
+          }),
+        });
 
-      if (!res.ok) {
-        const data = await res.json();
-        toast.error(data.error || "Failed to submit verification");
-        return;
+        if (!res.ok && isDefinitiveRejection(res.status)) {
+          const data = await res.json().catch(() => ({}));
+          try { await markCountsRejected([clientId], data.error); } catch { /* ok */ }
+          verificationClientIdsRef.current.delete(verificationId);
+          toast.error(data.error || "Failed to submit verification");
+          return;
+        }
+
+        if (res.ok) {
+          // Mark as synced in IndexedDB
+          try { await markCountSynced(clientId); } catch { /* ok */ }
+        } else {
+          // Offline / transient error — queued in IndexedDB, useSync will retry
+          savedOffline = true;
+        }
+      } catch {
+        savedOffline = true;
       }
+      verificationClientIdsRef.current.delete(verificationId);
 
-      // Mark as synced in IndexedDB
-      try { await markCountSynced(clientId); } catch { /* ok */ }
+      if (savedOffline) {
+        toast.info("Verification saved offline — will sync when back online");
+      }
 
       const onHand = currentVerificationItem.onHand ?? 0;
       const variance = qty - onHand;
@@ -1013,18 +1083,21 @@ export default function CountingPage() {
     } catch {
       toast.error("Failed to submit — check your connection");
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
-  }, [currentVerificationItem, verificationQtyValue, verificationComment, isSubmitting, scopedVerificationItems, verificationItems, settings.autoNextBin, selectedVerificationBin, startVerificationCounting]);
+  }, [currentVerificationItem, verificationQtyValue, verificationComment, offlineScope, scopedVerificationItems, verificationItems, settings.autoNextBin, selectedVerificationBin, startVerificationCounting]);
 
   // Submit serialized verification group (uses SerializedGroupCard)
   const submitSerializedVerificationGroup = useCallback(
     async (results: SerialGroupResult[], unknownSerials?: string[]) => {
-      if (isSubmitting) return;
+      if (isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
       setIsSubmitting(true);
 
       const currentEntry = verificationQueue[verificationIndex];
       if (!currentEntry || currentEntry.type !== "serialized-group") {
+        isSubmittingRef.current = false;
         setIsSubmitting(false);
         return;
       }
@@ -1034,13 +1107,20 @@ export default function CountingPage() {
         const submitResults = await Promise.all(
           results.map(async ({ itemId, qty }) => {
             const vi = currentEntry.items.find((v) => v.itemId === itemId);
-            if (!vi) return { success: false, itemId };
+            if (!vi) return { status: "rejected" as const, itemId, qty };
 
             const onHand = vi.onHand ?? 0;
-            const cid = uuidv4();
+            // Reuse the clientId across retries so the server dedups
+            let cid = verificationClientIdsRef.current.get(vi.verificationId);
+            if (!cid) {
+              cid = uuidv4();
+              verificationClientIdsRef.current.set(vi.verificationId, cid);
+            }
             const isMatch = qty === onHand;
+            const countedAt = new Date().toISOString();
 
-            // Save to IndexedDB first
+            // Save to IndexedDB first (with verificationId so offline sync
+            // submits it as a verification, not a plain count)
             try {
               await saveCountLocally({
                 clientId: cid,
@@ -1048,7 +1128,9 @@ export default function CountingPage() {
                 countedQty: qty,
                 isMatch,
                 comment: null,
-                countedAt: new Date().toISOString(),
+                countedAt,
+                verificationId: vi.verificationId,
+                ...offlineScope,
               });
             } catch { /* IndexedDB unavailable */ }
 
@@ -1061,29 +1143,46 @@ export default function CountingPage() {
                   countedQty: qty,
                   isMatch,
                   clientId: cid,
+                  countedAt,
                   verificationId: vi.verificationId,
                 }),
               });
               if (res.ok) {
                 try { await markCountSynced(cid); } catch { /* ok */ }
-                return { success: true, itemId };
+                verificationClientIdsRef.current.delete(vi.verificationId);
+                return { status: "saved" as const, itemId, qty };
               }
-              return { success: false, itemId };
+              if (isDefinitiveRejection(res.status)) {
+                const data = await res.json().catch(() => ({}));
+                try { await markCountsRejected([cid], data.error); } catch { /* ok */ }
+                verificationClientIdsRef.current.delete(vi.verificationId);
+                return { status: "rejected" as const, itemId, qty };
+              }
+              verificationClientIdsRef.current.delete(vi.verificationId);
+              return { status: "offline" as const, itemId, qty };
             } catch {
-              return { success: false, itemId };
+              verificationClientIdsRef.current.delete(vi.verificationId);
+              return { status: "offline" as const, itemId, qty };
             }
           })
         );
 
-        const failedCount = submitResults.filter(r => r && !r.success).length;
-        if (failedCount > 0) {
-          toast.info(`${failedCount} verification(s) saved offline — will sync when back online`);
+        const offlineCount = submitResults.filter((r) => r.status === "offline").length;
+        const rejectedCount = submitResults.filter((r) => r.status === "rejected").length;
+        if (offlineCount > 0) {
+          toast.info(`${offlineCount} verification(s) saved offline — will sync when back online`);
+        }
+        if (rejectedCount > 0) {
+          toast.error(`${rejectedCount} verification(s) rejected by the server (already completed or no longer assigned)`);
         }
 
-        // Show consolidated summary toast
-        const found = results.filter((r) => r.qty > 0).length;
-        const notFound = results.filter((r) => r.qty === 0).length;
-        if (notFound > 0) {
+        // Show consolidated summary toast (only for verifications actually saved)
+        const accepted = submitResults.filter((r) => r.status !== "rejected");
+        const found = accepted.filter((r) => r.qty > 0).length;
+        const notFound = accepted.filter((r) => r.qty === 0).length;
+        if (accepted.length === 0) {
+          // nothing saved — rejection toast above covers it
+        } else if (notFound > 0) {
           toast.warning(`Verification: ${found} found, ${notFound} not found`);
         } else {
           toast.success(`All ${found} serials verified`);
@@ -1115,7 +1214,7 @@ export default function CountingPage() {
             const res = await fetch("/api/team/serial-discrepancies", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(discData),
+              body: JSON.stringify({ ...discData, clientId: discClientId }),
             });
             if (!res.ok) throw new Error("Failed");
             try { await markDiscrepancySynced(discClientId); } catch { /* ok */ }
@@ -1169,10 +1268,11 @@ export default function CountingPage() {
       } catch {
         toast.error("Failed to submit — check your connection");
       } finally {
+        isSubmittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [isSubmitting, verificationQueue, verificationIndex, selectedVerificationBin, scopedVerificationItems, verificationItems, settings.autoNextBin, startVerificationCounting]
+    [offlineScope, verificationQueue, verificationIndex, selectedVerificationBin, scopedVerificationItems, verificationItems, settings.autoNextBin, startVerificationCounting]
   );
 
   // Auto-advance verification after flash
@@ -1247,7 +1347,7 @@ export default function CountingPage() {
     setSelectedBin(null);
     setPageState("bin-selection");
     setCurrentIndex(0);
-  }, [settings.hapticFeedback, settings.autoNextBin, getNextBin, selectedBin, selectBin]);
+  }, [settings.hapticFeedback, settings.autoNextBin, getNextBin, selectedBin, selectBin, sessionKey]);
 
   // ---------- Recount via full ActiveItemCard ----------
   const startRecount = useCallback((item: CountItem) => {

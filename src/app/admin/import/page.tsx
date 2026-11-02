@@ -99,7 +99,7 @@ export default function ImportPage() {
 
   const selectedEvent = events.find((e) => String(e.id) === selectedEventId);
 
-  const handleUpload = () => {
+  const handleUpload = (confirmed = false) => {
     if (!file || !selectedEventId) {
       toast.error("Please select a file and event");
       return;
@@ -112,6 +112,7 @@ export default function ImportPage() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("eventId", selectedEventId);
+    if (confirmed) formData.append("confirm", "true");
 
     const xhr = new XMLHttpRequest();
     xhr.upload.addEventListener("progress", (e) => {
@@ -131,6 +132,15 @@ export default function ImportPage() {
           setSummary(data.summary);
           toast.success(`Imported ${data.summary.totalItems} items successfully!`);
           loadExistingEvents(); // Refresh so copy-from picks up new data
+        } else if (xhr.status === 409 && data.requiresConfirm) {
+          if (window.confirm(`${data.error}
+
+Continue and delete existing counts?`)) {
+            setUploading(false);
+            setUploadProgress(null);
+            handleUpload(true);
+            return;
+          }
         } else {
           toast.error(data.error || "Import failed");
         }
@@ -151,7 +161,7 @@ export default function ImportPage() {
     xhr.send(formData);
   };
 
-  const handleCopyFromEvent = async () => {
+  const handleCopyFromEvent = async (confirmed = false) => {
     if (!copySourceId || !selectedEventId) return;
     setCopying(true);
     setSummary(null);
@@ -159,12 +169,20 @@ export default function ImportPage() {
       const res = await fetch("/api/admin/import", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: Number(selectedEventId) }),
+        body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: Number(selectedEventId), confirm: confirmed }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setSummary(data.summary);
         toast.success(`Copied ${data.summary.totalItems} items`);
+      } else if (res.status === 409 && data.requiresConfirm) {
+        if (window.confirm(`${data.error}
+
+Continue and delete existing counts?`)) {
+          setCopying(false);
+          await handleCopyFromEvent(true);
+          return;
+        }
       } else {
         toast.error(data.error || "Copy failed");
       }
@@ -251,7 +269,7 @@ export default function ImportPage() {
 
           {!uploading && (
             <Button
-              onClick={handleUpload}
+              onClick={() => handleUpload()}
               disabled={!file || !selectedEventId}
               className="w-full h-12"
             >
@@ -302,7 +320,7 @@ export default function ImportPage() {
               </SelectContent>
             </Select>
             <Button
-              onClick={handleCopyFromEvent}
+              onClick={() => handleCopyFromEvent()}
               disabled={!copySourceId || !selectedEventId || copying}
               className="w-full h-12 gap-2"
             >

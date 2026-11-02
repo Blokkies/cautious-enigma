@@ -311,11 +311,20 @@ export default function AdminSetup() {
 
   const doStatusChange = async (eventId: number, newStatus: string) => {
     try {
-      const res = await fetch("/api/admin/events", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: eventId, status: newStatus }),
-      });
+      const current = events.find((e) => e.id === eventId);
+      // setup -> active must go through the activate endpoint
+      const res =
+        current?.status === "setup" && newStatus === "active"
+          ? await fetch("/api/admin/activate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ eventId }),
+            })
+          : await fetch("/api/admin/events", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: eventId, status: newStatus }),
+            });
       if (res.ok) {
         toast.success(`Event status changed to ${newStatus}`);
         loadEvents();
@@ -488,7 +497,7 @@ export default function AdminSetup() {
   };
 
   // Step 2: Import file
-  const handleImport = () => {
+  const handleImport = (confirmed = false) => {
     if (!file || !wizardEventId) {
       toast.error("Please select a file");
       return;
@@ -499,6 +508,7 @@ export default function AdminSetup() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("eventId", String(wizardEventId));
+    if (confirmed) formData.append("confirm", "true");
 
     const xhr = new XMLHttpRequest();
     xhr.upload.addEventListener("progress", (e) => {
@@ -520,6 +530,15 @@ export default function AdminSetup() {
           toast.success(`Imported ${data.summary.totalItems} items`);
           markComplete("import");
           loadExistingEvents(); // Refresh so copy-from picks up new data
+        } else if (xhr.status === 409 && data.requiresConfirm) {
+          if (window.confirm(`${data.error}
+
+Continue and delete existing counts?`)) {
+            setUploading(false);
+            setUploadProgress(null);
+            handleImport(true);
+            return;
+          }
         } else {
           toast.error(data.error || "Import failed");
         }
@@ -540,14 +559,14 @@ export default function AdminSetup() {
     xhr.send(formData);
   };
 
-  const handleCopyFromEvent = async () => {
+  const handleCopyFromEvent = async (confirmed = false) => {
     if (!copySourceId || !wizardEventId) return;
     setCopying(true);
     try {
       const res = await fetch("/api/admin/import", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: wizardEventId }),
+        body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: wizardEventId, confirm: confirmed }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -555,6 +574,14 @@ export default function AdminSetup() {
         setSelectedWarehouses(new Set());
         toast.success(`Copied ${data.summary.totalItems} items`);
         markComplete("import");
+      } else if (res.status === 409 && data.requiresConfirm) {
+        if (window.confirm(`${data.error}
+
+Continue and delete existing counts?`)) {
+          setCopying(false);
+          await handleCopyFromEvent(true);
+          return;
+        }
       } else {
         toast.error(data.error || "Copy failed");
       }
@@ -829,7 +856,7 @@ export default function AdminSetup() {
                     </div>
 
                     {file && !uploading && (
-                      <Button onClick={handleImport} className="w-full h-12">
+                      <Button onClick={() => handleImport()} className="w-full h-12">
                         Import Data
                       </Button>
                     )}
@@ -872,7 +899,7 @@ export default function AdminSetup() {
                           </SelectContent>
                         </Select>
                         <Button
-                          onClick={handleCopyFromEvent}
+                          onClick={() => handleCopyFromEvent()}
                           disabled={!copySourceId || copying}
                           className="w-full h-12 gap-2"
                         >

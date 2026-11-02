@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
     .from(items)
     .where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses)))
     .groupBy(items.teamId);
-  const teamItemMap = new Map(teamItemCounts.map((r) => [r.teamId, r.count]));
+  const teamItemMap = new Map(teamItemCounts.map((r) => [r.teamId, Number(r.count)]));
 
   // Counted per team
   const teamCountedCounts = await db
@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
     .from(counts)
     .where(and(eq(counts.eventId, eventId), initialOnly, cwf))
     .groupBy(counts.teamId);
-  const teamCountedMap = new Map(teamCountedCounts.map((r) => [r.teamId, r.count]));
+  const teamCountedMap = new Map(teamCountedCounts.map((r) => [r.teamId, Number(r.count)]));
 
   // Variances per team
   const teamVarianceCounts = await db
@@ -124,7 +124,7 @@ export async function GET(request: NextRequest) {
     .from(counts)
     .where(and(eq(counts.eventId, eventId), initialOnly, eq(counts.isMatch, false), cwf))
     .groupBy(counts.teamId);
-  const teamVarianceMap = new Map(teamVarianceCounts.map((r) => [r.teamId, r.count]));
+  const teamVarianceMap = new Map(teamVarianceCounts.map((r) => [r.teamId, Number(r.count)]));
 
   // Last activity per team
   const teamLastActivity = await db
@@ -169,21 +169,21 @@ export async function GET(request: NextRequest) {
 
   const serialOverStats = await getSerialDiscrepancyOverStats(eventId, warehouses);
 
-  const total = totalItems?.count || 0;
-  const counted = totalCounted?.count || 0;
+  const total = Number(totalItems?.count ?? 0);
+  const counted = Number(totalCounted?.count ?? 0);
 
-  const combinedOverCount = (overStats?.count || 0) + serialOverStats.overCount;
-  const combinedOverValue = (overStats?.total || 0) + serialOverStats.overValue;
-  const combinedUnderCount = underStats?.count || 0;
-  const combinedUnderValue = underStats?.total || 0;
+  const combinedOverCount = Number(overStats?.count ?? 0) + serialOverStats.overCount;
+  const combinedOverValue = Number(overStats?.total ?? 0) + serialOverStats.overValue;
+  const combinedUnderCount = Number(underStats?.count ?? 0);
+  const combinedUnderValue = Number(underStats?.total ?? 0);
 
   return NextResponse.json({
     overall: {
       total,
       counted,
-      matched: totalMatched?.count || 0,
-      withVariance: (totalVariance?.count || 0) + serialOverStats.overCount,
-      varianceValue: (varianceValue?.total || 0) + serialOverStats.overValue,
+      matched: Number(totalMatched?.count ?? 0),
+      withVariance: Number(totalVariance?.count ?? 0) + serialOverStats.overCount,
+      varianceValue: Number(varianceValue?.total ?? 0) + serialOverStats.overValue,
       overCount: combinedOverCount,
       overValue: combinedOverValue,
       underCount: combinedUnderCount,
@@ -191,9 +191,9 @@ export async function GET(request: NextRequest) {
       netVarianceValue: combinedOverValue - combinedUnderValue,
       pending: total - counted,
       progressPercent: total > 0 ? Math.round((counted / total) * 100) : 0,
-      openQueries: openQueries?.count || 0,
-      pendingBreakdowns: pendingBreakdowns?.count || 0,
-      openSerialDiscrepancies: openSerialDiscrepancies?.count || 0,
+      openQueries: Number(openQueries?.count ?? 0),
+      pendingBreakdowns: Number(pendingBreakdowns?.count ?? 0),
+      openSerialDiscrepancies: Number(openSerialDiscrepancies?.count ?? 0),
     },
     teamProgress,
     recentActivity,

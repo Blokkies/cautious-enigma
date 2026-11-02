@@ -11,6 +11,15 @@ import { getApiUser } from "@/lib/api-auth";
 
 const VALID_STATUSES = ["setup", "active", "completed", "locked"] as const;
 
+// Status transitions allowed via this endpoint (mirrors the admin UI).
+// setup -> active must go through POST /api/admin/activate.
+const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  setup: [],
+  active: ["setup", "completed"],
+  completed: ["locked"],
+  locked: ["active"],
+};
+
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "admin") {
@@ -23,10 +32,10 @@ export async function GET(request: NextRequest) {
 
   const enriched = await Promise.all(events.map(async (event) => {
     const [[totalItemCountRow], [assignedItemCountRow], [teamCountRow], [supervisorCountRow]] = await Promise.all([
-      db.select({ count: sql<number>`count(*)` }).from(items).where(eq(items.eventId, event.id)),
-      db.select({ count: sql<number>`count(*)` }).from(items).where(and(eq(items.eventId, event.id), isNotNull(items.teamId))),
-      db.select({ count: sql<number>`count(*)` }).from(teams).where(eq(teams.eventId, event.id)),
-      db.select({ count: sql<number>`count(*)` }).from(supervisors).where(eq(supervisors.eventId, event.id)),
+      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(eq(items.eventId, event.id)),
+      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(items).where(and(eq(items.eventId, event.id), isNotNull(items.teamId))),
+      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(teams).where(eq(teams.eventId, event.id)),
+      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(supervisors).where(eq(supervisors.eventId, event.id)),
     ]);
 
     return {
@@ -119,7 +128,21 @@ export async function PUT(request: NextRequest) {
           { status: 400 }
         );
       }
-      updates.status = status;
+      if (status !== existing.status) {
+        if (existing.status === "setup" && status === "active") {
+          return NextResponse.json(
+            { error: "Use the Activate action to activate an event" },
+            { status: 400 }
+          );
+        }
+        if (!(ALLOWED_TRANSITIONS[existing.status] || []).includes(status)) {
+          return NextResponse.json(
+            { error: `Cannot change event status from ${existing.status} to ${status}` },
+            { status: 400 }
+          );
+        }
+        updates.status = status;
+      }
     }
 
     if (warehouses !== undefined) {

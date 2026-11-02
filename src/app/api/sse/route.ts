@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { counts, items, teams, stocktakeEvents } from "@/lib/db/schema";
-import { eq, and, sql, desc, isNotNull } from "drizzle-orm";
+import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { verifyToken } from "@/lib/token";
+import { getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -25,24 +26,50 @@ export async function GET(request: NextRequest) {
   const startTime = Date.now();
 
   const encoder = new TextEncoder();
+  let interval: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+  const stop = () => {
+    closed = true;
+    if (interval) clearInterval(interval);
+  };
+
   const stream = new ReadableStream({
     async start(controller) {
       const sendEvent = (event: string, data: unknown) => {
-        controller.enqueue(
-          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-        );
+        if (closed) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          );
+        } catch {
+          // Controller already closed (client went away)
+          stop();
+        }
+      };
+
+      const closeStream = (event: string, data: unknown) => {
+        if (interval) clearInterval(interval);
+        sendEvent(event, data);
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
       };
 
       // Send initial heartbeat
       sendEvent("connected", { time: new Date().toISOString() });
 
-      const interval = setInterval(async () => {
+      const warehouses = await getEventWarehouses(eventId).catch(() => null);
+      const cwf = countsWarehouseFilter(eventId, warehouses);
+
+      interval = setInterval(async () => {
+        if (closed) return;
         try {
           // Auto-close after max duration
           if (Date.now() - startTime > MAX_DURATION_MS) {
-            sendEvent("timeout", { message: "Connection expired, please reconnect" });
-            clearInterval(interval);
-            controller.close();
+            closeStream("timeout", { message: "Connection expired, please reconnect" });
             return;
           }
 
@@ -53,9 +80,7 @@ export async function GET(request: NextRequest) {
             .where(eq(stocktakeEvents.id, eventId));
 
           if (!event || event.status === "completed" || event.status === "locked") {
-            sendEvent("event-closed", { message: "Event has been completed or locked" });
-            clearInterval(interval);
-            controller.close();
+            closeStream("event-closed", { message: "Event has been completed or locked" });
             return;
           }
 
@@ -76,10 +101,11 @@ export async function GET(request: NextRequest) {
               and(
                 eq(counts.eventId, eventId),
                 eq(counts.countType, "initial"),
-                sql`counted_at > ${lastCheckTime}`
+                sql`${counts.countedAt}::timestamptz > ${lastCheckTime}::timestamptz`,
+                warehouseFilter(warehouses)
               )
             )
-            .orderBy(desc(counts.countedAt))
+            .orderBy(sql`${counts.countedAt}::timestamptz DESC`)
             .limit(10);
 
           if (newCounts.length > 0) {
@@ -88,19 +114,19 @@ export async function GET(request: NextRequest) {
             lastCheckTime = newCounts[0].countedAt;
           }
 
-          // Overall progress (only assigned items)
+          // Overall progress (only assigned items in the event's selected warehouses)
           const [totalItems] = await db
             .select({ count: sql<number>`count(*)` })
             .from(items)
-            .where(and(eq(items.eventId, eventId), isNotNull(items.teamId)));
+            .where(and(eq(items.eventId, eventId), isNotNull(items.teamId), warehouseFilter(warehouses)));
 
           const [totalCounted] = await db
             .select({ count: sql<number>`count(*)` })
             .from(counts)
-            .where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial")));
+            .where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), cwf));
 
-          const total = totalItems?.count || 0;
-          const counted = totalCounted?.count || 0;
+          const total = Number(totalItems?.count ?? 0);
+          const counted = Number(totalCounted?.count ?? 0);
 
           sendEvent("progress", {
             total,
@@ -114,9 +140,10 @@ export async function GET(request: NextRequest) {
       }, POLL_INTERVAL_MS);
 
       // Cleanup on close
-      request.signal.addEventListener("abort", () => {
-        clearInterval(interval);
-      });
+      request.signal.addEventListener("abort", stop);
+    },
+    cancel() {
+      stop();
     },
   });
 

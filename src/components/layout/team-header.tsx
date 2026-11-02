@@ -19,7 +19,7 @@ export function TeamHeader({ pendingSyncs = 0 }: TeamHeaderProps) {
   const cm = settings.compactMode;
 
   const handleLogout = async () => {
-    await logout();
+    if (!(await logout())) return; // user chose to stay so unsynced counts can sync
     router.push("/");
   };
 

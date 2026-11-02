@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { getPendingSyncCount, syncToServer, clearSessionOfflineData } from "@/stores/offline-db";
 
 interface User {
   id: number;
@@ -17,7 +18,8 @@ interface AuthContextType {
   login: (type: string, id: number, pin: string, eventId?: number) => Promise<{ success: boolean; error?: string }>;
   adminLogin: (password: string) => Promise<{ success: boolean; error?: string }>;
   executiveLogin: (password: string) => Promise<{ success: boolean; error?: string }>;
-  logout: () => Promise<void>;
+  /** Resolves false if the user cancelled logout to keep unsynced counts syncing. */
+  logout: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -100,9 +102,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
+  const logout = async (): Promise<boolean> => {
+    // Team sessions: never silently drop offline counts. Try to sync first;
+    // if anything is still pending, ask before logging out. Unsynced records
+    // stay on the device scoped to this team/event and sync on next login.
+    if (user?.type === "team" && user.eventId != null) {
+      const scope = { eventId: user.eventId, teamId: user.id };
+      try {
+        let pending = await getPendingSyncCount(scope);
+        if (pending > 0) {
+          await syncToServer(scope).catch(() => undefined);
+          pending = await getPendingSyncCount(scope);
+        }
+        if (pending > 0) {
+          const proceed = window.confirm(
+            `${pending} count(s) have not synced to the server yet. They will stay on this device and sync the next time this team logs in.\n\nLog out anyway?`
+          );
+          if (!proceed) return false;
+        } else {
+          await clearSessionOfflineData(scope);
+        }
+      } catch {
+        // IndexedDB unavailable — nothing stored locally to protect
+      }
+    }
+
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setUser(null);
+    return true;
   };
 
   return (

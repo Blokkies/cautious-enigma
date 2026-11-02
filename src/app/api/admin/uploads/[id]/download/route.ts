@@ -31,10 +31,15 @@ export async function GET(
       upload.mimeType ||
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+    // ASCII fallback (no quotes/backslashes/control/non-ASCII chars) + RFC 5987 UTF-8 name
+    const filename = upload.filename || "upload.xlsx";
+    const asciiName = filename.replace(/[^\x20-\x7E]|["\\]/g, "_");
+    const contentDisposition = `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+
     return new NextResponse(fileBuffer as unknown as BodyInit, {
       headers: {
         "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${upload.filename}"`,
+        "Content-Disposition": contentDisposition,
         "Content-Length": String(fileBuffer.length),
       },
     });

@@ -6,7 +6,9 @@ import { getApiUser } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
-  if (!user || (user.type !== "supervisor" && user.type !== "auditor" && user.type !== "executive")) {
+  // Executives have their own thread endpoint (/api/executive/messages); their ids
+  // come from a different table, so filtering by supervisorId would leak another thread.
+  if (!user || (user.type !== "supervisor" && user.type !== "auditor")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

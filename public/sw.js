@@ -1,4 +1,4 @@
-const CACHE_NAME = "stocktake-v1";
+const CACHE_NAME = "stocktake-v2";
 
 const STATIC_ASSETS = [
   "/",
@@ -45,11 +45,13 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/api/sse")) {
     event.respondWith(
       fetch(request).catch(() => {
+        // X-SW-Offline lets callers tell "network unreachable" apart from a
+        // real server 503, so they keep optimistic state and queue for sync.
         return new Response(
-          JSON.stringify({ error: "Offline" }),
+          JSON.stringify({ error: "Offline", offline: true }),
           {
             status: 503,
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-SW-Offline": "1" },
           }
         );
       })

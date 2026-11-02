@@ -232,7 +232,7 @@ export function SerializedGroupCard({
 
     // Re-focus
     setTimeout(() => scanInputRef.current?.focus(), 50);
-  }, [scanInput, entry.items, toggles]);
+  }, [scanInput, entry.items, toggles, settings.hapticFeedback]);
 
   function removeUnknownSerial(index: number) {
     setUnknownSerials((prev) => prev.filter((_, i) => i !== index));

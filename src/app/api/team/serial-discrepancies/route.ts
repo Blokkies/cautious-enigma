@@ -4,6 +4,10 @@ import { serialDiscrepancies, auditLog } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getApiUser, checkEventActive } from "@/lib/api-auth";
 
+function safeJsonParse<T>(json: string, fallback: T): T {
+  try { return JSON.parse(json) as T; } catch { return fallback; }
+}
+
 export async function POST(request: NextRequest) {
   const user = getApiUser(request);
   if (!user || user.type !== "team") {
@@ -194,12 +198,16 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Not assigned to your team" }, { status: 403 });
     }
 
+    if (disc.status !== "open") {
+      return NextResponse.json({ error: "Discrepancy is no longer open" }, { status: 409 });
+    }
+
     if (disc.verificationStatus !== "pending") {
       return NextResponse.json({ error: "Verification is not pending" }, { status: 400 });
     }
 
     // Validate all unknown serials are accounted for
-    const unknowns: string[] = JSON.parse(disc.unknownSerials);
+    const unknowns = safeJsonParse<string[]>(disc.unknownSerials, []);
     const verifiedSerialSet = new Set(verifiedSerials.map((v) => v.serial));
     const missingSerials = unknowns.filter((s) => !verifiedSerialSet.has(s));
     if (missingSerials.length > 0) {
@@ -209,14 +217,25 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Update discrepancy
-    await db.update(serialDiscrepancies)
+    // Update discrepancy (conditional on still being open + pending to avoid races)
+    const updated = await db.update(serialDiscrepancies)
       .set({
         verificationStatus: "completed",
         verifiedSerials: JSON.stringify(verifiedSerials),
         verificationCompletedAt: new Date().toISOString(),
       })
-      .where(eq(serialDiscrepancies.id, discrepancyId));
+      .where(
+        and(
+          eq(serialDiscrepancies.id, discrepancyId),
+          eq(serialDiscrepancies.status, "open"),
+          eq(serialDiscrepancies.verificationStatus, "pending")
+        )
+      )
+      .returning({ id: serialDiscrepancies.id });
+
+    if (updated.length === 0) {
+      return NextResponse.json({ error: "Verification is no longer pending" }, { status: 409 });
+    }
 
     // Audit log
     await db.insert(auditLog)

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/token";
 
-const PUBLIC_PATHS = ["/", "/api/auth/login", "/api/auth/admin-login", "/api/auth/executive-login", "/api/auth/logout", "/api/auth/list", "/api/auth/me"];
+const PUBLIC_PATHS = ["/", "/api/auth/login", "/api/auth/admin-login", "/api/auth/executive-login", "/api/auth/logout", "/api/auth/list", "/api/auth/me", "/api/health"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -100,17 +100,22 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
-  // Pass user info in headers for API routes
-  const response = NextResponse.next();
-  response.headers.set("x-user-id", String(payload.id));
-  response.headers.set("x-user-type", payload.type);
-  response.headers.set("x-user-name", payload.name);
-  response.headers.set("x-event-id", String(payload.eventId));
+  // Pass user info to route handlers as REQUEST headers (never response headers).
+  // Strip any client-supplied copies first so they can't be spoofed.
+  const requestHeaders = new Headers(request.headers);
+  for (const h of ["x-user-id", "x-user-type", "x-user-name", "x-event-id", "x-event-status"]) {
+    requestHeaders.delete(h);
+  }
+  requestHeaders.set("x-user-id", String(payload.id));
+  requestHeaders.set("x-user-type", payload.type);
+  // Header values must be Latin-1; encode so names with any Unicode character work.
+  requestHeaders.set("x-user-name", encodeURIComponent(payload.name));
+  requestHeaders.set("x-event-id", String(payload.eventId));
   if (payload.eventStatus) {
-    response.headers.set("x-event-status", payload.eventStatus);
+    requestHeaders.set("x-event-status", payload.eventStatus);
   }
 
-  return response;
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 export const config = {

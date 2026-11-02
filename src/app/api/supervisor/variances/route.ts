@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, inArray } from "drizzle-orm";
-import { getApiUser, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
-
-function safeJsonParse<T>(json: string, fallback: T): T {
-  try { return JSON.parse(json) as T; } catch { return fallback; }
-}
+import { getApiUser, checkEventActive, getEventWarehouses, warehouseFilter, buildItemRefMap, isRefOutsideWarehouses } from "@/lib/api-auth";
+import { safeJsonParse } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   const user = getApiUser(request);
@@ -199,34 +196,15 @@ export async function GET(request: NextRequest) {
     }
 
     // Batch-fetch item metadata for all discrepancy itemCodes (avoids N+1)
-    const openItemCodes = Array.from(new Set(openDiscrepancies.map((d) => d.itemCode)));
-    const refMap = new Map<string, { avgCost: number | null; internalId: string | null; warehouse: string | null; division: string | null; stockStatus: string | null }>();
-    if (openItemCodes.length > 0) {
-      const refRows = await db
-        .select({
-          itemCode: items.itemCode,
-          avgCost: items.avgCost,
-          internalId: items.internalId,
-          warehouse: items.warehouse,
-          division: items.division,
-          stockStatus: items.stockStatus,
-        })
-        .from(items)
-        .where(and(eq(items.eventId, eventId), inArray(items.itemCode, openItemCodes)));
-      for (const r of refRows) {
-        const existing = refMap.get(r.itemCode);
-        // Prefer items in selected warehouses
-        if (!existing || (warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse))) {
-          refMap.set(r.itemCode, r);
-        }
-      }
-    }
+    const refMap = await buildItemRefMap(eventId, openDiscrepancies.map((d) => d.itemCode), warehouses);
 
     for (const disc of openDiscrepancies) {
       const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
       if (unknowns.length === 0) continue;
 
       const finalRef = refMap.get(disc.itemCode);
+      // Skip if source item's warehouse is not in the event's selected warehouses
+      if (isRefOutsideWarehouses(finalRef, warehouses)) continue;
       const avgCost = finalRef?.avgCost ?? 0;
 
       // Parse verified serials if completed
@@ -293,33 +271,15 @@ export async function GET(request: NextRequest) {
       );
 
     // Batch-fetch item metadata for approved discrepancy itemCodes
-    const approvedItemCodes = Array.from(new Set(approvedDiscrepancies.map((d) => d.itemCode)));
-    const approvedRefMap = new Map<string, { avgCost: number | null; internalId: string | null; warehouse: string | null; division: string | null; stockStatus: string | null }>();
-    if (approvedItemCodes.length > 0) {
-      const refRows = await db
-        .select({
-          itemCode: items.itemCode,
-          avgCost: items.avgCost,
-          internalId: items.internalId,
-          warehouse: items.warehouse,
-          division: items.division,
-          stockStatus: items.stockStatus,
-        })
-        .from(items)
-        .where(and(eq(items.eventId, eventId), inArray(items.itemCode, approvedItemCodes)));
-      for (const r of refRows) {
-        const existing = approvedRefMap.get(r.itemCode);
-        if (!existing || (warehouses && warehouses.length > 0 && r.warehouse && warehouses.includes(r.warehouse))) {
-          approvedRefMap.set(r.itemCode, r);
-        }
-      }
-    }
+    const approvedRefMap = await buildItemRefMap(eventId, approvedDiscrepancies.map((d) => d.itemCode), warehouses);
 
     for (const disc of approvedDiscrepancies) {
-      const approved: string[] = safeJsonParse<string[]>(disc.approvedSerials!, []);
+      const approved: string[] = safeJsonParse<string[]>(disc.approvedSerials, []);
       if (approved.length === 0) continue;
 
       const finalRef2 = approvedRefMap.get(disc.itemCode);
+      // Skip if source item's warehouse is not in the event's selected warehouses
+      if (isRefOutsideWarehouses(finalRef2, warehouses)) continue;
       const avgCost = finalRef2?.avgCost ?? 0;
 
       for (let i = 0; i < approved.length; i++) {
@@ -535,221 +495,161 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: true, action });
     }
 
-    // Handle edit unknown serial action
-    if (action === "edit_unknown_serial") {
-      const { newSerial } = body;
-      if (countId === undefined || !newSerial || typeof newSerial !== "string") {
-        return NextResponse.json({ error: "countId and newSerial are required" }, { status: 400 });
-      }
-
-      const trimmed = newSerial.trim();
-      if (trimmed.length === 0) {
-        return NextResponse.json({ error: "Serial number cannot be empty" }, { status: 400 });
-      }
-
-      const absId = Math.abs(countId);
-      const discrepancyId = Math.floor(absId / 100000);
-      const serialIndex = absId % 100000;
-
-      const [disc] = await db
-        .select()
-        .from(serialDiscrepancies)
-        .where(
-          and(
-            eq(serialDiscrepancies.id, discrepancyId),
-            eq(serialDiscrepancies.eventId, user.eventId)
-          )
-        );
-
-      if (!disc) {
-        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
-      }
-
-      // Prevent editing serial while a team is verifying
-      if (disc.verificationStatus === "pending") {
-        return NextResponse.json(
-          { error: "Cannot edit serial while verification is in progress" },
-          { status: 409 }
-        );
-      }
-
-      const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
-
-      if (serialIndex >= unknowns.length) {
-        return NextResponse.json({ error: "Serial index out of range" }, { status: 400 });
-      }
-
-      const oldSerial = unknowns[serialIndex];
-      unknowns[serialIndex] = trimmed;
-
-      await db.update(serialDiscrepancies)
-        .set({ unknownSerials: JSON.stringify(unknowns) })
-        .where(eq(serialDiscrepancies.id, discrepancyId));
-
-      await db.insert(auditLog)
-        .values({
-          eventId: user.eventId,
-          userId: user.id,
-          userType: "supervisor",
-          action: "serial_edit_unknown",
-          tableName: "serial_discrepancies",
-          recordId: discrepancyId,
-          oldValue: JSON.stringify({ serial: oldSerial, index: serialIndex }),
-          newValue: JSON.stringify({ serial: trimmed, index: serialIndex }),
-        });
-
-      return NextResponse.json({ success: true, action, oldSerial, newSerial: trimmed });
-    }
-
-    // Handle edit approved serial action
-    if (action === "edit_approved_serial") {
-      const { newSerial } = body;
-      if (countId === undefined || !newSerial || typeof newSerial !== "string") {
-        return NextResponse.json({ error: "countId and newSerial are required" }, { status: 400 });
-      }
-
-      const trimmed = newSerial.trim();
-      if (trimmed.length === 0) {
-        return NextResponse.json({ error: "Serial number cannot be empty" }, { status: 400 });
-      }
-
-      // Approved serials use synthetic countId: -(disc.id * 100000 + 50000 + i)
-      const absId = Math.abs(countId);
-      const discrepancyId = Math.floor(absId / 100000);
-      const approvedIndex = (absId % 100000) - 50000;
-
-      const [disc] = await db
-        .select()
-        .from(serialDiscrepancies)
-        .where(
-          and(
-            eq(serialDiscrepancies.id, discrepancyId),
-            eq(serialDiscrepancies.eventId, user.eventId)
-          )
-        );
-
-      if (!disc) {
-        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
-      }
-
-      const approved: string[] = disc.approvedSerials ? safeJsonParse<string[]>(disc.approvedSerials, []) : [];
-
-      if (approvedIndex < 0 || approvedIndex >= approved.length) {
-        return NextResponse.json({ error: "Approved serial index out of range" }, { status: 400 });
-      }
-
-      const oldSerial = approved[approvedIndex];
-      approved[approvedIndex] = trimmed;
-
-      await db.update(serialDiscrepancies)
-        .set({ approvedSerials: JSON.stringify(approved) })
-        .where(eq(serialDiscrepancies.id, discrepancyId));
-
-      await db.insert(auditLog)
-        .values({
-          eventId: user.eventId,
-          userId: user.id,
-          userType: "supervisor",
-          action: "serial_edit_approved",
-          tableName: "serial_discrepancies",
-          recordId: discrepancyId,
-          oldValue: JSON.stringify({ serial: oldSerial, index: approvedIndex }),
-          newValue: JSON.stringify({ serial: trimmed, index: approvedIndex }),
-        });
-
-      return NextResponse.json({ success: true, action, oldSerial, newSerial: trimmed });
-    }
-
-    // Handle approve/dismiss unknown serial actions
-    if (action === "approve_unknown_serial" || action === "dismiss_unknown_serial") {
-      if (countId === undefined) {
+    // Unknown/approved serial actions (edit, approve, dismiss).
+    // Rows use a synthetic countId: -(disc.id * 100000 + i) for unknowns and
+    // -(disc.id * 100000 + 50000 + i) for approved serials. When the client also
+    // sends the serial value (`serial`), the serial is matched by value so a stale
+    // index can't touch the wrong serial. Read-modify-write of the JSON arrays runs
+    // in a transaction with the discrepancy row locked FOR UPDATE.
+    if (
+      action === "edit_unknown_serial" ||
+      action === "edit_approved_serial" ||
+      action === "approve_unknown_serial" ||
+      action === "dismiss_unknown_serial"
+    ) {
+      if (countId === undefined || countId === null || typeof countId !== "number") {
         return NextResponse.json({ error: "countId is required" }, { status: 400 });
       }
 
-      // Extract discrepancy ID and serial index from synthetic countId
+      const isEdit = action === "edit_unknown_serial" || action === "edit_approved_serial";
+      const onApproved = action === "edit_approved_serial";
+      let trimmed = "";
+      if (isEdit) {
+        const { newSerial } = body;
+        if (!newSerial || typeof newSerial !== "string") {
+          return NextResponse.json({ error: "countId and newSerial are required" }, { status: 400 });
+        }
+        trimmed = newSerial.trim();
+        if (trimmed.length === 0) {
+          return NextResponse.json({ error: "Serial number cannot be empty" }, { status: 400 });
+        }
+      }
+
+      const clientSerial: string | null = typeof body.serial === "string" ? body.serial : null;
       const absId = Math.abs(countId);
       const discrepancyId = Math.floor(absId / 100000);
-      const serialIndex = absId % 100000;
+      const indexHint = onApproved ? (absId % 100000) - 50000 : absId % 100000;
 
-      // Fetch the discrepancy
-      const [disc] = await db
-        .select()
-        .from(serialDiscrepancies)
-        .where(
-          and(
-            eq(serialDiscrepancies.id, discrepancyId),
-            eq(serialDiscrepancies.eventId, user.eventId)
-          )
-        );
-
-      if (!disc) {
-        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      class SerialActionError extends Error {
+        constructor(message: string, public status: number) { super(message); }
       }
 
-      // Prevent modifying unknowns while a team is verifying them
-      if (disc.verificationStatus === "pending") {
-        return NextResponse.json(
-          { error: "Cannot modify serials while verification is in progress" },
-          { status: 409 }
-        );
-      }
+      try {
+        const result = await db.transaction(async (tx) => {
+          const [disc] = await tx
+            .select()
+            .from(serialDiscrepancies)
+            .where(
+              and(
+                eq(serialDiscrepancies.id, discrepancyId),
+                eq(serialDiscrepancies.eventId, user.eventId)
+              )
+            )
+            .for("update");
 
-      const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
-      const approved: string[] = disc.approvedSerials ? safeJsonParse<string[]>(disc.approvedSerials, []) : [];
+          if (!disc) throw new SerialActionError("Discrepancy not found", 404);
 
-      if (serialIndex >= unknowns.length) {
-        return NextResponse.json({ error: "Serial index out of range" }, { status: 400 });
-      }
+          // Prevent modifying unknowns while a team is verifying them
+          if (!onApproved && disc.verificationStatus === "pending") {
+            throw new SerialActionError(
+              isEdit
+                ? "Cannot edit serial while verification is in progress"
+                : "Cannot modify serials while verification is in progress",
+              409
+            );
+          }
 
-      const serial = unknowns[serialIndex];
-      const newUnknowns = unknowns.filter((_, i) => i !== serialIndex);
+          const unknowns: string[] = safeJsonParse<string[]>(disc.unknownSerials, []);
+          const approved: string[] = safeJsonParse<string[]>(disc.approvedSerials, []);
+          const list = onApproved ? approved : unknowns;
 
-      if (action === "approve_unknown_serial") {
-        approved.push(serial);
-        const updates: Record<string, unknown> = {
-          unknownSerials: JSON.stringify(newUnknowns),
-          approvedSerials: JSON.stringify(approved),
-        };
-        // If no unknowns left, mark resolved+approved
-        if (newUnknowns.length === 0) {
-          updates.status = "resolved";
-          updates.resolutionType = "approved";
-          updates.resolvedBy = user.id;
-          updates.resolvedAt = new Date().toISOString();
-        }
-        await db.update(serialDiscrepancies)
-          .set(updates)
-          .where(eq(serialDiscrepancies.id, discrepancyId));
-      } else {
-        // dismiss — just remove from unknowns
-        const updates: Record<string, unknown> = {
-          unknownSerials: JSON.stringify(newUnknowns),
-        };
-        // If no unknowns left and no approved, mark resolved+dismissed
-        if (newUnknowns.length === 0) {
-          updates.status = "resolved";
-          updates.resolutionType = approved.length > 0 ? "approved" : "dismissed";
-          updates.resolvedBy = user.id;
-          updates.resolvedAt = new Date().toISOString();
-        }
-        await db.update(serialDiscrepancies)
-          .set(updates)
-          .where(eq(serialDiscrepancies.id, discrepancyId));
-      }
+          let idx: number;
+          if (clientSerial !== null) {
+            idx = list[indexHint] === clientSerial ? indexHint : list.indexOf(clientSerial);
+            if (idx === -1) {
+              throw new SerialActionError("Serial no longer exists — please refresh", 409);
+            }
+          } else {
+            idx = indexHint;
+            if (idx < 0 || idx >= list.length) {
+              throw new SerialActionError(
+                onApproved ? "Approved serial index out of range" : "Serial index out of range",
+                400
+              );
+            }
+          }
 
-      // Audit log
-      await db.insert(auditLog)
-        .values({
-          eventId: user.eventId,
-          userId: user.id,
-          userType: "supervisor",
-          action: action === "approve_unknown_serial" ? "serial_approve_unknown" : "serial_dismiss_unknown",
-          tableName: "serial_discrepancies",
-          recordId: discrepancyId,
-          newValue: JSON.stringify({ serial, action }),
+          const serial = list[idx];
+
+          if (isEdit) {
+            list[idx] = trimmed;
+            await tx.update(serialDiscrepancies)
+              .set(onApproved
+                ? { approvedSerials: JSON.stringify(approved) }
+                : { unknownSerials: JSON.stringify(unknowns) })
+              .where(eq(serialDiscrepancies.id, discrepancyId));
+
+            await tx.insert(auditLog)
+              .values({
+                eventId: user.eventId,
+                userId: user.id,
+                userType: "supervisor",
+                action: onApproved ? "serial_edit_approved" : "serial_edit_unknown",
+                tableName: "serial_discrepancies",
+                recordId: discrepancyId,
+                oldValue: JSON.stringify({ serial, index: idx }),
+                newValue: JSON.stringify({ serial: trimmed, index: idx }),
+              });
+
+            return { oldSerial: serial };
+          }
+
+          const newUnknowns = unknowns.filter((_, i) => i !== idx);
+          const updates: Record<string, unknown> = {
+            unknownSerials: JSON.stringify(newUnknowns),
+          };
+
+          if (action === "approve_unknown_serial") {
+            approved.push(serial);
+            updates.approvedSerials = JSON.stringify(approved);
+          }
+
+          // If no unknowns left, mark resolved (approved if any serial was approved)
+          if (newUnknowns.length === 0) {
+            updates.status = "resolved";
+            updates.resolutionType = approved.length > 0 ? "approved" : "dismissed";
+            updates.resolvedBy = user.id;
+            updates.resolvedAt = new Date().toISOString();
+          }
+
+          await tx.update(serialDiscrepancies)
+            .set(updates)
+            .where(eq(serialDiscrepancies.id, discrepancyId));
+
+          await tx.insert(auditLog)
+            .values({
+              eventId: user.eventId,
+              userId: user.id,
+              userType: "supervisor",
+              action: action === "approve_unknown_serial" ? "serial_approve_unknown" : "serial_dismiss_unknown",
+              tableName: "serial_discrepancies",
+              recordId: discrepancyId,
+              newValue: JSON.stringify({ serial, action }),
+            });
+
+          return { oldSerial: serial };
         });
 
-      return NextResponse.json({ success: true, action });
+        if (isEdit) {
+          return NextResponse.json({ success: true, action, oldSerial: result.oldSerial, newSerial: trimmed });
+        }
+        return NextResponse.json({ success: true, action });
+      } catch (err) {
+        if (err instanceof SerialActionError) {
+          return NextResponse.json({ error: err.message }, { status: err.status });
+        }
+        throw err;
+      }
     }
 
     // Handle accept/reopen variance actions

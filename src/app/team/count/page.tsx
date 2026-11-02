@@ -1,103 +1,32 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
-  ActiveItemCard,
-  QueueItemRow,
-  QueueGroupRow,
-  CountedItemRow,
-  CountedSerialGroupRow,
   CountItem,
   buildCountingQueue,
   groupReviewItems,
-  type ReviewDisplayRow,
 } from "@/components/counting/item-card";
-import { SerializedGroupCard, type SerialGroupResult } from "@/components/counting/serialized-group-card";
+import type { SerialGroupResult } from "@/components/counting/serialized-group-card";
 import { BinCompleteBanner } from "@/components/counting/bin-complete-banner";
 import { groupBinsByAisle, type BinEntry } from "@/lib/bin-utils";
-import { ArrowLeft, CheckCircle2, Search, AlertTriangle, ChevronDown, ChevronRight, ChevronUp, PlayCircle, ClipboardCheck, ScanBarcode, Users, LayoutGrid, LayoutList, Layers } from "lucide-react";
 import { toast } from "sonner";
-import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/auth-context";
 import { useSettings } from "@/contexts/settings-context";
 import { markNotificationSeen } from "@/hooks/use-notifications";
-import { saveCountLocally, markCountSynced, markCountsRejected, isDefinitiveRejection, isServiceWorkerOffline, saveDiscrepancyLocally, markDiscrepancySynced } from "@/stores/offline-db";
 import { feedbackMatch, feedbackVariance, feedbackBinComplete } from "@/lib/feedback";
-
-type PageState = "loading" | "bin-selection" | "counting" | "complete" | "reviewing" | "recounting" | "verification-counting" | "serial-verification";
-
-/** Normalize isMatch which can be boolean (server) or 0/1 (IndexedDB) */
-function isMatchTrue(val: boolean | number | null | undefined): boolean {
-  return val === true || val === 1;
-}
-
-interface SerialVerificationTask {
-  id: number;
-  itemCode: string;
-  description: string | null;
-  binNumber: string | null;
-  unknownSerials: string[];
-  verificationAssignedAt: string | null;
-}
-
-interface VerificationItem {
-  verificationId: number;
-  countId: number;
-  itemId: number;
-  itemCode: string;
-  description: string | null;
-  brand: string | null;
-  category: string | null;
-  binNumber: string | null;
-  warehouse: string | null;
-  onHand: number | null;
-  avgCost: number | null;
-  totalValue: number | null;
-  stockStatus: string | null;
-  serialNumber: string | null;
-  isSerialized: boolean | number | null;
-  assignedAt: string;
-}
-
-function naturalCompare(a: string, b: string): number {
-  const ax = a.match(/(\d+|\D+)/g) || [];
-  const bx = b.match(/(\d+|\D+)/g) || [];
-  for (let i = 0; i < Math.max(ax.length, bx.length); i++) {
-    if (i >= ax.length) return -1;
-    if (i >= bx.length) return 1;
-    const an = parseInt(ax[i], 10);
-    const bn = parseInt(bx[i], 10);
-    if (!isNaN(an) && !isNaN(bn)) {
-      if (an !== bn) return an - bn;
-    } else {
-      const cmp = ax[i].localeCompare(bx[i]);
-      if (cmp !== 0) return cmp;
-    }
-  }
-  return 0;
-}
-
-/** SVG circular progress indicator */
-function CircularProgress({ percent, size = 28 }: { percent: number; size?: number }) {
-  const strokeWidth = 3;
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (percent / 100) * circumference;
-  return (
-    <svg width={size} height={size} className="flex-shrink-0">
-      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-gray-200" />
-      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-blue-500" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} />
-      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" className="fill-current text-muted-foreground" style={{ fontSize: "8px" }}>
-        {percent}%
-      </text>
-    </svg>
-  );
-}
+import {
+  isMatchTrue,
+  naturalCompare,
+  type BinTab,
+  type PageState,
+  type SerialVerificationTask,
+  type VerificationItem,
+  type VerificationQueueEntry,
+} from "@/components/count/types";
+import { reportUnknownSerials, useCountSubmission, useVerificationSubmission } from "@/components/count/use-count-submission";
+import { BinSelectionView } from "@/components/count/bin-selection-view";
+import { CountingView, CountCompleteView, RecountView, ReviewView } from "@/components/count/counting-views";
+import { SerialVerificationView, VerificationCountingView } from "@/components/count/verification-views";
 
 export default function CountingPage() {
   const { user } = useAuth();
@@ -135,7 +64,6 @@ export default function CountingPage() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Bin tabs
-  type BinTab = "not-started" | "in-progress" | "completed" | "verification";
   const [binTab, setBinTab] = useState<BinTab>("not-started");
   const [completedFilter, setCompletedFilter] = useState<"all" | "variances" | "matched">("all");
   const [serializedOnly, setSerializedOnly] = useState(false);
@@ -407,11 +335,6 @@ export default function CountingPage() {
     });
   }, [verificationItems, selectedVerificationBin]);
 
-  // Verification queue: groups serialized verification items by itemCode
-  type VerificationQueueEntry =
-    | { type: "single"; item: VerificationItem }
-    | { type: "serialized-group"; itemCode: string; description: string | null;
-        brand: string | null; stockStatus: string | null; items: VerificationItem[] };
 
   const verificationQueue = useMemo((): VerificationQueueEntry[] => {
     const queue: VerificationQueueEntry[] = [];
@@ -448,30 +371,6 @@ export default function CountingPage() {
     }
     return queue;
   }, [scopedVerificationItems]);
-
-  // Helper: convert VerificationItem to CountItem for SerializedGroupCard
-  function verificationItemToCountItem(vi: VerificationItem): CountItem {
-    return {
-      id: vi.itemId,
-      itemCode: vi.itemCode,
-      description: vi.description,
-      brand: vi.brand,
-      binNumber: vi.binNumber,
-      binInternalId: null,
-      onHand: vi.onHand,
-      avgCost: vi.avgCost,
-      stockStatus: vi.stockStatus,
-      serialNumber: vi.serialNumber,
-      isSerialized: vi.isSerialized,
-      countId: null,
-      countedQty: null,
-      variance: null,
-      isMatch: null,
-      comment: null,
-      checkStatus: null,
-      countedAt: null,
-    };
-  }
 
   // Auto-select first tab that has bins (verification highest priority)
   useEffect(() => {
@@ -586,188 +485,7 @@ export default function CountingPage() {
   }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry]);
 
   // ---------- Core functions ----------
-  const handleCount = useCallback(
-    /** Resolves true if the count was saved (on the server, or queued offline for sync). */
-    async (itemId: number, qty: number, countComment?: string, silent?: boolean): Promise<boolean> => {
-      const item = items.find((i) => i.id === itemId);
-      if (!item) return false;
-
-      // Block changes to items reviewed by supervisor
-      if (item.checkStatus === "accepted") {
-        if (!silent) toast.error("This item has been reviewed by a supervisor and cannot be changed");
-        return false;
-      }
-
-      // Block changes to items with pending verification
-      if (item.hasPendingVerification) {
-        if (!silent) toast.error("This item has a pending verification and cannot be edited");
-        return false;
-      }
-
-      const clientId = uuidv4();
-      const onHand = item.onHand ?? 0;
-      const variance = qty - onHand;
-      const isMatch = variance === 0;
-      const countedAt = new Date().toISOString();
-
-      // Save to IndexedDB FIRST so data survives network failures / browser close
-      try {
-        await saveCountLocally({
-          clientId,
-          itemId,
-          countedQty: qty,
-          isMatch,
-          // undefined = keep the existing server comment when synced
-          comment: countComment,
-          countedAt,
-          ...offlineScope,
-        });
-      } catch {
-        // IndexedDB unavailable — continue with server POST anyway
-      }
-
-      // Save previous state for potential rollback
-      const prevCountId = item.countId;
-      const prevCountedQty = item.countedQty;
-      const prevVariance = item.variance;
-      const prevIsMatch = item.isMatch;
-      const prevComment = item.comment;
-      const prevCountedAt = item.countedAt;
-
-      // Optimistic UI update
-      setItems((prev) =>
-        prev.map((i) =>
-          i.id === itemId
-            ? {
-                ...i,
-                countId: i.countId || -1,
-                countedQty: qty,
-                variance,
-                isMatch,
-                comment: countComment === undefined ? i.comment : countComment || null,
-                countedAt,
-              }
-            : i
-        )
-      );
-      if (!item.countId) {
-        setStats((prev) => ({
-          ...prev,
-          counted: prev.counted + 1,
-          progressPercent:
-            prev.total > 0
-              ? Math.round(((prev.counted + 1) / prev.total) * 100)
-              : 0,
-        }));
-      }
-
-      // Try to sync to server immediately
-      try {
-        const res = await fetch("/api/team/count", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            itemId,
-            countedQty: qty,
-            isMatch,
-            comment: countComment,
-            clientId,
-            countedAt,
-          }),
-        });
-
-        if (!res.ok && !isDefinitiveRejection(res.status)) {
-          // Offline (service worker), session expired, or transient server error:
-          // the count is queued in IndexedDB and useSync will retry — keep optimistic state.
-          if (!silent) {
-            if (isServiceWorkerOffline(res)) {
-              toast.info("Saved offline — will sync when back online");
-            } else if (res.status === 401) {
-              toast.warning("Session expired — count saved on this device, log in again to sync");
-            } else {
-              toast.info("Server busy — count saved and will retry automatically");
-            }
-          }
-          return true;
-        }
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          // Definitive server rejection: never retry this record
-          try {
-            await markCountsRejected([clientId], errData.error);
-          } catch {
-            // IndexedDB unavailable
-          }
-          // Revert optimistic update on server rejection
-          setItems((prev) =>
-            prev.map((i) =>
-              i.id === itemId
-                ? {
-                    ...i,
-                    countId: prevCountId,
-                    countedQty: prevCountedQty,
-                    variance: prevVariance,
-                    isMatch: prevIsMatch,
-                    comment: prevComment,
-                    countedAt: prevCountedAt,
-                  }
-                : i
-            )
-          );
-          if (!prevCountId) {
-            setStats((prev) => ({
-              ...prev,
-              counted: Math.max(0, prev.counted - 1),
-              progressPercent:
-                prev.total > 0
-                  ? Math.round((Math.max(0, prev.counted - 1) / prev.total) * 100)
-                  : 0,
-            }));
-          }
-          if (!silent) toast.error(errData.error || "Failed to save count");
-          return false;
-        }
-
-        const data = await res.json();
-
-        // Mark as synced in IndexedDB
-        try {
-          await markCountSynced(clientId);
-        } catch {
-          // IndexedDB unavailable — server has the data, acceptable
-        }
-
-        if (data.count) {
-          setItems((prev) =>
-            prev.map((i) =>
-              i.id === itemId
-                ? {
-                    ...i,
-                    countId: data.count.id,
-                    countedQty: data.count.countedQty,
-                    variance: data.count.variance,
-                    isMatch: data.count.isMatch,
-                    comment: data.count.comment,
-                    countedAt: data.count.countedAt,
-                  }
-                : i
-            )
-          );
-        }
-
-        if (!isMatch && !silent) {
-          toast.warning(`Variance: ${variance > 0 ? "+" : ""}${variance}`);
-        }
-        return true;
-      } catch {
-        // Network failed — count is safely in IndexedDB, useSync will retry
-        if (!silent) toast.info("Saved offline — will sync when back online");
-        return true;
-      }
-    },
-    [items, offlineScope]
-  );
+  const { handleCount } = useCountSubmission({ items, offlineScope, setItems, setStats });
 
   const submitCount = useCallback(() => {
     if (!currentItem || isSubmittingRef.current) return;
@@ -826,41 +544,15 @@ export default function CountingPage() {
         if (skipped > 0 && savedResults.length > 0) {
           toast.error(`${skipped} serial(s) not saved (reviewed, pending verification, or rejected)`);
         }
-
         // Send unknown serials as a single discrepancy record to supervisor
         if (unknownSerials && unknownSerials.length > 0 && currentEntry?.type === "serialized-group") {
-          const discClientId = crypto.randomUUID();
-          const discData = {
+          await reportUnknownSerials({
             itemCode: currentEntry.itemCode,
             description: currentEntry.description || null,
             binNumber: selectedBin === "No Bin" ? null : selectedBin,
             binInternalId: currentEntry.items[0]?.binInternalId || null,
             unknownSerials,
-          };
-
-          // Save to IndexedDB first so data survives offline/browser close
-          try {
-            await saveDiscrepancyLocally({
-              clientId: discClientId,
-              ...discData,
-              createdAt: new Date().toISOString(),
-            });
-          } catch {
-            // IndexedDB unavailable — continue with POST
-          }
-
-          try {
-            const res = await fetch("/api/team/serial-discrepancies", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...discData, clientId: discClientId }),
-            });
-            if (!res.ok) throw new Error("Failed");
-            try { await markDiscrepancySynced(discClientId); } catch { /* ok */ }
-            toast.info(`${unknownSerials.length} unknown serial(s) sent to supervisor for review`);
-          } catch {
-            toast.info(`${unknownSerials.length} unknown serial(s) saved — will send to supervisor when online`);
-          }
+          });
         }
 
         setShowFlash(true);
@@ -955,325 +647,28 @@ export default function CountingPage() {
     setPageState("verification-counting");
   }, [verificationItems]);
 
-  const submitVerificationCount = useCallback(async () => {
-    if (!currentVerificationItem || isSubmittingRef.current) return;
-    const qty = parseFloat(verificationQtyValue);
-    if (isNaN(qty) || qty < 0) {
-      toast.error("Please enter a valid quantity");
-      return;
-    }
-
-    isSubmittingRef.current = true;
-    setIsSubmitting(true);
-    const verificationId = currentVerificationItem.verificationId;
-    // Reuse the clientId across retries so the server dedups instead of double-inserting
-    let clientId = verificationClientIdsRef.current.get(verificationId);
-    if (!clientId) {
-      clientId = uuidv4();
-      verificationClientIdsRef.current.set(verificationId, clientId);
-    }
-    const isMatch = qty === (currentVerificationItem.onHand ?? 0);
-    const countedAt = new Date().toISOString();
-
-    // Save to IndexedDB first so data survives network failures
-    try {
-      await saveCountLocally({
-        clientId,
-        itemId: currentVerificationItem.itemId,
-        countedQty: qty,
-        isMatch,
-        comment: verificationComment || null,
-        countedAt,
-        verificationId,
-        ...offlineScope,
-      });
-    } catch {
-      // IndexedDB unavailable — continue with server POST
-    }
-
-    try {
-      let savedOffline = false;
-      try {
-        const res = await fetch("/api/team/count", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            itemId: currentVerificationItem.itemId,
-            countedQty: qty,
-            isMatch,
-            comment: verificationComment || undefined,
-            clientId,
-            countedAt,
-            verificationId,
-          }),
-        });
-
-        if (!res.ok && isDefinitiveRejection(res.status)) {
-          const data = await res.json().catch(() => ({}));
-          try { await markCountsRejected([clientId], data.error); } catch { /* ok */ }
-          verificationClientIdsRef.current.delete(verificationId);
-          toast.error(data.error || "Failed to submit verification");
-          return;
-        }
-
-        if (res.ok) {
-          // Mark as synced in IndexedDB
-          try { await markCountSynced(clientId); } catch { /* ok */ }
-        } else {
-          // Offline / transient error — queued in IndexedDB, useSync will retry
-          savedOffline = true;
-        }
-      } catch {
-        savedOffline = true;
-      }
-      verificationClientIdsRef.current.delete(verificationId);
-
-      if (savedOffline) {
-        toast.info("Verification saved offline — will sync when back online");
-      }
-
-      const onHand = currentVerificationItem.onHand ?? 0;
-      const variance = qty - onHand;
-      if (variance !== 0) {
-        toast.warning(`Variance: ${variance > 0 ? "+" : ""}${variance}`);
-      }
-
-      // Check if this was the last item in the bin before removing
-      const remainingInBin = scopedVerificationItems.filter(
-        (v) => v.verificationId !== currentVerificationItem.verificationId
-      );
-
-      // Remove completed item from list
-      setVerificationItems((prev) =>
-        prev.filter((v) => v.verificationId !== currentVerificationItem.verificationId)
-      );
-
-      if (remainingInBin.length === 0) {
-        // Last item in this bin
-        toast.success("All verifications in this bin complete!");
-        setVerificationIndex(0);
-        setShowFlash(false);
-
-        // Check if there are still items in other bins
-        const totalRemaining = verificationItems.filter(
-          (v) => v.verificationId !== currentVerificationItem.verificationId
-        );
-
-        if (settings.autoNextBin && totalRemaining.length > 0) {
-          // Find next verification bin in natural sort order
-          const remainingBins = Array.from(new Set(totalRemaining.map((v) => v.binNumber || "No Bin"))).sort(naturalCompare);
-          const currentVBin = selectedVerificationBin || "";
-          const nextVBin = remainingBins.find((b) => naturalCompare(b, currentVBin) > 0) ?? remainingBins[0];
-          if (nextVBin) {
-            startVerificationCounting(nextVBin);
-            return;
-          }
-        }
-
-        setSelectedVerificationBin(null);
-        setPageState("bin-selection");
-        if (totalRemaining.length > 0) {
-          setBinTab("verification");
-        }
-        return;
-      }
-
-      // Show flash for next item
-      setShowFlash(true);
-    } catch {
-      toast.error("Failed to submit — check your connection");
-    } finally {
-      isSubmittingRef.current = false;
-      setIsSubmitting(false);
-    }
-  }, [currentVerificationItem, verificationQtyValue, verificationComment, offlineScope, scopedVerificationItems, verificationItems, settings.autoNextBin, selectedVerificationBin, startVerificationCounting]);
-
-  // Submit serialized verification group (uses SerializedGroupCard)
-  const submitSerializedVerificationGroup = useCallback(
-    async (results: SerialGroupResult[], unknownSerials?: string[]) => {
-      if (isSubmittingRef.current) return;
-      isSubmittingRef.current = true;
-      setIsSubmitting(true);
-
-      const currentEntry = verificationQueue[verificationIndex];
-      if (!currentEntry || currentEntry.type !== "serialized-group") {
-        isSubmittingRef.current = false;
-        setIsSubmitting(false);
-        return;
-      }
-
-      try {
-        // Submit each serial's verification count with offline fallback
-        const submitResults = await Promise.all(
-          results.map(async ({ itemId, qty }) => {
-            const vi = currentEntry.items.find((v) => v.itemId === itemId);
-            if (!vi) return { status: "rejected" as const, itemId, qty };
-
-            const onHand = vi.onHand ?? 0;
-            // Reuse the clientId across retries so the server dedups
-            let cid = verificationClientIdsRef.current.get(vi.verificationId);
-            if (!cid) {
-              cid = uuidv4();
-              verificationClientIdsRef.current.set(vi.verificationId, cid);
-            }
-            const isMatch = qty === onHand;
-            const countedAt = new Date().toISOString();
-
-            // Save to IndexedDB first (with verificationId so offline sync
-            // submits it as a verification, not a plain count)
-            try {
-              await saveCountLocally({
-                clientId: cid,
-                itemId,
-                countedQty: qty,
-                isMatch,
-                comment: null,
-                countedAt,
-                verificationId: vi.verificationId,
-                ...offlineScope,
-              });
-            } catch { /* IndexedDB unavailable */ }
-
-            try {
-              const res = await fetch("/api/team/count", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  itemId,
-                  countedQty: qty,
-                  isMatch,
-                  clientId: cid,
-                  countedAt,
-                  verificationId: vi.verificationId,
-                }),
-              });
-              if (res.ok) {
-                try { await markCountSynced(cid); } catch { /* ok */ }
-                verificationClientIdsRef.current.delete(vi.verificationId);
-                return { status: "saved" as const, itemId, qty };
-              }
-              if (isDefinitiveRejection(res.status)) {
-                const data = await res.json().catch(() => ({}));
-                try { await markCountsRejected([cid], data.error); } catch { /* ok */ }
-                verificationClientIdsRef.current.delete(vi.verificationId);
-                return { status: "rejected" as const, itemId, qty };
-              }
-              verificationClientIdsRef.current.delete(vi.verificationId);
-              return { status: "offline" as const, itemId, qty };
-            } catch {
-              verificationClientIdsRef.current.delete(vi.verificationId);
-              return { status: "offline" as const, itemId, qty };
-            }
-          })
-        );
-
-        const offlineCount = submitResults.filter((r) => r.status === "offline").length;
-        const rejectedCount = submitResults.filter((r) => r.status === "rejected").length;
-        if (offlineCount > 0) {
-          toast.info(`${offlineCount} verification(s) saved offline — will sync when back online`);
-        }
-        if (rejectedCount > 0) {
-          toast.error(`${rejectedCount} verification(s) rejected by the server (already completed or no longer assigned)`);
-        }
-
-        // Show consolidated summary toast (only for verifications actually saved)
-        const accepted = submitResults.filter((r) => r.status !== "rejected");
-        const found = accepted.filter((r) => r.qty > 0).length;
-        const notFound = accepted.filter((r) => r.qty === 0).length;
-        if (accepted.length === 0) {
-          // nothing saved — rejection toast above covers it
-        } else if (notFound > 0) {
-          toast.warning(`Verification: ${found} found, ${notFound} not found`);
-        } else {
-          toast.success(`All ${found} serials verified`);
-        }
-
-        // Send unknown serials as discrepancy
-        if (unknownSerials && unknownSerials.length > 0) {
-          const discClientId = crypto.randomUUID();
-          const discData = {
-            itemCode: currentEntry.itemCode,
-            description: currentEntry.description || null,
-            binNumber: selectedVerificationBin === "No Bin" ? null : selectedVerificationBin,
-            binInternalId: null,
-            unknownSerials,
-          };
-
-          // Save to IndexedDB first so data survives offline/browser close
-          try {
-            await saveDiscrepancyLocally({
-              clientId: discClientId,
-              ...discData,
-              createdAt: new Date().toISOString(),
-            });
-          } catch {
-            // IndexedDB unavailable — continue with POST
-          }
-
-          try {
-            const res = await fetch("/api/team/serial-discrepancies", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...discData, clientId: discClientId }),
-            });
-            if (!res.ok) throw new Error("Failed");
-            try { await markDiscrepancySynced(discClientId); } catch { /* ok */ }
-            toast.info(`${unknownSerials.length} unknown serial(s) sent to supervisor for review`);
-          } catch {
-            toast.info(`${unknownSerials.length} unknown serial(s) saved — will send to supervisor when online`);
-          }
-        }
-
-        // Remove completed items from verification list
-        const completedItemIds = new Set(currentEntry.items.map((v) => v.verificationId));
-        setVerificationItems((prev) =>
-          prev.filter((v) => !completedItemIds.has(v.verificationId))
-        );
-
-        // Check if bin is complete
-        const remainingInBin = scopedVerificationItems.filter(
-          (v) => !completedItemIds.has(v.verificationId)
-        );
-
-        if (remainingInBin.length === 0) {
-          toast.success("All verifications in this bin complete!");
-          setVerificationIndex(0);
-          setShowFlash(false);
-
-          const totalRemaining = verificationItems.filter(
-            (v) => !completedItemIds.has(v.verificationId)
-          );
-
-          if (settings.autoNextBin && totalRemaining.length > 0) {
-            const remainingBins = Array.from(new Set(totalRemaining.map((v) => v.binNumber || "No Bin"))).sort(naturalCompare);
-            const currentVBin = selectedVerificationBin || "";
-            const nextVBin = remainingBins.find((b) => naturalCompare(b, currentVBin) > 0) ?? remainingBins[0];
-            if (nextVBin) {
-              startVerificationCounting(nextVBin);
-            } else {
-              setSelectedVerificationBin(null);
-              setPageState("bin-selection");
-              setBinTab("verification");
-            }
-          } else {
-            setSelectedVerificationBin(null);
-            setPageState("bin-selection");
-            if (totalRemaining.length > 0) {
-              setBinTab("verification");
-            }
-          }
-        } else {
-          setShowFlash(true);
-        }
-      } catch {
-        toast.error("Failed to submit — check your connection");
-      } finally {
-        isSubmittingRef.current = false;
-        setIsSubmitting(false);
-      }
-    },
-    [offlineScope, verificationQueue, verificationIndex, selectedVerificationBin, scopedVerificationItems, verificationItems, settings.autoNextBin, startVerificationCounting]
-  );
+  const { submitVerificationCount, submitSerializedVerificationGroup } = useVerificationSubmission({
+    offlineScope,
+    isSubmittingRef,
+    verificationClientIdsRef,
+    setIsSubmitting,
+    currentVerificationItem,
+    verificationQtyValue,
+    verificationComment,
+    verificationItems,
+    scopedVerificationItems,
+    verificationQueue,
+    verificationIndex,
+    selectedVerificationBin,
+    autoNextBin: settings.autoNextBin,
+    startVerificationCounting,
+    setVerificationItems,
+    setVerificationIndex,
+    setShowFlash,
+    setSelectedVerificationBin,
+    setPageState,
+    setBinTab,
+  });
 
   // Auto-advance verification after flash
   useEffect(() => {
@@ -1423,192 +818,6 @@ export default function CountingPage() {
     });
   }, []);
 
-  // ---------- Render helpers ----------
-  function renderBinButton(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number; lineItems: number }, variant: "not-started" | "in-progress" | "completed") {
-    const hasSerialized = bStats.serialized > 0;
-
-    if (variant === "in-progress") {
-      const percent = bStats.total > 0 ? Math.round((bStats.counted / bStats.total) * 100) : 0;
-      return (
-        <button
-          key={bin}
-          className={`text-left px-3 py-2.5 rounded-lg border border-blue-200 hover:border-blue-300 hover:shadow-sm transition-all bg-blue-50`}
-          onClick={() => selectBin(bin)}
-        >
-          <div className="flex items-center gap-1">
-            <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"} truncate`}>{bin}</span>
-            {hasSerialized && (
-              <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
-            )}
-          </div>
-          <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
-            {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""} · {bStats.pending} left
-          </div>
-          <div className="flex items-center justify-end mt-1">
-            <CircularProgress percent={percent} />
-          </div>
-          {bStats.supervisorEdited > 0 && (
-            <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-indigo-700 mt-1 block`}>
-              Supervisor edited
-            </span>
-          )}
-        </button>
-      );
-    }
-
-    if (variant === "completed") {
-      const hasVariances = bStats.variances > 0;
-      return (
-        <button
-          key={bin}
-          className={`text-left px-3 py-2.5 rounded-lg border hover:shadow-sm transition-all ${
-            hasVariances ? "bg-amber-50 border-amber-200 hover:border-amber-300" : "bg-green-50 border-green-200 hover:border-green-300"
-          }`}
-          onClick={() => selectBin(bin)}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1 min-w-0">
-              <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"} truncate`}>{bin}</span>
-              {hasSerialized && (
-                <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
-              )}
-            </div>
-            {hasVariances ? (
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
-            ) : (
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-            )}
-          </div>
-          <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
-            {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""}
-          </div>
-          {hasVariances && (
-            <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-amber-700 mt-0.5 block`}>
-              {bStats.variances} variance{bStats.variances !== 1 ? "s" : ""}
-            </span>
-          )}
-          {bStats.supervisorEdited > 0 && (
-            <span className={`${er ? "text-sm" : "text-[10px]"} font-medium text-indigo-700 mt-0.5 block`}>
-              Supervisor edited
-            </span>
-          )}
-        </button>
-      );
-    }
-
-    // not-started
-    return (
-      <button
-        key={bin}
-        className="text-left px-3 py-2.5 rounded-lg border border-border hover:border-primary/30 hover:shadow-sm transition-all bg-white"
-        onClick={() => selectBin(bin)}
-      >
-        <div className="flex items-center gap-1">
-          <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"} truncate`}>{bin}</span>
-          {hasSerialized && (
-            <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
-          )}
-        </div>
-        <div className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground mt-1`}>
-          {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""}
-        </div>
-      </button>
-    );
-  }
-
-  function renderBinListItem(bin: string, bStats: { total: number; pending: number; counted: number; matches: number; variances: number; supervisorEdited: number; serialized: number; lineItems: number }, variant: "not-started" | "in-progress" | "completed") {
-    const hasSerialized = bStats.serialized > 0;
-    const percent = bStats.total > 0 ? Math.round((bStats.counted / bStats.total) * 100) : 0;
-    const hasVariances = bStats.variances > 0;
-
-    const bgClass = variant === "in-progress"
-      ? "bg-blue-50 border-blue-200"
-      : variant === "completed"
-        ? hasVariances ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"
-        : "bg-white border-border";
-
-    return (
-      <button
-        key={bin}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg border hover:shadow-sm transition-all text-left ${bgClass}`}
-        onClick={() => variant === "completed" ? selectBin(bin) : selectBin(bin)}
-      >
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className={`font-mono font-bold ${er ? "text-lg" : "text-sm"}`}>{bin}</span>
-            {hasSerialized && (
-              <span className="text-[9px] font-semibold text-purple-700 bg-purple-100 px-1 py-0.5 rounded flex-shrink-0">S/N</span>
-            )}
-          </div>
-          <span className={`${er ? "text-sm" : "text-[10px]"} text-muted-foreground`}>
-            {bStats.lineItems} line{bStats.lineItems !== 1 ? "s" : ""}
-            {variant === "in-progress" && ` · ${bStats.pending} left`}
-            {variant === "completed" && hasVariances && ` · ${bStats.variances} variance${bStats.variances !== 1 ? "s" : ""}`}
-          </span>
-        </div>
-        {variant === "in-progress" && (
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Progress value={percent} className="h-2 w-20" />
-            <span className={`${er ? "text-sm" : "text-[10px]"} font-semibold text-blue-600 min-w-[2rem] text-right`}>{percent}%</span>
-          </div>
-        )}
-        {variant === "completed" && (
-          <div className="flex-shrink-0">
-            {hasVariances ? (
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
-            ) : (
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-            )}
-          </div>
-        )}
-      </button>
-    );
-  }
-
-  function renderAisleGroupedBins(
-    groups: ReturnType<typeof groupBinsByAisle>,
-    variant: "not-started" | "in-progress" | "completed"
-  ) {
-    const hasMultipleGroups = groups.length > 1;
-    const isListMode = settings.binViewMode === "list";
-
-    return groups.map((group) => {
-      const isCollapsed = collapsedAisles.has(`${variant}-${group.prefix}`);
-      const aisleKey = `${variant}-${group.prefix}`;
-      const totalBins = group.bins.length;
-
-      return (
-        <div key={aisleKey}>
-          {hasMultipleGroups && (
-            <button
-              className="flex items-center gap-2 text-sm font-medium text-muted-foreground mb-2 mt-3 first:mt-0 hover:text-foreground transition-colors w-full text-left"
-              onClick={() => toggleAisle(aisleKey)}
-            >
-              {isCollapsed ? (
-                <ChevronRight className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-              {group.prefix}
-              <span className="text-xs text-muted-foreground/70">({totalBins})</span>
-            </button>
-          )}
-          {!isCollapsed && (
-            isListMode ? (
-              <div className="space-y-2">
-                {group.bins.map(([bin, bStats]) => renderBinListItem(bin, bStats, variant))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                {group.bins.map(([bin, bStats]) => renderBinButton(bin, bStats, variant))}
-              </div>
-            )
-          )}
-        </div>
-      );
-    });
-  }
-
   // ---------- Loading ----------
   if (pageState === "loading") {
     return (
@@ -1628,957 +837,168 @@ export default function CountingPage() {
     );
   }
 
+
   // ---------- Verification Counting ----------
   if (pageState === "verification-counting") {
-    const currentVerificationEntry = verificationQueue[verificationIndex] ?? null;
-
-    if (!currentVerificationEntry) {
-      return (
-        <div className="flex items-center justify-center h-64">
-          <div className="text-muted-foreground">No verification items</div>
-        </div>
-      );
-    }
-
-    const upcomingVerificationEntries = verificationQueue.filter((_, i) => i !== verificationIndex);
-
     return (
-      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-        {/* Sticky header */}
-        <div className="sticky top-14 z-40 bg-purple-50 border-b border-purple-200 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSelectedVerificationBin(null);
-                goBackToBinSelection();
-              }}
-              className="px-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <Badge className="bg-purple-100 text-purple-800 border-purple-300">
-              Verification
-            </Badge>
-            <span className="font-mono font-semibold text-sm">
-              {selectedVerificationBin || "All"}
-            </span>
-            <span className="text-sm text-muted-foreground">
-              {scopedVerificationItems.length} remaining
-            </span>
-          </div>
-        </div>
-
-        {/* Main content — extra pb for sticky action bar */}
-        <div className="flex-1 overflow-y-auto p-4 pb-52 space-y-4">
-          <div className="max-w-lg mx-auto">
-            {currentVerificationEntry.type === "serialized-group" ? (
-              <SerializedGroupCard
-                key={`ver-serial-${currentVerificationEntry.itemCode}`}
-                entry={{
-                  type: "serialized-group",
-                  itemCode: currentVerificationEntry.itemCode,
-                  description: currentVerificationEntry.description,
-                  brand: currentVerificationEntry.brand,
-                  stockStatus: currentVerificationEntry.stockStatus,
-                  items: currentVerificationEntry.items.map(verificationItemToCountItem),
-                }}
-                onSubmitAll={submitSerializedVerificationGroup}
-                onSkip={() => {
-                  if (verificationQueue.length <= 1) return;
-                  setVerificationIndex((i) => (i + 1) % verificationQueue.length);
-                }}
-                isSubmitting={isSubmitting}
-                showSuccessFlash={showFlash}
-                onFlashComplete={handleFlashComplete}
-                comment={verificationComment}
-                onCommentChange={setVerificationComment}
-              />
-            ) : (
-              <ActiveItemCard
-                item={verificationItemToCountItem(currentVerificationEntry.item)}
-                qtyValue={verificationQtyValue}
-                onQtyChange={setVerificationQtyValue}
-                onSubmit={submitVerificationCount}
-                onSkip={() => {
-                  if (verificationQueue.length <= 1) return;
-                  setVerificationIndex((i) => (i + 1) % verificationQueue.length);
-                }}
-                comment={verificationComment}
-                onCommentChange={setVerificationComment}
-                inputRef={inputRef}
-                isSubmitting={isSubmitting}
-                showSuccessFlash={showFlash}
-                onFlashComplete={handleFlashComplete}
-                isVerification
-              />
-            )}
-          </div>
-
-          {/* Remaining verification entries in this bin */}
-          {upcomingVerificationEntries.length > 0 && (
-            <div className="max-w-lg mx-auto">
-              <div className="text-sm font-medium text-muted-foreground mb-2">
-                Up Next ({upcomingVerificationEntries.length} more)
-              </div>
-              <Card>
-                <div className="max-h-[300px] overflow-y-auto">
-                  <CardContent className="p-0">
-                    {upcomingVerificationEntries.slice(0, 20).map((entry, i) =>
-                      entry.type === "serialized-group" ? (
-                        <QueueGroupRow
-                          key={`ver-group-${entry.itemCode}`}
-                          entry={{
-                            type: "serialized-group",
-                            itemCode: entry.itemCode,
-                            description: entry.description,
-                            brand: entry.brand,
-                            stockStatus: entry.stockStatus,
-                            items: entry.items.map(verificationItemToCountItem),
-                          }}
-                          position={i + 1}
-                        />
-                      ) : (
-                        <QueueItemRow
-                          key={entry.item.verificationId}
-                          item={verificationItemToCountItem(entry.item)}
-                          position={i + 1}
-                        />
-                      )
-                    )}
-                  </CardContent>
-                </div>
-              </Card>
-            </div>
-          )}
-        </div>
-      </div>
+      <VerificationCountingView
+        verificationQueue={verificationQueue}
+        verificationIndex={verificationIndex}
+        setVerificationIndex={setVerificationIndex}
+        selectedVerificationBin={selectedVerificationBin}
+        remainingCount={scopedVerificationItems.length}
+        onBack={() => {
+          setSelectedVerificationBin(null);
+          goBackToBinSelection();
+        }}
+        verificationQtyValue={verificationQtyValue}
+        setVerificationQtyValue={setVerificationQtyValue}
+        verificationComment={verificationComment}
+        setVerificationComment={setVerificationComment}
+        onSubmitSingle={submitVerificationCount}
+        onSubmitSerializedGroup={submitSerializedVerificationGroup}
+        inputRef={inputRef}
+        isSubmitting={isSubmitting}
+        showFlash={showFlash}
+        onFlashComplete={handleFlashComplete}
+      />
     );
   }
 
   // ---------- Serial Verification ----------
   if (pageState === "serial-verification" && activeSerialTask) {
-    const allMarked = activeSerialTask.unknownSerials.every(
-      (s) => serialVerificationResults[s] !== undefined
-    );
-
-    const handleSerialVerificationSubmit = async () => {
-      if (!allMarked) {
-        toast.error("Please mark all serials before submitting");
-        return;
-      }
-
-      setSerialVerificationSubmitting(true);
-      try {
-        const verifiedSerials = activeSerialTask.unknownSerials.map((serial) => ({
-          serial,
-          status: serialVerificationResults[serial],
-        }));
-
-        const res = await fetch("/api/team/serial-discrepancies", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            discrepancyId: activeSerialTask.id,
-            verifiedSerials,
-          }),
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          toast.error(data.error || "Failed to submit verification");
-          return;
-        }
-
-        toast.success("Serial verification submitted");
-        setSerialVerificationTasks((prev) =>
-          prev.filter((t) => t.id !== activeSerialTask.id)
-        );
-        setActiveSerialTask(null);
-        setSerialVerificationResults({});
-        setPageState("bin-selection");
-        if (serialVerificationTasks.length > 1 || verificationItems.length > 0) {
-          setBinTab("verification");
-        }
-      } catch {
-        toast.error("Failed — check your connection");
-      } finally {
-        setSerialVerificationSubmitting(false);
-      }
-    };
-
-    const toggleSerialResult = (serial: string, status: "confirmed" | "not_found") => {
-      setSerialVerificationResults((prev) => {
-        if (prev[serial] === status) {
-          const next = { ...prev };
-          delete next[serial];
-          return next;
-        }
-        return { ...prev, [serial]: status };
-      });
-    };
-
-    const confirmedCount = activeSerialTask.unknownSerials.filter(
-      (s) => serialVerificationResults[s] === "confirmed"
-    ).length;
-    const notFoundCount = activeSerialTask.unknownSerials.filter(
-      (s) => serialVerificationResults[s] === "not_found"
-    ).length;
-    const unmarkedCount = activeSerialTask.unknownSerials.length - confirmedCount - notFoundCount;
-
     return (
-      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-        {/* Sticky header */}
-        <div className="sticky top-14 z-40 bg-amber-50 border-b border-amber-200 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setActiveSerialTask(null);
-                setSerialVerificationResults({});
-                setPageState("bin-selection");
-              }}
-              className="px-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <Badge className="bg-amber-100 text-amber-800 border-amber-300">
-              Serial Verification
-            </Badge>
-            <span className="font-mono font-semibold text-sm">
-              {activeSerialTask.itemCode}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 mt-1 pl-9 text-xs text-muted-foreground">
-            {activeSerialTask.binNumber && (
-              <span>Bin: <span className="font-mono font-medium">{activeSerialTask.binNumber}</span></span>
-            )}
-            <span>{activeSerialTask.unknownSerials.length} serial{activeSerialTask.unknownSerials.length !== 1 ? "s" : ""}</span>
-          </div>
-        </div>
-
-        {/* Main content */}
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="max-w-lg mx-auto space-y-4">
-            {/* Description */}
-            {activeSerialTask.description && (
-              <div className="text-sm text-muted-foreground">
-                {activeSerialTask.description}
-              </div>
-            )}
-
-            {/* Progress summary */}
-            <div className="flex items-center gap-2 text-xs">
-              {confirmedCount > 0 && (
-                <Badge className="bg-green-100 text-green-800 border-green-300">
-                  {confirmedCount} confirmed
-                </Badge>
-              )}
-              {notFoundCount > 0 && (
-                <Badge className="bg-red-100 text-red-800 border-red-300">
-                  {notFoundCount} not found
-                </Badge>
-              )}
-              {unmarkedCount > 0 && (
-                <Badge variant="secondary">
-                  {unmarkedCount} remaining
-                </Badge>
-              )}
-            </div>
-
-            {/* Serial list */}
-            <div className="space-y-2">
-              {activeSerialTask.unknownSerials.map((serial) => {
-                const result = serialVerificationResults[serial];
-                return (
-                  <Card key={serial} className={`${
-                    result === "confirmed"
-                      ? "border-green-300 bg-green-50/50"
-                      : result === "not_found"
-                        ? "border-red-300 bg-red-50/50"
-                        : ""
-                  }`}>
-                    <CardContent className="p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-mono font-bold text-sm">
-                            {serial}
-                          </div>
-                        </div>
-                        <div className="flex gap-2 flex-shrink-0">
-                          <Button
-                            size="sm"
-                            variant={result === "confirmed" ? "default" : "outline"}
-                            className={`h-9 text-xs ${
-                              result === "confirmed"
-                                ? "bg-green-600 hover:bg-green-700 text-white"
-                                : "text-green-700 border-green-300 hover:bg-green-50"
-                            }`}
-                            onClick={() => toggleSerialResult(serial, "confirmed")}
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                            Present
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={result === "not_found" ? "default" : "outline"}
-                            className={`h-9 text-xs ${
-                              result === "not_found"
-                                ? "bg-red-600 hover:bg-red-700 text-white"
-                                : "text-red-700 border-red-300 hover:bg-red-50"
-                            }`}
-                            onClick={() => toggleSerialResult(serial, "not_found")}
-                          >
-                            <AlertTriangle className="h-3.5 w-3.5 mr-1" />
-                            Not Found
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-
-            {/* Submit button */}
-            <Button
-              className={`w-full h-14 text-lg font-bold ${
-                allMarked
-                  ? "bg-green-600 hover:bg-green-700 text-white"
-                  : ""
-              }`}
-              disabled={!allMarked || serialVerificationSubmitting}
-              onClick={handleSerialVerificationSubmit}
-            >
-              {serialVerificationSubmitting
-                ? "Submitting..."
-                : allMarked
-                  ? "Submit Verification"
-                  : `${unmarkedCount} serial${unmarkedCount !== 1 ? "s" : ""} remaining`}
-            </Button>
-          </div>
-        </div>
-      </div>
+      <SerialVerificationView
+        activeSerialTask={activeSerialTask}
+        serialVerificationResults={serialVerificationResults}
+        setSerialVerificationResults={setSerialVerificationResults}
+        serialVerificationSubmitting={serialVerificationSubmitting}
+        setSerialVerificationSubmitting={setSerialVerificationSubmitting}
+        onBack={() => {
+          setActiveSerialTask(null);
+          setSerialVerificationResults({});
+          setPageState("bin-selection");
+        }}
+        onSubmitted={() => {
+          setSerialVerificationTasks((prev) =>
+            prev.filter((t) => t.id !== activeSerialTask.id)
+          );
+          setActiveSerialTask(null);
+          setSerialVerificationResults({});
+          setPageState("bin-selection");
+          if (serialVerificationTasks.length > 1 || verificationItems.length > 0) {
+            setBinTab("verification");
+          }
+        }}
+      />
     );
   }
 
   // ---------- Bin Selection ----------
   if (pageState === "bin-selection") {
-    if (items.length === 0 && verificationItems.length === 0 && serialVerificationTasks.length === 0) {
-      return (
-        <div className="flex items-center justify-center h-64">
-          <div className="text-muted-foreground">
-            No items assigned to your team
-          </div>
-        </div>
-      );
-    }
-
-    const varianceBinCount = completedBins.filter(([, s]) => s.variances > 0).length;
-
     return (
-      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-        {/* Header: team info + progress + search */}
-        <div className="p-4 space-y-3 border-b">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="font-semibold">{user?.name}</span>
-            {members.length > 0 && (
-              <span className="text-muted-foreground flex items-center gap-1">
-                <Users className="h-3 w-3" />
-                {members.join(", ")}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <Progress value={stats.progressPercent} className={`${er ? "h-5" : "h-3"} flex-1`} />
-            <span className={`${er ? "text-lg" : "text-sm"} font-semibold text-primary min-w-[3rem] text-right`}>
-              {stats.progressPercent}%
-            </span>
-          </div>
-          <div className="flex items-center gap-3 text-sm">
-            <span className="text-muted-foreground">
-              {stats.counted} of {stats.total} counted
-            </span>
-            {(() => {
-              const matched = items.filter((i) => i.countId !== null && isMatchTrue(i.isMatch)).length;
-              const withVariance = items.filter((i) => i.countId !== null && !isMatchTrue(i.isMatch)).length;
-              const pending = items.filter((i) => i.countId === null).length;
-              return (
-                <>
-                  <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-1.5 py-0.5 rounded-full">
-                    ✓ {matched}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
-                    ⚠ {withVariance}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full">
-                    ○ {pending}
-                  </span>
-                </>
-              );
-            })()}
-          </div>
-          <button
-            onClick={() => { setSearchCollapsed(!searchCollapsed); if (searchCollapsed) setTimeout(() => searchInputRef.current?.focus(), 100); }}
-            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
-          >
-            <Search className="h-3.5 w-3.5" />
-            <span className="font-medium">Search</span>
-            {search && searchCollapsed && (
-              <span className="text-primary text-xs truncate flex-1 text-left">&ldquo;{search}&rdquo;</span>
-            )}
-            <span className="ml-auto">
-              {searchCollapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
-            </span>
-          </button>
-          {!searchCollapsed && (
-            <>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  ref={searchInputRef}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={
-                    searchMode === "bin"
-                      ? "Search by bin..."
-                      : searchMode === "exact"
-                        ? "Exact match..."
-                        : searchMode === "starts"
-                          ? "Starts with..."
-                          : "Search by part code or description..."
-                  }
-                  className="pl-9"
-                />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-muted-foreground mr-1">Mode:</span>
-                {([
-                  { key: "contains" as const, label: "Contains" },
-                  { key: "starts" as const, label: "Starts with" },
-                  { key: "exact" as const, label: "Exact" },
-                  { key: "bin" as const, label: "Bin" },
-                ]).map((m) => (
-                  <button
-                    key={m.key}
-                    onClick={() => setSearchMode(m.key)}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                      searchMode === m.key
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-muted-foreground hover:bg-muted/80"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Resume banner */}
-        {!search.trim() && resumeBin && (
-          <div className="mx-4 mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
-            <PlayCircle className="h-5 w-5 text-blue-600 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium">Resume counting</div>
-              <div className="text-xs text-muted-foreground">
-                <span className="font-mono font-medium">{resumeBin.binName}</span>
-                {" — "}{resumeBin.remaining} item{resumeBin.remaining !== 1 ? "s" : ""} remaining
-              </div>
-            </div>
-            <Button
-              size="sm"
-              onClick={() => {
-                setResumeBin(null);
-                selectBin(resumeBin.binName);
-              }}
-            >
-              Resume
-            </Button>
-          </div>
-        )}
-
-        {/* Tabs (hidden during search) */}
-        {!search.trim() && (
-          <div className="border-b bg-muted/30">
-            <div className="px-4 pt-3 pb-1 flex items-center justify-between">
-              <h1 className={`${er ? "text-2xl" : "text-lg"} font-semibold`}>Select a Bin</h1>
-              <button
-                onClick={() => updateSettings({ binViewMode: settings.binViewMode === "grid" ? "list" : "grid" })}
-                className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                title={settings.binViewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
-              >
-                {settings.binViewMode === "grid" ? <LayoutList className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
-              </button>
-            </div>
-            <div className="flex gap-2 px-4 pb-2 overflow-x-auto">
-              {([
-                ...(verificationItems.length > 0 || serialVerificationTasks.length > 0
-                  ? [{ key: "verification" as BinTab, label: "Verification", count: verificationItems.length + serialVerificationTasks.length }]
-                  : []),
-                { key: "not-started" as BinTab, label: "Not Started", count: notStartedBins.length },
-                { key: "in-progress" as BinTab, label: "In Progress", count: inProgressBins.length },
-                { key: "completed" as BinTab, label: "Completed", count: completedBins.length },
-              ]).map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setBinTab(tab.key)}
-                  className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors whitespace-nowrap ${
-                    binTab === tab.key
-                      ? tab.key === "verification"
-                        ? "bg-purple-600 text-white border-purple-600 shadow-sm"
-                        : "bg-primary text-primary-foreground border-primary shadow-sm"
-                      : tab.key === "verification"
-                        ? "bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"
-                        : "bg-white text-muted-foreground border-border hover:bg-muted/50 hover:text-foreground"
-                  }`}
-                >
-                  {tab.key === "verification" && <ClipboardCheck className="h-3.5 w-3.5 inline mr-1 -mt-0.5" />}
-                  {tab.label}
-                  <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
-                    binTab === tab.key
-                      ? tab.key === "verification"
-                        ? "bg-white/20 text-white"
-                        : "bg-primary-foreground/20 text-primary-foreground"
-                      : tab.key === "verification"
-                        ? "bg-purple-200 text-purple-800"
-                        : "bg-muted text-muted-foreground"
-                  }`}>
-                    {tab.count}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="px-4 pb-3 flex flex-wrap gap-2">
-              {binStats.some(([, s]) => s.serialized > 0) && (
-                <button
-                  onClick={() => setSerializedOnly((v) => !v)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                    serializedOnly
-                      ? "bg-purple-600 text-white"
-                      : "bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                  }`}
-                >
-                  <ScanBarcode className="h-3 w-3" />
-                  Serialized only
-                </button>
-              )}
-              <button
-                onClick={() => setMultiItemOnly((v) => !v)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                  multiItemOnly
-                    ? "bg-blue-600 text-white"
-                    : "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                }`}
-              >
-                <Layers className="h-3 w-3" />
-                Multi-item only
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {/* Search results */}
-          {search.trim() ? (
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-muted-foreground mb-2">
-                {searchResults.length} result{searchResults.length !== 1 ? "s" : ""}
-              </div>
-              {searchResults.length === 0 && (
-                <div className="text-sm text-muted-foreground text-center py-8">
-                  No items match &ldquo;{search}&rdquo;
-                </div>
-              )}
-              {searchResults.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center gap-2 px-3 py-2 text-sm border rounded-md"
-                >
-                  <span className="font-mono font-medium text-xs w-28 flex-shrink-0 truncate">
-                    {item.itemCode}
-                  </span>
-                  <span className="text-muted-foreground flex-1 truncate text-xs">
-                    {item.description}
-                  </span>
-                  <Badge
-                    variant="outline"
-                    className="cursor-pointer hover:bg-blue-50 text-xs flex-shrink-0"
-                    onClick={() => selectBin(item.binNumber || "No Bin")}
-                  >
-                    {item.binNumber || "No Bin"}
-                  </Badge>
-                  {item.countId !== null ? (
-                    <Badge className="text-xs bg-green-100 text-green-800 border-green-300 flex-shrink-0">
-                      Counted
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="text-xs flex-shrink-0">
-                      Pending
-                    </Badge>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <>
-              {/* Verification tab */}
-              {binTab === "verification" && (
-                <div className="space-y-3">
-                  <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
-                    <div className="text-sm font-medium text-purple-900 mb-0.5">
-                      Verification Counts
-                    </div>
-                    <div className="text-xs text-purple-700">
-                      Select a bin to verify. You will only see item details and on-hand — not the original count.
-                    </div>
-                  </div>
-
-                  {verificationBinStats.length > 0 && (
-                    <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                      {verificationBinStats.map(([bin, bStats]) => (
-                        <button
-                          key={bin}
-                          className="text-left px-3 py-2.5 rounded-lg border border-purple-200 hover:border-purple-400 hover:shadow-sm transition-all bg-white"
-                          onClick={() => startVerificationCounting(bin)}
-                        >
-                          <div className="font-mono font-bold text-sm truncate">{bin}</div>
-                          <div className="text-[10px] text-purple-700 mt-1">
-                            {bStats.total} item{bStats.total !== 1 ? "s" : ""} to verify
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Serial Verification Tasks */}
-                  {serialVerificationTasks.length > 0 && (
-                    <>
-                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                        <div className="text-sm font-medium text-amber-900 mb-0.5">
-                          Serial Verification
-                        </div>
-                        <div className="text-xs text-amber-700">
-                          Physically verify unknown serial numbers. Mark each serial as present or not found.
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                        {serialVerificationTasks.map((task) => (
-                          <button
-                            key={task.id}
-                            className="text-left px-3 py-2.5 rounded-lg border border-amber-200 hover:border-amber-400 hover:shadow-sm transition-all bg-white"
-                            onClick={() => {
-                              setActiveSerialTask(task);
-                              setSerialVerificationResults({});
-                              setPageState("serial-verification");
-                            }}
-                          >
-                            <div className="font-mono font-bold text-sm truncate">{task.itemCode}</div>
-                            {task.binNumber && (
-                              <div className="text-[10px] text-muted-foreground mt-0.5">
-                                Bin: {task.binNumber}
-                              </div>
-                            )}
-                            <div className="text-[10px] text-amber-700 mt-1">
-                              {task.unknownSerials.length} serial{task.unknownSerials.length !== 1 ? "s" : ""} to verify
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Not Started tab */}
-              {binTab === "not-started" && (
-                <div className="space-y-1">
-                  {notStartedBins.length === 0 ? (
-                    <div className="text-sm text-muted-foreground text-center py-12">
-                      All bins have been started
-                    </div>
-                  ) : (
-                    <>
-                      {groupedNotStarted.length > 1 && (
-                        <div className="flex items-center justify-end gap-2 mb-2">
-                          <button onClick={() => expandAllAisles(groupedNotStarted, "not-started")} className="text-xs text-primary hover:underline">Expand all</button>
-                          <span className="text-muted-foreground text-xs">·</span>
-                          <button onClick={() => collapseAllAisles(groupedNotStarted, "not-started")} className="text-xs text-primary hover:underline">Collapse all</button>
-                        </div>
-                      )}
-                      {renderAisleGroupedBins(groupedNotStarted, "not-started")}
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* In Progress tab */}
-              {binTab === "in-progress" && (
-                <div className="space-y-1">
-                  {inProgressBins.length === 0 ? (
-                    <div className="text-sm text-muted-foreground text-center py-12">
-                      No bins in progress
-                    </div>
-                  ) : (
-                    <>
-                      {groupedInProgress.length > 1 && (
-                        <div className="flex items-center justify-end gap-2 mb-2">
-                          <button onClick={() => expandAllAisles(groupedInProgress, "in-progress")} className="text-xs text-primary hover:underline">Expand all</button>
-                          <span className="text-muted-foreground text-xs">·</span>
-                          <button onClick={() => collapseAllAisles(groupedInProgress, "in-progress")} className="text-xs text-primary hover:underline">Collapse all</button>
-                        </div>
-                      )}
-                      {renderAisleGroupedBins(groupedInProgress, "in-progress")}
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Completed tab */}
-              {binTab === "completed" && (
-                <div className="space-y-3">
-                  {completedBins.length === 0 ? (
-                    <div className="text-sm text-muted-foreground text-center py-12">
-                      No bins completed yet
-                    </div>
-                  ) : (
-                    <>
-                      {/* Filter bar */}
-                      <div className="flex items-center gap-2">
-                        {([
-                          { key: "all" as const, label: "All" },
-                          { key: "variances" as const, label: `Variances (${varianceBinCount})` },
-                          { key: "matched" as const, label: "All Matched" },
-                        ]).map((f) => (
-                          <button
-                            key={f.key}
-                            onClick={() => setCompletedFilter(f.key)}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                              completedFilter === f.key
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:bg-muted/80"
-                            }`}
-                          >
-                            {f.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {filteredCompletedBins.length === 0 ? (
-                        <div className="text-sm text-muted-foreground text-center py-8">
-                          No bins match this filter
-                        </div>
-                      ) : (
-                        <>
-                          {groupedCompleted.length > 1 && (
-                            <div className="flex items-center justify-end gap-2">
-                              <button onClick={() => expandAllAisles(groupedCompleted, "completed")} className="text-xs text-primary hover:underline">Expand all</button>
-                              <span className="text-muted-foreground text-xs">·</span>
-                              <button onClick={() => collapseAllAisles(groupedCompleted, "completed")} className="text-xs text-primary hover:underline">Collapse all</button>
-                            </div>
-                          )}
-                          {renderAisleGroupedBins(groupedCompleted, "completed")}
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+      <BinSelectionView
+        er={er}
+        binViewMode={settings.binViewMode}
+        onToggleBinViewMode={() => updateSettings({ binViewMode: settings.binViewMode === "grid" ? "list" : "grid" })}
+        userName={user?.name}
+        members={members}
+        stats={stats}
+        items={items}
+        verificationItems={verificationItems}
+        serialVerificationTasks={serialVerificationTasks}
+        search={search}
+        setSearch={setSearch}
+        searchMode={searchMode}
+        setSearchMode={setSearchMode}
+        searchCollapsed={searchCollapsed}
+        setSearchCollapsed={setSearchCollapsed}
+        searchInputRef={searchInputRef}
+        searchResults={searchResults}
+        resumeBin={resumeBin}
+        onResume={(binName) => {
+          setResumeBin(null);
+          selectBin(binName);
+        }}
+        binTab={binTab}
+        setBinTab={setBinTab}
+        binStats={binStats}
+        notStartedBins={notStartedBins}
+        inProgressBins={inProgressBins}
+        completedBins={completedBins}
+        filteredCompletedBins={filteredCompletedBins}
+        groupedNotStarted={groupedNotStarted}
+        groupedInProgress={groupedInProgress}
+        groupedCompleted={groupedCompleted}
+        completedFilter={completedFilter}
+        setCompletedFilter={setCompletedFilter}
+        serializedOnly={serializedOnly}
+        setSerializedOnly={setSerializedOnly}
+        multiItemOnly={multiItemOnly}
+        setMultiItemOnly={setMultiItemOnly}
+        collapsedAisles={collapsedAisles}
+        toggleAisle={toggleAisle}
+        expandAllAisles={expandAllAisles}
+        collapseAllAisles={collapseAllAisles}
+        selectBin={selectBin}
+        verificationBinStats={verificationBinStats}
+        startVerificationCounting={startVerificationCounting}
+        onOpenSerialTask={(task) => {
+          setActiveSerialTask(task);
+          setSerialVerificationResults({});
+          setPageState("serial-verification");
+        }}
+      />
     );
   }
 
   // ---------- Complete ----------
   if (pageState === "complete") {
-    const binLabel =
-      selectedBin === "all"
-        ? "all bins"
-        : selectedBin || "this selection";
-
     return (
-      <div className="flex flex-col items-center justify-center h-[calc(100vh-7.5rem)] gap-4 p-4">
-        <CheckCircle2 className="h-16 w-16 text-green-500" />
-        <h2 className="text-2xl font-bold">All Done!</h2>
-        <p className="text-muted-foreground text-center">
-          All items in {binLabel} have been counted
-        </p>
-        <div className="flex gap-3 mt-4">
-          <Button variant="outline" onClick={goBackToBinSelection}>
-            Choose Another Bin
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setPageState("reviewing")}
-          >
-            Review Items
-          </Button>
-          <Button onClick={goBackToBinSelection}>
-            Back to Bins
-          </Button>
-        </div>
-      </div>
+      <CountCompleteView
+        selectedBin={selectedBin}
+        onBack={goBackToBinSelection}
+        onReview={() => setPageState("reviewing")}
+      />
     );
   }
 
   // ---------- Recounting (uses same ActiveItemCard as initial count) ----------
   if (pageState === "recounting" && recountItem) {
-    const binLabel = selectedBin === "all" ? "All Bins" : selectedBin || "Items";
-
     return (
-      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-        {/* Sticky header */}
-        <div className="sticky top-14 z-40 bg-white border-b px-4 py-3 space-y-2">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={cancelRecount}
-              className="px-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div className="flex items-center gap-2 bg-slate-100 rounded-md px-2.5 py-1">
-              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
-              <span className="font-mono font-bold text-base">{binLabel}</span>
-            </div>
-            <div className="flex-1" />
-            <Badge variant="outline" className="text-xs">Recount</Badge>
-          </div>
-        </div>
-
-        {/* Main content — same ActiveItemCard as initial counting */}
-        <div className="flex-1 overflow-y-auto p-4 pb-52 space-y-4">
-          <div className="max-w-lg mx-auto">
-            <ActiveItemCard
-              item={recountItem}
-              qtyValue={qtyValue}
-              onQtyChange={setQtyValue}
-              onSubmit={submitRecount}
-              onSkip={cancelRecount}
-              comment={comment}
-              onCommentChange={setComment}
-              inputRef={inputRef}
-              isSubmitting={isSubmitting}
-              showSuccessFlash={false}
-              onFlashComplete={() => {}}
-            />
-          </div>
-        </div>
-      </div>
+      <RecountView
+        selectedBin={selectedBin}
+        recountItem={recountItem}
+        qtyValue={qtyValue}
+        setQtyValue={setQtyValue}
+        comment={comment}
+        setComment={setComment}
+        onSubmit={submitRecount}
+        onCancel={cancelRecount}
+        inputRef={inputRef}
+        isSubmitting={isSubmitting}
+      />
     );
   }
 
   // ---------- Reviewing ----------
   if (pageState === "reviewing") {
-    const binLabel =
-      selectedBin === "all" ? "All Bins" : selectedBin || "Items";
-    const pendingInBin = reviewItems.filter((i) => i.countId === null);
-    const countedInBin = reviewItems.filter((i) => i.countId !== null);
-    const matchCount = countedInBin.filter(
-      (i) => i.variance === 0 || isMatchTrue(i.isMatch)
-    ).length;
-    const varianceCount = countedInBin.length - matchCount;
-
     return (
-      <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-        {/* Header */}
-        <div className="sticky top-14 z-40 bg-white border-b px-4 py-3 space-y-2">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={goBackToBinSelection}
-              className="px-2"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <span className="font-mono font-bold text-base">{binLabel}</span>
-            <div className="flex-1" />
-            <span className="text-sm font-semibold">
-              {scopedStats.percent}%
-            </span>
-          </div>
-          {/* Summary stats */}
-          <div className="flex items-center gap-3 text-sm pl-9">
-            <span className="text-muted-foreground">
-              {reviewItems.length} items
-            </span>
-            {matchCount > 0 && (
-              <span className="text-green-600 flex items-center gap-1">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                {matchCount} matched
-              </span>
-            )}
-            {varianceCount > 0 && (
-              <span className="text-amber-600 flex items-center gap-1">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                {varianceCount} variance{varianceCount !== 1 ? "s" : ""}
-              </span>
-            )}
-            {pendingInBin.length > 0 && (
-              <span className="text-muted-foreground">
-                {pendingInBin.length} pending
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="max-w-2xl mx-auto space-y-3">
-            {pendingInBin.length > 0 && (
-              <Button
-                className="w-full"
-                onClick={() => {
-                  setCurrentIndex(0);
-                  setPageState("counting");
-                }}
-              >
-                Continue Counting ({pendingInBin.length} remaining)
-              </Button>
-            )}
-
-            <Card>
-              <CardContent className="p-0">
-                {groupedReviewItems.map((row, rowIdx) => {
-                  if (row.type === "serialized-group") {
-                    return (
-                      <CountedSerialGroupRow
-                        key={`group-${row.itemCode}-${rowIdx}`}
-                        row={row as ReviewDisplayRow & { type: "serialized-group" }}
-                        onRecount={(id) => {
-                          const target = items.find((i) => i.id === id);
-                          if (target) startRecount(target);
-                        }}
-                      />
-                    );
-                  }
-
-                  const item = row.item!;
-                  return (
-                    <CountedItemRow
-                      key={item.id}
-                      item={item}
-                      onRecount={(id) => {
-                        const target = items.find((i) => i.id === id);
-                        if (target) startRecount(target);
-                      }}
-                    />
-                  );
-                })}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
+      <ReviewView
+        selectedBin={selectedBin}
+        scopedStats={scopedStats}
+        reviewItems={reviewItems}
+        groupedReviewItems={groupedReviewItems}
+        onBack={goBackToBinSelection}
+        onContinueCounting={() => {
+          setCurrentIndex(0);
+          setPageState("counting");
+        }}
+        onRecount={(id) => {
+          const target = items.find((i) => i.id === id);
+          if (target) startRecount(target);
+        }}
+      />
     );
   }
 
@@ -2592,143 +1012,28 @@ export default function CountingPage() {
     );
   }
 
-  const binLabel =
-    selectedBin === "all" ? "All Bins" : selectedBin || "Items";
-
   return (
-    <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-      {/* Sticky header */}
-      <div className="sticky top-14 z-40 bg-white border-b px-4 py-3 space-y-2">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={goBackToBinSelection}
-            className="px-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex items-center gap-2 bg-slate-100 rounded-md px-2.5 py-1">
-            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Bin</span>
-            <span className="font-mono font-bold text-base">{binLabel}</span>
-          </div>
-          <div className="flex-1" />
-          <span className="text-sm text-muted-foreground">
-            {scopedStats.pending} left
-          </span>
-          <span className="text-sm font-semibold">
-            {scopedStats.percent}%
-          </span>
-        </div>
-        <Progress value={scopedStats.percent} className="h-2" />
-      </div>
-
-      {/* Main content — extra pb for sticky action bar */}
-      <div className="flex-1 overflow-y-auto p-4 pb-52 space-y-4">
-        {/* Active item or serialized group */}
-        <div className="max-w-lg mx-auto">
-          {currentEntry.type === "serialized-group" ? (
-            <SerializedGroupCard
-              key={currentEntry.items[0]?.id}
-              entry={currentEntry}
-              onSubmitAll={submitSerializedGroup}
-              onSkip={skipItem}
-              isSubmitting={isSubmitting}
-              showSuccessFlash={showFlash}
-              onFlashComplete={handleFlashComplete}
-              comment={comment}
-              onCommentChange={setComment}
-            />
-          ) : (
-            <ActiveItemCard
-              item={currentEntry.item}
-              qtyValue={qtyValue}
-              onQtyChange={setQtyValue}
-              onSubmit={submitCount}
-              onSkip={skipItem}
-              comment={comment}
-              onCommentChange={setComment}
-              inputRef={inputRef}
-              isSubmitting={isSubmitting}
-              showSuccessFlash={showFlash}
-              onFlashComplete={handleFlashComplete}
-            />
-          )}
-        </div>
-
-        {/* Queue */}
-        {upcomingEntries.length > 0 && (
-          <div className="max-w-lg mx-auto">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-medium text-muted-foreground">
-                Up Next ({upcomingEntries.length} more)
-              </div>
-            </div>
-            {upcomingEntries.length > 3 && (
-              <div className="relative mb-2">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={queueSearch}
-                  onChange={(e) => setQueueSearch(e.target.value)}
-                  placeholder="Search queue by code or description..."
-                  className="pl-9 h-9 text-sm"
-                />
-              </div>
-            )}
-            <Card>
-              <div className="max-h-[400px] overflow-y-auto">
-                <CardContent className="p-0">
-                  {(() => {
-                    const q = queueSearch.toLowerCase().trim();
-                    const filtered = q
-                      ? upcomingEntries.filter((entry) => {
-                          if (entry.type === "serialized-group") {
-                            return (
-                              entry.itemCode.toLowerCase().includes(q) ||
-                              (entry.description?.toLowerCase().includes(q) ?? false)
-                            );
-                          }
-                          return (
-                            entry.item.itemCode.toLowerCase().includes(q) ||
-                            (entry.item.description?.toLowerCase().includes(q) ?? false)
-                          );
-                        })
-                      : upcomingEntries;
-
-                    if (filtered.length === 0) {
-                      return (
-                        <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-                          No items match &ldquo;{queueSearch}&rdquo;
-                        </div>
-                      );
-                    }
-
-                    return filtered.map((entry) => {
-                      // Find the actual queue index for this entry to enable jumping
-                      const queueIdx = countingQueue.indexOf(entry);
-                      return entry.type === "serialized-group" ? (
-                        <QueueGroupRow
-                          key={`group-${entry.itemCode}`}
-                          entry={entry}
-                          position={queueIdx + 1}
-                          onClick={() => jumpToEntry(queueIdx)}
-                        />
-                      ) : (
-                        <QueueItemRow
-                          key={entry.item.id}
-                          item={entry.item}
-                          position={queueIdx + 1}
-                          onClick={() => jumpToEntry(queueIdx)}
-                        />
-                      );
-                    });
-                  })()}
-                </CardContent>
-              </div>
-            </Card>
-          </div>
-        )}
-      </div>
-    </div>
+    <CountingView
+      selectedBin={selectedBin}
+      scopedStats={scopedStats}
+      currentEntry={currentEntry}
+      countingQueue={countingQueue}
+      upcomingEntries={upcomingEntries}
+      onBack={goBackToBinSelection}
+      qtyValue={qtyValue}
+      setQtyValue={setQtyValue}
+      comment={comment}
+      setComment={setComment}
+      onSubmitCount={submitCount}
+      onSubmitSerializedGroup={submitSerializedGroup}
+      onSkip={skipItem}
+      inputRef={inputRef}
+      isSubmitting={isSubmitting}
+      showFlash={showFlash}
+      onFlashComplete={handleFlashComplete}
+      queueSearch={queueSearch}
+      setQueueSearch={setQueueSearch}
+      jumpToEntry={jumpToEntry}
+    />
   );
 }

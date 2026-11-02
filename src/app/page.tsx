@@ -215,7 +215,7 @@ export default function LoginPage() {
 
         <div className="relative z-10 hidden lg:block">
           <h2 className="text-4xl font-bold tracking-tight leading-tight mb-4">
-            Annual Stock<br />Count 2026
+            Annual Stock<br />Count
           </h2>
           <p className="text-slate-400 text-lg max-w-sm">
             Inventory verification system for warehouse teams and supervisors.
@@ -246,15 +246,9 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="relative z-10 hidden lg:block">
-          <div className="border-t border-slate-800 pt-4">
-            <p className="text-xs text-slate-600">Rubicon Industrial Tech</p>
-          </div>
-        </div>
-
         {/* Mobile: just show subtitle */}
         <div className="relative z-10 lg:hidden mt-4">
-          <p className="text-slate-400">Annual Stock Count 2026</p>
+          <p className="text-slate-400">Annual Stock Count</p>
         </div>
       </div>
 

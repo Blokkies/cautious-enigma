@@ -31,6 +31,8 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
+# curl is required by Coolify's container health check (alpine ships without it)
+RUN apk add --no-cache curl
 RUN addgroup -S -g 1001 nodejs && adduser -S -u 1001 -G nodejs nextjs
 
 COPY --from=builder /app/public ./public
@@ -44,6 +46,6 @@ USER nextjs
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
+  CMD curl -fsS http://127.0.0.1:3000/api/health || exit 1
 
 ENTRYPOINT ["./docker-entrypoint.sh"]

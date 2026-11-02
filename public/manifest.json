@@ -1,6 +1,6 @@
 {
-  "name": "Rubicon Stocktake",
-  "short_name": "Stocktake",
+  "name": "Rubicon Stocktake V2",
+  "short_name": "Stocktake V2",
   "description": "Annual Stock Count Application",
   "start_url": "/",
   "display": "standalone",

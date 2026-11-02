@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { APP_VERSION } from "@/lib/version";
 import {
   Select,
   SelectContent,
@@ -205,7 +206,9 @@ export default function LoginPage() {
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight">Rubicon</h1>
-              <p className="text-xs text-slate-400 uppercase tracking-widest">Stocktake</p>
+              <p className="text-xs text-slate-400 uppercase tracking-widest">
+                Stocktake <span className="ml-1 rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-blue-300">{APP_VERSION}</span>
+              </p>
             </div>
           </div>
         </div>

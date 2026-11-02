@@ -17,13 +17,13 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Rubicon Stocktake",
+  title: "Rubicon Stocktake V2",
   description: "Annual Stock Count Application",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Stocktake",
+    title: "Stocktake V2",
   },
 };
 

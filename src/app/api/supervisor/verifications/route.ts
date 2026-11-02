@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { counts, verificationAssignments, items, teams, auditLog } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
-import { requireUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser, resolveEventId, checkEventActive } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["supervisor"], status: 401, write: true });
@@ -145,13 +145,19 @@ export async function GET(request: NextRequest) {
   if (auth.response) return auth.response;
   const { user } = auth;
 
+  // Admins/executives log in with eventId 0 and pick the event via ?eventId
+  const eventId = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
+  if (!eventId) {
+    return NextResponse.json({ error: "eventId is required" }, { status: 400 });
+  }
+
   const statusFilter = request.nextUrl.searchParams.get("status") as
     | "pending"
     | "completed"
     | "accepted"
     | null;
 
-  let whereClause = eq(verificationAssignments.eventId, user.eventId);
+  let whereClause = eq(verificationAssignments.eventId, eventId);
   if (statusFilter) {
     whereClause = and(
       whereClause,

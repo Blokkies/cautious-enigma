@@ -34,7 +34,7 @@ export async function reportUnknownSerials(discData: {
   binNumber: string | null;
   binInternalId: string | null;
   unknownSerials: string[];
-}): Promise<void> {
+}, offlineScope?: Partial<OfflineScope>): Promise<void> {
   const { unknownSerials } = discData;
   const discClientId = crypto.randomUUID();
 
@@ -44,7 +44,7 @@ export async function reportUnknownSerials(discData: {
       clientId: discClientId,
       ...discData,
       createdAt: new Date().toISOString(),
-    });
+    }, offlineScope);
   } catch {
     // IndexedDB unavailable — continue with POST
   }
@@ -553,7 +553,7 @@ export function useVerificationSubmission({
             binNumber: selectedVerificationBin === "No Bin" ? null : selectedVerificationBin,
             binInternalId: null,
             unknownSerials,
-          });
+          }, offlineScope);
         }
 
         // Remove completed items from verification list

@@ -552,7 +552,7 @@ export default function CountingPage() {
             binNumber: selectedBin === "No Bin" ? null : selectedBin,
             binInternalId: currentEntry.items[0]?.binInternalId || null,
             unknownSerials,
-          });
+          }, offlineScope);
         }
 
         setShowFlash(true);
@@ -561,7 +561,7 @@ export default function CountingPage() {
         setIsSubmitting(false);
       }
     },
-    [handleCount, comment, currentEntry, selectedBin]
+    [handleCount, comment, currentEntry, selectedBin, offlineScope]
   );
 
   const skipItem = useCallback(() => {
@@ -762,21 +762,23 @@ export default function CountingPage() {
   }, []);
 
   const submitRecount = useCallback(() => {
-    if (!recountItem || isSubmitting) return;
+    if (!recountItem || isSubmittingRef.current) return;
     const qty = parseFloat(qtyValue);
     if (isNaN(qty) || qty < 0) {
       toast.error("Please enter a valid quantity");
       return;
     }
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     handleCount(recountItem.id, qty, comment || undefined).finally(() => {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
       setRecountItem(null);
       setQtyValue("");
       setComment("");
       setPageState("reviewing");
     });
-  }, [recountItem, qtyValue, comment, isSubmitting, handleCount]);
+  }, [recountItem, qtyValue, comment, handleCount]);
 
   const cancelRecount = useCallback(() => {
     setRecountItem(null);

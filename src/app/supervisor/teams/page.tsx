@@ -10,7 +10,7 @@ import { TeamsManager } from "@/components/teams/teams-manager";
 import type { SupervisorInfo, TeamInfo } from "@/components/teams/types";
 
 export default function SupervisorTeamsPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const isAuditor = user?.type === "auditor";
   const eventId = user?.eventId;
 
@@ -38,8 +38,17 @@ export default function SupervisorTeamsPage() {
     loadTeams();
   }, [loadTeams]);
 
-  if (loading) {
+  // loadTeams returns early without an event, so only wait while one is known
+  if (authLoading || (loading && eventId)) {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
+  }
+
+  if (!eventId) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        No stocktake event is linked to this account.
+      </div>
+    );
   }
 
   return (

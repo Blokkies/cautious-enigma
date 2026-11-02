@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, type Dispatch, type SetStateAction } from 
 import { toast } from "sonner";
 import type { AcceptAction, Team, VarianceItem } from "./types";
 import type { VariancesData } from "./use-variances-data";
+import { distributeVerifications } from "@/lib/verification-distribution";
 
 type SetBool = Dispatch<SetStateAction<boolean>>;
 
@@ -511,6 +512,11 @@ export function useVarianceSelection(
     });
   };
 
+  // Items the assignment would send, and how they split across the selected teams.
+  // The dialog preview reads this so its per-team counts match what is submitted.
+  const assignmentItems = activeVariances.filter((v) => selectedCountIds.has(v.countId));
+  const assignmentPreview = distributeVerifications(assignmentItems, Array.from(selectedTeamIds));
+
   const submitAssignment = async () => {
     if (selectedTeamIds.size === 0) {
       toast.error("Select at least one team");
@@ -520,76 +526,53 @@ export function useVarianceSelection(
     setAssigning(true);
     try {
       const teamIds = Array.from(selectedTeamIds);
-
-      // Sort selected items by bin number (natural order) so adjacent bins stay grouped
-      const selectedItems = activeVariances
-        .filter((v) => selectedCountIds.has(v.countId))
-        .sort((a, b) => {
-          const binCmp = (a.binNumber || "").localeCompare(b.binNumber || "", undefined, { numeric: true, sensitivity: "base" });
-          if (binCmp !== 0) return binCmp;
-          return (a.itemCode || "").localeCompare(b.itemCode || "", undefined, { numeric: true, sensitivity: "base" });
-        });
-
       // Distribute items across teams, avoiding the team that originally counted each item
-      const teamChunks: Map<number, number[]> = new Map();
-      const teamLoads: Map<number, number> = new Map();
-      for (const tid of teamIds) {
-        teamChunks.set(tid, []);
-        teamLoads.set(tid, 0);
-      }
-
-      for (const item of selectedItems) {
-        const origTeamId = item.teamId;
-
-        // Pick the least-loaded team that isn't the original counter
-        const candidates = teamIds.filter((tid) => tid !== origTeamId);
-        const pool = candidates.length > 0 ? candidates : teamIds; // fallback if no other team available
-
-        let bestTid = pool[0];
-        let bestLoad = teamLoads.get(bestTid) ?? 0;
-        for (const tid of pool) {
-          const load = teamLoads.get(tid) ?? 0;
-          if (load < bestLoad) {
-            bestTid = tid;
-            bestLoad = load;
-          }
-        }
-
-        teamChunks.get(bestTid)!.push(item.countId);
-        teamLoads.set(bestTid, bestLoad + 1);
-      }
+      const teamChunks = distributeVerifications(assignmentItems, teamIds);
 
       let totalCreated = 0;
+      const succeededTeamIds: number[] = [];
+      const failedTeamNames: string[] = [];
+      const assignedCountIds = new Set<number>();
+      const teamName = (tid: number) => teams.find((t) => t.id === tid)?.name ?? `Team ${tid}`;
+
       for (const [teamId, countIds] of Array.from(teamChunks.entries())) {
         if (countIds.length === 0) continue;
-        const res = await fetch("/api/supervisor/verifications", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ countIds, assignedTeamId: teamId }),
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          toast.error(data.error || `Failed to assign to team`);
-          continue;
+        try {
+          const res = await fetch("/api/supervisor/verifications", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ countIds, assignedTeamId: teamId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            toast.error(`${teamName(teamId)}: ${data.error || "Failed to assign"}`);
+            failedTeamNames.push(teamName(teamId));
+            continue;
+          }
+          totalCreated += data.created ?? 0;
+          succeededTeamIds.push(teamId);
+          for (const id of countIds) assignedCountIds.add(id);
+        } catch {
+          toast.error(`${teamName(teamId)}: failed to assign — check your connection`);
+          failedTeamNames.push(teamName(teamId));
         }
-
-        const data = await res.json();
-        totalCreated += data.created;
       }
 
-      const teamNames = teamIds
-        .map((tid) => teams.find((t) => t.id === tid)?.name)
-        .filter(Boolean);
-
-      toast.success(
-        `${totalCreated} verification${totalCreated !== 1 ? "s" : ""} distributed across ${teamNames.join(", ")}`
-      );
-      setSelectedCountIds(new Set());
-      setShowAssignDialog(false);
-      loadVariances();
-    } catch {
-      toast.error("Failed to assign — check your connection");
+      const created = `${totalCreated} verification${totalCreated !== 1 ? "s" : ""}`;
+      if (failedTeamNames.length === 0) {
+        toast.success(`${created} distributed across ${succeededTeamIds.map(teamName).join(", ")}`);
+        setSelectedCountIds(new Set());
+        setShowAssignDialog(false);
+      } else if (succeededTeamIds.length > 0) {
+        // Partial failure: keep the failed teams' items selected so they can be retried
+        toast.warning(
+          `${created} assigned to ${succeededTeamIds.map(teamName).join(", ")}; failed for ${failedTeamNames.join(", ")}. Unassigned items remain selected.`
+        );
+        setSelectedCountIds((prev) => new Set(Array.from(prev).filter((id) => !assignedCountIds.has(id))));
+        setShowAssignDialog(false);
+      }
+      // All failed: per-team error toasts already shown; keep dialog and selection
+      if (succeededTeamIds.length > 0) loadVariances();
     } finally {
       setAssigning(false);
     }
@@ -652,6 +635,7 @@ export function useVarianceSelection(
     setShowAssignDialog,
     teams,
     selectedTeamIds,
+    assignmentPreview,
     toggleTeamSelection,
     assigning,
     openAssignDialog,

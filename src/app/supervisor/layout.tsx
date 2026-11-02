@@ -53,7 +53,8 @@ export default function SupervisorLayout({
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const { counts } = useSupervisorNotifications();
+  // Executives have no pinned event and see no badges — skip the polling
+  const { counts } = useSupervisorNotifications(!!user && user.type !== "executive");
 
   const handleLogout = async () => {
     await logout();

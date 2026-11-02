@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { requireUser } from "@/lib/api-auth";
+import { requireUser, resolveEventId } from "@/lib/api-auth";
 import { sql } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["supervisor", "auditor", "executive"], status: 401 });
   if (auth.response) return auth.response;
   const { user } = auth;
+
+  // Admins/executives log in with eventId 0 and pick the event via ?eventId
+  const eventId = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
+  if (!eventId) {
+    return NextResponse.json({ error: "eventId is required" }, { status: 400 });
+  }
 
   const { searchParams } = new URL(request.url);
   // Values are cast ::timestamptz in SQL, so fall back to epoch for anything unparseable
@@ -26,14 +32,14 @@ export async function GET(request: NextRequest) {
           SELECT DISTINCT qm.query_id as id
           FROM query_messages qm
           INNER JOIN queries q ON q.id = qm.query_id
-          WHERE q.event_id = ${user.eventId}
+          WHERE q.event_id = ${eventId}
             AND q.status = 'open'
             AND qm.sender_type = 'team'
             AND qm.created_at::timestamptz > ${lastSeenQueries}::timestamptz
           UNION
           SELECT id
           FROM queries
-          WHERE event_id = ${user.eventId}
+          WHERE event_id = ${eventId}
             AND status = 'open'
             AND created_at::timestamptz > ${lastSeenQueries}::timestamptz
         ) AS combined`
@@ -47,14 +53,14 @@ export async function GET(request: NextRequest) {
           SELECT DISTINCT bm.breakdown_id as id
           FROM breakdown_messages bm
           INNER JOIN breakdowns b ON b.id = bm.breakdown_id
-          WHERE b.event_id = ${user.eventId}
+          WHERE b.event_id = ${eventId}
             AND b.approval_status = 'pending'
             AND bm.sender_type = 'team'
             AND bm.created_at::timestamptz > ${lastSeenBreakdowns}::timestamptz
           UNION
           SELECT id
           FROM breakdowns
-          WHERE event_id = ${user.eventId}
+          WHERE event_id = ${eventId}
             AND approval_status = 'pending'
             AND created_at::timestamptz > ${lastSeenBreakdowns}::timestamptz
         ) AS combined`
@@ -65,7 +71,7 @@ export async function GET(request: NextRequest) {
   const serialsResult = await db.execute(
     sql`SELECT COUNT(*) as count
         FROM serial_discrepancies
-        WHERE event_id = ${user.eventId}
+        WHERE event_id = ${eventId}
           AND status = 'open'
           AND created_at::timestamptz > ${lastSeenSerials}::timestamptz`
   );

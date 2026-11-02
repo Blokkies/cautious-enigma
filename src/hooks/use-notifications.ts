@@ -132,12 +132,18 @@ export function useTeamNotifications() {
   return { counts, refetch: fetchCounts };
 }
 
-export function useSupervisorNotifications() {
+/**
+ * Supervisor/auditor badge counts. Pass `enabled = false` for users with no
+ * pinned event (executives viewing supervisor pages) — the counts would need an
+ * explicit ?eventId and are not shown to them anyway.
+ */
+export function useSupervisorNotifications(enabled = true) {
   const [counts, setCounts] = useState<SupervisorCounts>({ queries: 0, breakdowns: 0, serials: 0, execMessages: 0 });
   const mountedRef = useRef(true);
   const isVisible = usePageVisible();
 
   const fetchCounts = useCallback(async () => {
+    if (!enabled) return;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     try {
       const params = new URLSearchParams({
@@ -159,7 +165,7 @@ export function useSupervisorNotifications() {
     } catch {
       // offline or error
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
     mountedRef.current = true;

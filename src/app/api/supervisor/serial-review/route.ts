@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { serialDiscrepancies, teams, items, counts, auditLog } from "@/lib/db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { requireUser, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { requireUser, resolveEventId, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 import { safeJsonParse } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
@@ -10,7 +10,13 @@ export async function GET(request: NextRequest) {
   if (auth.response) return auth.response;
   const { user } = auth;
 
-  const warehouses = await getEventWarehouses(user.eventId);
+  // Admins/executives log in with eventId 0 and pick the event via ?eventId
+  const eventId = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
+  if (!eventId) {
+    return NextResponse.json({ error: "eventId is required" }, { status: 400 });
+  }
+
+  const warehouses = await getEventWarehouses(eventId);
 
   const allDiscrepancies = await db
     .select({
@@ -33,14 +39,14 @@ export async function GET(request: NextRequest) {
     })
     .from(serialDiscrepancies)
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
-    .where(eq(serialDiscrepancies.eventId, user.eventId))
+    .where(eq(serialDiscrepancies.eventId, eventId))
     .orderBy(desc(serialDiscrepancies.createdAt));
 
   // Batch-fetch all serialized items for this event (avoids N+1 per discrepancy)
   const allSerializedItems = await db
     .select({ id: items.id, itemCode: items.itemCode, binNumber: items.binNumber, serialNumber: items.serialNumber })
     .from(items)
-    .where(and(eq(items.eventId, user.eventId), eq(items.isSerialized, true), warehouseFilter(warehouses)));
+    .where(and(eq(items.eventId, eventId), eq(items.isSerialized, true), warehouseFilter(warehouses)));
 
   // Batch-fetch all counts for serialized items
   const serializedItemIds = allSerializedItems.map((i) => i.id);
@@ -48,7 +54,7 @@ export async function GET(request: NextRequest) {
     ? await db
         .select({ itemId: counts.itemId, countedQty: counts.countedQty })
         .from(counts)
-        .where(and(eq(counts.eventId, user.eventId), eq(counts.countType, "initial"), inArray(counts.itemId, serializedItemIds)))
+        .where(and(eq(counts.eventId, eventId), eq(counts.countType, "initial"), inArray(counts.itemId, serializedItemIds)))
     : [];
   const countByItemId = new Map(allSerialCounts.map((c) => [c.itemId, c.countedQty]));
 

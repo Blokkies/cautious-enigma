@@ -8,7 +8,7 @@ import { AssignProgressCard, TeamAssignmentsCard, UnassignedBinsCard } from "@/c
 import { ReassignDialog, useReassign } from "@/components/teams/reassign-dialog";
 
 export default function SupervisorAssignPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const isAuditor = user?.type === "auditor";
   const eventId = String(user?.eventId || "");
 
@@ -17,9 +17,17 @@ export default function SupervisorAssignPage() {
   // Assigned bin search & filters (shared across teams — only one expanded at a time)
   const filters = useAssignedBinFilters();
 
-  if (assign.loading) {
+  if (authLoading || assign.loading) {
     return (
       <div className="text-center py-12 text-muted-foreground">Loading...</div>
+    );
+  }
+
+  if (!eventId) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        No stocktake event is linked to this account.
+      </div>
     );
   }
 

@@ -56,7 +56,7 @@ export function useAssignment(eventId: string) {
   const [selectedTeamBins, setSelectedTeamBins] = useState<Record<number, Set<string>>>({});
 
   const loadData = useCallback(async () => {
-    if (!eventId) return;
+    if (!eventId) return; // nothing to load — `loading` below reports false
     try {
       const params = new URLSearchParams({ eventId });
       if (brandFilter) params.set("brand", brandFilter);
@@ -527,7 +527,8 @@ export function useAssignment(eventId: string) {
 
   return {
     eventId,
-    loading,
+    // No event => nothing will load; don't leave callers stuck on "Loading..."
+    loading: loading && !!eventId,
     loadData,
     unassignedBins,
     teamDetails,

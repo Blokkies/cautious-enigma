@@ -2,12 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { queries, teams, items, queryMessages, supervisors, auditLog } from "@/lib/db/schema";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
-import { requireUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser, resolveEventId, checkEventActive } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["supervisor", "auditor", "executive"], status: 401 });
   if (auth.response) return auth.response;
   const { user } = auth;
+
+  // Admins/executives log in with eventId 0 and pick the event via ?eventId
+  const eventId = resolveEventId(user, request.nextUrl.searchParams.get("eventId"));
+  if (!eventId) {
+    return NextResponse.json({ error: "eventId is required" }, { status: 400 });
+  }
 
   const allQueries = await db
     .select({
@@ -26,7 +32,7 @@ export async function GET(request: NextRequest) {
     .from(queries)
     .innerJoin(teams, eq(queries.teamId, teams.id))
     .leftJoin(items, eq(queries.itemId, items.id))
-    .where(eq(queries.eventId, user.eventId))
+    .where(eq(queries.eventId, eventId))
     .orderBy(desc(queries.createdAt));
 
   // Fetch messages for all queries
@@ -61,7 +67,7 @@ export async function GET(request: NextRequest) {
       const sups = await db
         .select({ id: supervisors.id, name: supervisors.name })
         .from(supervisors)
-        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, user.eventId)));
+        .where(and(inArray(supervisors.id, supervisorIds), eq(supervisors.eventId, eventId)));
       for (const s of sups) {
         supervisorNames[s.id] = s.name;
       }

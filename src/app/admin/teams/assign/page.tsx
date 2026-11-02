@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
 import {
   Select,
@@ -22,29 +23,40 @@ function AssignPageContent() {
   const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>(urlEventId || "");
 
-  const loadEvents = useCallback(async () => {
-    const res = await fetch("/api/admin/events");
-    if (res.ok) {
-      const data = await res.json();
-      const allEvents: EventOption[] = (data.events || []).filter(
-        (e: EventOption) => e.status === "setup" || e.status === "active"
-      );
-      setEvents(allEvents);
-      if (allEvents.length > 0 && !urlEventId && !eventId) {
-        setEventId(String(allEvents[0].id));
-      }
-    }
-  }, [urlEventId, eventId]);
+  const [eventsLoaded, setEventsLoaded] = useState(false);
 
+  // Load the event list once; default to the first event only if none is chosen yet
   useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/events");
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          const allEvents: EventOption[] = (data.events || []).filter(
+            (e: EventOption) => e.status === "setup" || e.status === "active"
+          );
+          setEvents(allEvents);
+          if (allEvents.length > 0) {
+            setEventId((prev) => prev || String(allEvents[0].id));
+          }
+        }
+      } catch {
+        if (!cancelled) toast.error("Failed to load events");
+      } finally {
+        if (!cancelled) setEventsLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const assign = useAssignment(eventId);
 
   const selectedEvent = events.find((e) => String(e.id) === eventId);
 
-  if (assign.loading) {
+  if (!eventsLoaded || assign.loading) {
     return (
       <div className="text-center py-12 text-muted-foreground">Loading...</div>
     );
@@ -92,9 +104,21 @@ function AssignPageContent() {
         )}
       </div>
 
-      <AssignProgressCard assign={assign} />
-      <TeamAssignmentsCard assign={assign} />
-      <UnassignedBinsCard assign={assign} />
+      {eventId ? (
+        <>
+          <AssignProgressCard assign={assign} />
+          <TeamAssignmentsCard assign={assign} />
+          <UnassignedBinsCard assign={assign} />
+        </>
+      ) : (
+        <div className="text-center py-12 text-muted-foreground">
+          No events in setup or active status.{" "}
+          <Link href="/admin/setup" className="text-primary hover:underline">
+            Create or open an event
+          </Link>{" "}
+          to assign bins.
+        </div>
+      )}
     </div>
   );
 }

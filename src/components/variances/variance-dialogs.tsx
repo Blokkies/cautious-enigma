@@ -316,6 +316,7 @@ export function AssignVerificationDialog({ selection }: { selection: VarianceSel
     setShowAssignDialog,
     teams,
     selectedTeamIds,
+    assignmentPreview,
     selectedCountIds,
     toggleTeamSelection,
     assigning,
@@ -334,8 +335,9 @@ export function AssignVerificationDialog({ selection }: { selection: VarianceSel
           <DialogTitle>Distribute Verification Counts</DialogTitle>
           <DialogDescription>
             Select one or more teams. {selectedCountIds.size} item
-            {selectedCountIds.size !== 1 ? "s" : ""} will be distributed
-            evenly (round-robin) across the selected teams.
+            {selectedCountIds.size !== 1 ? "s" : ""} will be spread
+            across the selected teams, keeping loads even and avoiding the
+            team that originally counted each item where possible.
           </DialogDescription>
         </DialogHeader>
 
@@ -345,13 +347,7 @@ export function AssignVerificationDialog({ selection }: { selection: VarianceSel
             <div className="space-y-1.5 max-h-48 overflow-y-auto">
               {teams.map((t) => {
                 const isChecked = selectedTeamIds.has(t.id);
-                const itemCount = selectedTeamIds.size > 0
-                  ? Math.floor(selectedCountIds.size / selectedTeamIds.size) +
-                    (Array.from(selectedTeamIds).indexOf(t.id) <
-                    selectedCountIds.size % selectedTeamIds.size
-                      ? 1
-                      : 0)
-                  : 0;
+                const itemCount = assignmentPreview.get(t.id)?.length ?? 0;
                 return (
                   <label
                     key={t.id}

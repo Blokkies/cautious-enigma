@@ -146,6 +146,9 @@ export function TeamsManager({
         setTeamMembers([""]);
         setAddTeamOpen(false);
         loadTeams();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to create team");
       }
     } catch {
       toast.error("Failed to create team");
@@ -155,6 +158,10 @@ export function TeamsManager({
   const createSupervisor = async () => {
     if (!supForm.name || !supForm.pin) {
       toast.error("Name and PIN are required");
+      return;
+    }
+    if (supForm.pin.length < 4) {
+      toast.error("PIN must be at least 4 digits");
       return;
     }
     try {
@@ -173,6 +180,9 @@ export function TeamsManager({
         setSupForm({ name: "", pin: "" });
         setAddSupOpen(false);
         loadTeams();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to create supervisor");
       }
     } catch {
       toast.error("Failed to create supervisor");
@@ -218,10 +228,12 @@ export function TeamsManager({
     loadTeams();
   };
 
-  const handleDelete = async (id: number, type: "team" | "supervisor") => {
+  // Auditors live in the supervisors table, so they are deleted with type "supervisor";
+  // `label` only changes the wording shown to the user.
+  const handleDelete = async (id: number, type: "team" | "supervisor", label: string = type) => {
     if (
       !confirm(
-        `Delete this ${type}? ${type === "team" ? "All item assignments will be removed." : ""}`
+        `Delete this ${label}? ${type === "team" ? "All item assignments will be removed." : ""}`
       )
     )
       return;
@@ -234,8 +246,11 @@ export function TeamsManager({
       });
       if (res.ok) {
         // Supervisor view only deletes teams and capitalises the toast.
-        toast.success(isSupervisorView ? "Team deleted" : `${type} deleted`);
+        toast.success(isSupervisorView ? "Team deleted" : `${label} deleted`);
         loadTeams();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Delete failed");
       }
     } catch {
       toast.error("Delete failed");
@@ -443,7 +458,10 @@ export function TeamsManager({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5" />
-            Supervisors ({visibleSupervisors.length})
+            {!isSupervisorView && visibleSupervisors.some((s) => s.role === "auditor")
+              ? "Supervisors & Auditors"
+              : "Supervisors"}{" "}
+            ({visibleSupervisors.length})
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -454,7 +472,12 @@ export function TeamsManager({
                   key={sup.id}
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
                 >
-                  <div className="font-medium">{sup.name}</div>
+                  <div className="font-medium flex items-center gap-2">
+                    {sup.name}
+                    {!isSupervisorView && sup.role === "auditor" && (
+                      <Badge variant="secondary" className="text-xs">Auditor</Badge>
+                    )}
+                  </div>
                   {isSupervisorView ? (
                     showPins && sup.pinPlain && (
                       <Badge variant="outline" className="font-mono text-xs">
@@ -471,7 +494,7 @@ export function TeamsManager({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleDelete(sup.id, "supervisor")}
+                        onClick={() => handleDelete(sup.id, "supervisor", sup.role === "auditor" ? "auditor" : "supervisor")}
                         className="text-destructive hover:text-destructive"
                       >
                         <Trash2 className="h-4 w-4" />

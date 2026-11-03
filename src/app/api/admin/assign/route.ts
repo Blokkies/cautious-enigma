@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { items, teams } from "@/lib/db/schema";
+import { teams } from "@/lib/db/schema";
 import { eq, and, sql, inArray, type SQL } from "drizzle-orm";
 import { getEventWarehouses, requireUser, resolveEventId } from "@/lib/api-auth";
+import { NO_BIN } from "@/lib/no-bin";
 import { checkEventWritable } from "../event-guard";
-import type { Tx } from "../event-lock";
-import { binRefsCondition, itemScopeFragment, parseBinRefs, type BinRef } from "./bins";
+import { eventWriteError, lockEventRow, parseEventWarehouses, RouteError, routeErrorResponse, type Tx } from "../event-lock";
+import { binNumberExpr, binRefsCondition, itemScopeFragment, parseBinRefs, type BinRef } from "./bins";
 
 /** Optional brand filter from a request body/query ("" / missing = all brands). */
 function brandParam(value: unknown): string | null {
@@ -13,13 +14,36 @@ function brandParam(value: unknown): string | null {
 }
 
 /**
+ * Condition (no leading AND) selecting a team's items to unassign/move, for the items
+ * table under `alias` (e.g. "i"); undefined alias = bare column names.
+ */
+type ItemMatch = (alias?: string) => SQL;
+
+/** Items in the given bins, within the event's warehouse scope and the optional brand filter. */
+function binsMatch(refs: BinRef[], warehouses: string[] | null, brand: string | null): ItemMatch {
+  return (alias) => sql`${binRefsCondition(refs, alias)}${itemScopeFragment(warehouses, brand, alias)}`;
+}
+
+/**
+ * Serial discrepancies carry (team, item code, bin number, bin internal id) but no item id
+ * or warehouse. A discrepancy belongs to item `alias` when the item code and bin number
+ * match (a NULL discrepancy bin = an item without a bin) and, when both sides have one,
+ * the bin internal id (which tells same-numbered bins in different warehouses apart).
+ */
+function discrepancyMatchesItem(alias: string): SQL {
+  const a = (col: string) => sql.raw(`${alias}.${col}`);
+  return sql`${a("item_code")} = sd.item_code
+    AND (${a("bin_number")} IS NOT DISTINCT FROM sd.bin_number OR (sd.bin_number IS NULL AND ${a("bin_number")} = ${NO_BIN}))
+    AND (sd.bin_internal_id IS NULL OR ${a("bin_internal_id")} IS NULL OR ${a("bin_internal_id")} = sd.bin_internal_id)`;
+}
+
+/**
  * Delete the counts (and the verification assignments pointing at them) and the serial
- * discrepancies a team recorded for the matched items. `itemCond` (" AND ...") filters
- * `items i`; null = all of the team's items.
+ * discrepancies a team recorded for the matched items. `match` null = all of the team's items.
  * Must run before the items are moved/unassigned.
  */
-async function clearTeamCountData(tx: Tx, eid: number, tid: number, itemCond: SQL | null) {
-  const cond = itemCond ?? sql``;
+async function clearTeamCountData(tx: Tx, eid: number, tid: number, match: ItemMatch | null) {
+  const cond = match ? sql` AND ${match("i")}` : sql``;
   await tx.execute(
     sql`DELETE FROM verification_assignments WHERE count_id IN (
       SELECT c.id FROM counts c
@@ -34,22 +58,69 @@ async function clearTeamCountData(tx: Tx, eid: number, tid: number, itemCond: SQ
       WHERE i.event_id = ${eid} AND i.team_id = ${tid}${cond}
     )`
   );
-  // Serial discrepancies are keyed by (team, item code, bin) rather than item id.
-  // Without a bin filter (whole team unassigned) every discrepancy of the team goes.
-  if (!itemCond) {
+  // Whole team unassigned: every discrepancy of the team goes.
+  if (!match) {
     await tx.execute(sql`DELETE FROM serial_discrepancies WHERE event_id = ${eid} AND team_id = ${tid}`);
     return;
   }
+  // Only discrepancies of the cleared items: one must match a cleared item, and must not
+  // also match one of the team's items that stays (e.g. the same item code and bin number
+  // in another warehouse with no bin internal id to tell them apart) - ambiguous ones are kept.
   await tx.execute(
     sql`DELETE FROM serial_discrepancies sd
         WHERE sd.event_id = ${eid} AND sd.team_id = ${tid}
         AND EXISTS (
           SELECT 1 FROM items i
           WHERE i.event_id = ${eid} AND i.team_id = ${tid}
-          AND i.item_code = sd.item_code
-          AND i.bin_number IS NOT DISTINCT FROM sd.bin_number${itemCond}
+          AND ${discrepancyMatchesItem("i")}
+          AND ${match("i")}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM items j
+          WHERE j.event_id = ${eid} AND j.team_id = ${tid}
+          AND ${discrepancyMatchesItem("j")}
+          AND (${match("j")}) IS NOT TRUE
         )`
   );
+}
+
+/**
+ * Inside the unassign/move transaction: lock the event row and re-check it is writable,
+ * build the item condition from its (locked) warehouse selection, then lock the team's matched item rows (team count submissions lock the item row too,
+ * so no count can slip in between this check and the move) and count their counts.
+ * Throws 409 if there are counts and the caller didn't ask to clear them.
+ */
+async function lockAndCheckCounts(
+  tx: Tx,
+  opts: {
+    eid: number;
+    tid: number;
+    userType: string;
+    clearCounts: boolean;
+    /** Builds the item condition from the event's warehouse selection (null = all the team's items). */
+    makeMatch: (warehouses: string[] | null) => ItemMatch | null;
+    verb: string;
+  }
+): Promise<{ countedCount: number; match: ItemMatch | null }> {
+  const { eid, tid, userType, clearCounts, makeMatch, verb } = opts;
+  const event = await lockEventRow(tx, eid);
+  if (!event) throw new RouteError(404, { error: "Event not found" });
+  const writeError = eventWriteError(event.status, userType, clearCounts);
+  if (writeError) throw new RouteError(403, { error: writeError });
+  const match = makeMatch(parseEventWarehouses(event.warehouses));
+
+  const cond = match ? sql` AND ${match("i")}` : sql``;
+  await tx.execute(sql`SELECT i.id FROM items i WHERE i.event_id = ${eid} AND i.team_id = ${tid}${cond} FOR UPDATE`);
+  const countedCheck = (await tx.execute(
+    sql`SELECT count(*)::int as cnt FROM counts c
+        JOIN items i ON i.id = c.item_id
+        WHERE i.event_id = ${eid} AND i.team_id = ${tid}${cond}`
+  )) as { cnt: number }[];
+  const countedCount = Number(countedCheck[0]?.cnt) || 0;
+  if (countedCount > 0 && !clearCounts) {
+    throw new RouteError(409, { error: `Cannot ${verb} bins that have counted items`, hasCountedItems: true, countedCount });
+  }
+  return { countedCount, match };
 }
 
 // GET: Get assignment overview - unassigned bins and per-team bin breakdown
@@ -71,10 +142,10 @@ export async function GET(request: NextRequest) {
   const binNumber = request.nextUrl.searchParams.get("binNumber");
   if (binNumber) {
     const warehouse = request.nextUrl.searchParams.get("warehouse");
-    const whCond = warehouse !== null ? sql` AND COALESCE(warehouse, '') = ${warehouse}` : sql``;
+    const ref: BinRef = warehouse !== null ? { warehouse, bin: binNumber } : { bin: binNumber };
     const binItems = await db.execute(
       sql`SELECT id, item_code, description, brand, warehouse, on_hand, total_value, stock_status, serial_number
-         FROM items WHERE event_id = ${eid} AND bin_number = ${binNumber}${whCond} AND team_id IS NULL${itemScopeFragment(eventWarehouses, brand)}
+         FROM items WHERE event_id = ${eid} AND ${binRefsCondition([ref])} AND team_id IS NULL${itemScopeFragment(eventWarehouses, brand)}
          ORDER BY item_code`
     );
     return NextResponse.json({ binItems });
@@ -83,11 +154,12 @@ export async function GET(request: NextRequest) {
   const whFragment = itemScopeFragment(eventWarehouses);
   const scope = itemScopeFragment(eventWarehouses, brand);
 
-  // Unassigned bins, keyed by (warehouse, bin_number)
+  // Unassigned bins, keyed by (warehouse, bin_number). Every in-scope item is listed (blank
+  // bins as NO_BIN), so this always agrees with the activation readiness check.
   const unassignedBinsRaw = await db.execute(
-    sql`SELECT warehouse, bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
-       FROM items WHERE event_id = ${eid} AND team_id IS NULL AND bin_number IS NOT NULL${scope}
-       GROUP BY warehouse, bin_number ORDER BY bin_number, warehouse`
+    sql`SELECT warehouse, ${binNumberExpr()} AS bin_number, count(*) as item_count, COALESCE(sum(total_value), 0) as total_value
+       FROM items WHERE event_id = ${eid} AND team_id IS NULL${scope}
+       GROUP BY 1, 2 ORDER BY 2, 1`
   ) as { warehouse: string | null; bin_number: string; item_count: string | number; total_value: string | number }[];
   const unassignedBins = unassignedBinsRaw.map(b => ({
     warehouse: b.warehouse,
@@ -119,12 +191,12 @@ export async function GET(request: NextRequest) {
   const teamDetails = await Promise.all(
     teamList.map(async (team) => {
       const teamBinsRaw = await db.execute(
-        sql`SELECT i.warehouse, i.bin_number, count(*)::int as item_count, COALESCE(sum(i.total_value), 0) as total_value,
+        sql`SELECT i.warehouse, ${binNumberExpr("i")} AS bin_number, count(*)::int as item_count, COALESCE(sum(i.total_value), 0) as total_value,
                count(c.id)::int as counted_items
            FROM items i
            LEFT JOIN counts c ON c.item_id = i.id AND c.count_type = 'initial'
-           WHERE i.event_id = ${eid} AND i.team_id = ${team.id} AND i.bin_number IS NOT NULL${teamScope}
-           GROUP BY i.warehouse, i.bin_number ORDER BY i.bin_number, i.warehouse`
+           WHERE i.event_id = ${eid} AND i.team_id = ${team.id}${teamScope}
+           GROUP BY 1, 2 ORDER BY 2, 1`
       ) as { warehouse: string | null; bin_number: string; item_count: number; total_value: string | number; counted_items: number }[];
       const teamBins = teamBinsRaw.map(b => ({
         warehouse: b.warehouse,
@@ -260,8 +332,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE: Unassign items - either specific bins or all items from a team.
-// With bins, the optional `brand` filter limits it to that brand's items.
+// DELETE: Unassign items of a team.
+// - bins: [{ warehouse, bin }] (legacy: bin-number strings) unassigns those bins, limited to
+//   the event's warehouse selection and the optional `brand` filter.
+// - all: true (and no bins) unassigns every item of the team.
+// A missing/empty/malformed bins list without `all: true` is rejected, so a bad request
+// can never unassign (and with clearCounts, wipe the counts of) a whole team.
 export async function DELETE(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
   if (auth.response) return auth.response;
@@ -270,7 +346,8 @@ export async function DELETE(request: NextRequest) {
   try {
     const body = await request.json();
     const eid = resolveEventId(user, body.eventId);
-    const { teamId, clearCounts } = body;
+    const { teamId } = body;
+    const clearCounts = body.clearCounts === true;
 
     if (!eid || !teamId) {
       return NextResponse.json(
@@ -279,59 +356,52 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const hasBins = Array.isArray(body.bins) && body.bins.length > 0;
-    const refs = hasBins ? parseBinRefs(body.bins) : [];
-    if (!refs) {
-      return NextResponse.json({ error: "Invalid bins" }, { status: 400 });
+    const all = body.all === true;
+    let refs: BinRef[] | null = null;
+    if (all) {
+      if (body.bins !== undefined && body.bins !== null) {
+        return NextResponse.json({ error: "Send either bins or all: true, not both" }, { status: 400 });
+      }
+    } else {
+      refs = parseBinRefs(body.bins);
+      if (!refs || refs.length === 0) {
+        return NextResponse.json(
+          { error: "A non-empty bins[] is required (or all: true to unassign every bin of the team)" },
+          { status: 400 }
+        );
+      }
     }
 
-    const guard = await checkEventWritable(eid, user.type, !!clearCounts);
-    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
+    const guard = await checkEventWritable(eid, user.type, clearCounts);
+    if (guard) return NextResponse.json({ error: guard }, { status: guard === "Event not found" ? 404 : 403 });
 
     const tid = Number(teamId);
-    const brand = hasBins ? brandParam(body.brand) : null;
-    // Condition on `items i` (joins) and on bare `items` (UPDATE)
-    const itemCondI = hasBins ? sql` AND ${binRefsCondition(refs, "i")}${itemScopeFragment(null, brand, "i")}` : sql``;
-    const itemCond = hasBins ? sql` AND ${binRefsCondition(refs)}${itemScopeFragment(null, brand)}` : sql``;
+    const brand = refs ? brandParam(body.brand) : null;
 
-    // Check if items being unassigned have counts (same rule as PATCH)
-    const countedCheck = await db.execute(
-      sql`SELECT count(*)::int as cnt FROM counts c
-          JOIN items i ON i.id = c.item_id
-          WHERE i.event_id = ${eid} AND i.team_id = ${tid}${itemCondI}`
-    ) as { cnt: number }[];
-    const countedCount = Number(countedCheck[0]?.cnt) || 0;
+    const countedCount = await db.transaction(async (tx) => {
+      const { countedCount, match } = await lockAndCheckCounts(tx, {
+        eid,
+        tid,
+        userType: user.type,
+        clearCounts,
+        makeMatch: (warehouses) => (refs ? binsMatch(refs, warehouses, brand) : null),
+        verb: "unassign",
+      });
 
-    if (countedCount > 0 && !clearCounts) {
-      return NextResponse.json(
-        { error: "Cannot unassign bins that have counted items", hasCountedItems: true, countedCount },
-        { status: 409 }
-      );
-    }
-
-    await db.transaction(async (tx) => {
       if (clearCounts) {
-        await clearTeamCountData(tx, eid, tid, hasBins ? itemCondI : null);
+        await clearTeamCountData(tx, eid, tid, match);
       }
-
-      if (hasBins) {
-        // Unassign specific bins
-        await tx.execute(
-          sql`UPDATE items SET team_id = NULL WHERE event_id = ${eid} AND team_id = ${tid}${itemCond}`
-        );
-      } else {
-        // Unassign all items from this team
-        await tx
-          .update(items)
-          .set({ teamId: null })
-          .where(
-            and(eq(items.eventId, eid), eq(items.teamId, tid))
-          );
-      }
+      const cond = match ? sql` AND ${match()}` : sql``;
+      await tx.execute(
+        sql`UPDATE items SET team_id = NULL WHERE event_id = ${eid} AND team_id = ${tid}${cond}`
+      );
+      return countedCount;
     });
 
-    return NextResponse.json({ success: true, clearedCounts: countedCount > 0 ? countedCount : 0 });
+    return NextResponse.json({ success: true, clearedCounts: clearCounts ? countedCount : 0 });
   } catch (error) {
+    const routeError = routeErrorResponse(error);
+    if (routeError) return routeError;
     console.error("Unassign error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
@@ -340,7 +410,8 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
-// PATCH: Re-assign bins from one team to another (optional `brand` filter)
+// PATCH: Re-assign bins from one team to another (optional `brand` filter), limited to
+// the event's warehouse selection.
 export async function PATCH(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin", "supervisor"], write: true });
   if (auth.response) return auth.response;
@@ -349,7 +420,8 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const eid = resolveEventId(user, body.eventId);
-    const { fromTeamId, toTeamId, clearCounts } = body;
+    const { fromTeamId, toTeamId } = body;
+    const clearCounts = body.clearCounts === true;
     const refs = parseBinRefs(body.bins);
 
     if (!eid || !fromTeamId || !toTeamId || !refs || refs.length === 0) {
@@ -359,8 +431,8 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const guard = await checkEventWritable(eid, user.type, !!clearCounts);
-    if (guard) return NextResponse.json({ error: guard }, { status: 403 });
+    const guard = await checkEventWritable(eid, user.type, clearCounts);
+    if (guard) return NextResponse.json({ error: guard }, { status: guard === "Event not found" ? 404 : 403 });
 
     if (Number(fromTeamId) === Number(toTeamId)) {
       return NextResponse.json(
@@ -381,39 +453,36 @@ export async function PATCH(request: NextRequest) {
 
     const fromId = Number(fromTeamId);
     const brand = brandParam(body.brand);
-    const itemCondI = sql` AND ${binRefsCondition(refs, "i")}${itemScopeFragment(null, brand, "i")}`;
-    const itemCond = sql` AND ${binRefsCondition(refs)}${itemScopeFragment(null, brand)}`;
+    const match = (warehouses: string[] | null) => binsMatch(refs, warehouses, brand);
 
-    // Check if items in these bins have counts
-    const countedCheck = await db.execute(
-      sql`SELECT count(*)::int as cnt FROM counts c
-          JOIN items i ON i.id = c.item_id
-          WHERE i.event_id = ${eid} AND i.team_id = ${fromId}${itemCondI}`
-    ) as { cnt: number }[];
+    // Check counts, delete counts + verifications + serial discrepancies, then move items,
+    // all in one transaction
+    const { result, countedCount } = await db.transaction(async (tx) => {
+      const locked = await lockAndCheckCounts(tx, {
+        eid,
+        tid: fromId,
+        userType: user.type,
+        clearCounts,
+        makeMatch: match,
+        verb: "re-assign",
+      });
+      const itemMatch = locked.match!;
 
-    const countedCount = Number(countedCheck[0]?.cnt) || 0;
-
-    if (countedCount > 0 && !clearCounts) {
-      return NextResponse.json(
-        { error: "Cannot re-assign bins that have counted items", hasCountedItems: true, countedCount },
-        { status: 409 }
-      );
-    }
-
-    // Delete counts + verifications + serial discrepancies, then move items, in one transaction
-    const result = await db.transaction(async (tx) => {
       if (clearCounts) {
-        await clearTeamCountData(tx, eid, fromId, itemCondI);
+        await clearTeamCountData(tx, eid, fromId, itemMatch);
       }
 
-      return tx.execute(
+      const result = await tx.execute(
         sql`UPDATE items SET team_id = ${Number(toTeamId)}
-            WHERE event_id = ${eid} AND team_id = ${fromId}${itemCond} RETURNING id`
+            WHERE event_id = ${eid} AND team_id = ${fromId} AND ${itemMatch()} RETURNING id`
       );
+      return { result, countedCount: locked.countedCount };
     });
 
-    return NextResponse.json({ success: true, movedCount: result.length, clearedCounts: countedCount > 0 ? countedCount : 0 });
+    return NextResponse.json({ success: true, movedCount: result.length, clearedCounts: clearCounts ? countedCount : 0 });
   } catch (error) {
+    const routeError = routeErrorResponse(error);
+    if (routeError) return routeError;
     console.error("Re-assign error:", error);
     return NextResponse.json(
       { error: "Internal server error" },

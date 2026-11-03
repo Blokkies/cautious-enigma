@@ -132,6 +132,7 @@ describe("DELETE /api/admin/assign with clearCounts", () => {
     const sd = texts.find((t) => t.startsWith("DELETE FROM serial_discrepancies"))!;
     expect(sd).toContain("sd.team_id = $");
     expect(sd).toContain("i.bin_number IS NOT DISTINCT FROM sd.bin_number");
+    expect(sd).toContain("NOT EXISTS");
     expect(sd).toContain("COALESCE(i.warehouse, '') = $");
     // Discrepancies are removed before the items are unassigned
     expect(texts.findIndex((t) => t.startsWith("DELETE FROM serial_discrepancies"))).toBeLessThan(
@@ -141,7 +142,7 @@ describe("DELETE /api/admin/assign with clearCounts", () => {
 
   it("deletes all of the team's serial discrepancies when unassigning the whole team", async () => {
     scenario({ countedCount: 1 });
-    const res = await assignDELETE(req("DELETE", { eventId: 5, teamId: 7, clearCounts: true }));
+    const res = await assignDELETE(req("DELETE", { eventId: 5, teamId: 7, all: true, clearCounts: true }));
     expect(res.status).toBe(200);
     const sd = txExecutes().find((r) => r.text?.startsWith("DELETE FROM serial_discrepancies"))!;
     expect(sd.text).toBe("DELETE FROM serial_discrepancies WHERE event_id = $1 AND team_id = $2");
@@ -151,7 +152,8 @@ describe("DELETE /api/admin/assign with clearCounts", () => {
     scenario({ countedCount: 1 });
     const res = await assignDELETE(req("DELETE", { eventId: 5, teamId: 7, bins: ["A-01"] }));
     expect(res.status).toBe(409);
-    expect(state.mock!.transactionCount()).toBe(0);
+    // The check runs inside the transaction, which is rolled back before any write
+    expect(txExecutes().some((r) => r.text?.startsWith("UPDATE") || r.text?.startsWith("DELETE"))).toBe(false);
   });
 });
 

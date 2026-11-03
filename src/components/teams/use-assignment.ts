@@ -409,9 +409,11 @@ export function useAssignment(eventId: string) {
   };
 
   // DELETE /api/admin/assign; if the bins have counts (409), confirm and retry with clearCounts
-  const sendUnassign = async (payload: { teamId: number; bins?: BinRef[] }): Promise<boolean> => {
+  // Unassigning a whole team must say so explicitly with `all: true` (the server rejects
+  // an empty/missing bins list so a bad request can't wipe a team by accident).
+  const sendUnassign = async (payload: { teamId: number; bins: BinRef[] } | { teamId: number; all: true }): Promise<boolean> => {
     // With a brand filter active, removing bins only removes that brand's items (what is shown)
-    const brand = payload.bins && brandFilter ? { brand: brandFilter } : {};
+    const brand = "bins" in payload && brandFilter ? { brand: brandFilter } : {};
     const send = (clearCounts: boolean) =>
       fetch("/api/admin/assign", {
         method: "DELETE",
@@ -502,7 +504,7 @@ export function useAssignment(eventId: string) {
   const handleUnassignAll = async (teamId: number) => {
     if (!confirm("Unassign ALL items from this team?")) return;
     try {
-      if (await sendUnassign({ teamId })) {
+      if (await sendUnassign({ teamId, all: true })) {
         toast.success("All items unassigned");
         setSelectedTeamBins((prev) => ({ ...prev, [teamId]: new Set() }));
         loadData();

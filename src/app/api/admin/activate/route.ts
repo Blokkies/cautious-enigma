@@ -5,6 +5,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { getEventWarehouses, requireUser } from "@/lib/api-auth";
 import { checkEventWritable } from "../event-guard";
 import { ACTIVATE_PUT_TARGETS, canActivate, checkActivatePutTransition } from "@/lib/event-status";
+import { parseId } from "@/lib/ids";
 import { lockEventRow, parseEventWarehouses, RouteError, routeErrorResponse } from "../event-lock";
 import { activationBlocker, getActivationReadiness } from "../readiness";
 import { deleteEventCascade } from "../events/delete-event";
@@ -14,12 +15,11 @@ export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin"] });
   if (auth.response) return auth.response;
 
-  const eventId = request.nextUrl.searchParams.get("eventId");
-  if (!eventId) {
-    return NextResponse.json({ error: "eventId required" }, { status: 400 });
+  const eid = parseId(request.nextUrl.searchParams.get("eventId"));
+  if (!eid) {
+    return NextResponse.json({ error: "A numeric eventId is required" }, { status: 400 });
   }
 
-  const eid = Number(eventId);
   const readiness = await getActivationReadiness(db, eid, await getEventWarehouses(eid));
 
   return NextResponse.json({
@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const { eventId } = await request.json();
-    const eid = Number(eventId);
+    const eid = parseId(eventId);
+    if (!eid) return NextResponse.json({ error: "A numeric eventId is required" }, { status: 400 });
 
     await db.transaction(async (tx) => {
       // Lock the event row: a concurrent import/copy/reset holds the same lock, so the
@@ -58,6 +59,7 @@ export async function POST(request: NextRequest) {
           readiness: {
             itemCount: readiness.itemCount,
             teamCount: readiness.teamCount,
+            supervisorCount: readiness.supervisorCount,
             unassignedCount: readiness.unassignedCount,
           },
         });
@@ -92,7 +94,8 @@ export async function PUT(request: NextRequest) {
 
   try {
     const { eventId, status, action } = await request.json();
-    const eid = Number(eventId);
+    const eid = parseId(eventId);
+    if (!eid) return NextResponse.json({ error: "A numeric eventId is required" }, { status: 400 });
 
     // Full reset: delete all operational data but keep imported items and event
     if (action === "reset") {
@@ -182,7 +185,9 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const { eventId } = await request.json();
-    return await deleteEventCascade(Number(eventId));
+    const eid = parseId(eventId);
+    if (!eid) return NextResponse.json({ error: "A numeric eventId is required" }, { status: 400 });
+    return await deleteEventCascade(eid);
   } catch (error) {
     console.error("Delete event error:", error);
     return NextResponse.json(

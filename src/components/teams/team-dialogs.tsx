@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Plus, Loader2, X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
+import { PIN_MAX_LENGTH, PIN_MIN_LENGTH, sanitizePinInput } from "./pin";
 
 type NamePinForm = { name: string; pin: string };
 
@@ -66,6 +67,7 @@ export function AddTeamDialog({
   members,
   setMembers,
   onCreate,
+  submitting = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -74,6 +76,8 @@ export function AddTeamDialog({
   members: string[];
   setMembers: Dispatch<SetStateAction<string[]>>;
   onCreate: () => void;
+  /** Disables the submit button while the request is in flight (no double submit). */
+  submitting?: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -90,14 +94,15 @@ export function AddTeamDialog({
             }
           />
           <Input
-            placeholder="4-digit PIN"
+            placeholder={`PIN (${PIN_MIN_LENGTH}+ digits)`}
             type="password"
-            maxLength={6}
+            inputMode="numeric"
+            maxLength={PIN_MAX_LENGTH}
             value={form.pin}
             onChange={(e) =>
               setForm((p) => ({
                 ...p,
-                pin: e.target.value.replace(/\D/g, ""),
+                pin: sanitizePinInput(e.target.value),
               }))
             }
           />
@@ -106,7 +111,10 @@ export function AddTeamDialog({
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={onCreate}>Create Team</Button>
+            <Button onClick={onCreate} disabled={submitting} className="gap-1">
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {submitting ? "Creating..." : "Create Team"}
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -122,6 +130,7 @@ export function EditTeamDialog({
   members,
   setMembers,
   onSave,
+  submitting = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -130,6 +139,7 @@ export function EditTeamDialog({
   members: string[];
   setMembers: Dispatch<SetStateAction<string[]>>;
   onSave: () => void;
+  submitting?: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -147,14 +157,15 @@ export function EditTeamDialog({
           />
           <MembersEditor members={members} setMembers={setMembers} />
           <Input
-            placeholder="New PIN (leave empty to keep current)"
+            placeholder={`New PIN (${PIN_MIN_LENGTH}+ digits, leave empty to keep current)`}
             type="password"
-            maxLength={6}
+            inputMode="numeric"
+            maxLength={PIN_MAX_LENGTH}
             value={form.pin}
             onChange={(e) =>
               setForm((p) => ({
                 ...p,
-                pin: e.target.value.replace(/\D/g, ""),
+                pin: sanitizePinInput(e.target.value),
               }))
             }
           />
@@ -162,7 +173,10 @@ export function EditTeamDialog({
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={onSave}>Save Changes</Button>
+            <Button onClick={onSave} disabled={submitting} className="gap-1">
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {submitting ? "Saving..." : "Save Changes"}
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -225,8 +239,10 @@ export function BulkCreateDialog({
             <label className="text-sm font-medium mb-1 block">Base PIN</label>
             <Input
               placeholder="e.g. 1001"
+              inputMode="numeric"
+              maxLength={PIN_MAX_LENGTH}
               value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+              onChange={(e) => setPin(sanitizePinInput(e.target.value))}
               disabled={!!progress}
             />
           </div>
@@ -377,6 +393,7 @@ export function AddPersonDialog({
   form,
   setForm,
   onCreate,
+  submitting = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -386,6 +403,7 @@ export function AddPersonDialog({
   form: NamePinForm;
   setForm: Dispatch<SetStateAction<NamePinForm>>;
   onCreate: () => void;
+  submitting?: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -402,14 +420,15 @@ export function AddPersonDialog({
             }
           />
           <Input
-            placeholder="4-digit PIN"
+            placeholder={`PIN (${PIN_MIN_LENGTH}+ digits)`}
             type="password"
-            maxLength={6}
+            inputMode="numeric"
+            maxLength={PIN_MAX_LENGTH}
             value={form.pin}
             onChange={(e) =>
               setForm((p) => ({
                 ...p,
-                pin: e.target.value.replace(/\D/g, ""),
+                pin: sanitizePinInput(e.target.value),
               }))
             }
           />
@@ -417,7 +436,10 @@ export function AddPersonDialog({
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={onCreate}>{submitLabel}</Button>
+            <Button onClick={onCreate} disabled={submitting} className="gap-1">
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {submitLabel}
+            </Button>
           </div>
         </div>
       </DialogContent>

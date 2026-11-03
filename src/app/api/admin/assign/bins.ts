@@ -1,4 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
+import { NO_BIN } from "@/lib/no-bin";
 
 /**
  * A bin reference. Bins are identified by (warehouse, bin_number): "A-01" in JHB and
@@ -47,12 +48,27 @@ export function binRefsCondition(refs: BinRef[], alias?: string): SQL {
   const prefix = alias ? `${alias}.` : "";
   const binCol = sql.raw(`${prefix}bin_number`);
   const whCol = sql.raw(`${prefix}warehouse`);
-  const parts = refs.map((r) =>
-    r.warehouse === undefined
-      ? sql`(${binCol} = ${r.bin})`
-      : sql`(COALESCE(${whCol}, '') = ${r.warehouse ?? ""} AND ${binCol} = ${r.bin})`
-  );
+  const parts = refs.map((r) => {
+    // NO_BIN also matches blank bins not yet normalized (rows predating the backfill)
+    const binCond =
+      r.bin === NO_BIN
+        ? sql`(${binCol} = ${r.bin} OR ${binCol} IS NULL OR trim(${binCol}) = '')`
+        : sql`${binCol} = ${r.bin}`;
+    return r.warehouse === undefined
+      ? sql`(${binCond})`
+      : sql`(COALESCE(${whCol}, '') = ${r.warehouse ?? ""} AND ${binCond})`;
+  });
   return sql`(${sql.join(parts, sql` OR `)})`;
+}
+
+/**
+ * The bin number to group/list items by: blank bins read as NO_BIN, so every item shows
+ * up in some bin on the assignment page (matching binRefsCondition's NO_BIN handling).
+ */
+export function binNumberExpr(alias?: string): SQL {
+  const col = sql.raw(`${alias ? `${alias}.` : ""}bin_number`);
+  // Inlined as a literal (a constant) so the same expression can appear in SELECT and GROUP BY
+  return sql`(CASE WHEN ${col} IS NULL OR trim(${col}) = '' THEN ${sql.raw(`'${NO_BIN}'`)} ELSE ${col} END)`;
 }
 
 /**

@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { teams, supervisors, stocktakeEvents } from "@/lib/db/schema";
 import { eq, or, and } from "drizzle-orm";
 import { countInt } from "@/lib/db/aggregates";
+import { parseId } from "@/lib/ids";
+import { loginStatusesFor } from "@/lib/login-events";
 
 export async function GET(request: NextRequest) {
   const type = request.nextUrl.searchParams.get("type");
@@ -11,15 +13,8 @@ export async function GET(request: NextRequest) {
   // List accessible events (active or setup; also completed for supervisor/auditor)
   if (type === "events") {
     const role = request.nextUrl.searchParams.get("role");
-    const includeCompleted = role === "supervisor" || role === "auditor";
-
-    const statusConditions = [
-      eq(stocktakeEvents.status, "active"),
-      eq(stocktakeEvents.status, "setup"),
-    ];
-    if (includeCompleted) {
-      statusConditions.push(eq(stocktakeEvents.status, "completed"));
-    }
+    const statuses = loginStatusesFor(role === "supervisor" || role === "auditor" ? role : "team");
+    const statusConditions = statuses.map((s) => eq(stocktakeEvents.status, s));
 
     const eventList = await db
       .select()
@@ -62,55 +57,54 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ events: enriched });
   }
 
-  // Resolve event ID: use param, or fall back to finding active/setup event
-  let resolvedEventId: number | null = null;
+  if (type !== "team" && type !== "supervisor" && type !== "auditor") {
+    return NextResponse.json({ items: [] });
+  }
+
+  // Resolve the event: use the param, or fall back to the active/setup event.
+  // This route is public, so it only lists accounts of events this role can
+  // actually log into, and only what the login picker needs (no team members).
+  let event: { id: number; status: string } | undefined;
   if (eventIdParam) {
-    resolvedEventId = Number(eventIdParam);
+    const eventId = parseId(eventIdParam);
+    if (eventId === null) {
+      return NextResponse.json({ error: "Invalid eventId" }, { status: 400 });
+    }
+    [event] = await db
+      .select({ id: stocktakeEvents.id, status: stocktakeEvents.status })
+      .from(stocktakeEvents)
+      .where(eq(stocktakeEvents.id, eventId));
   } else {
     const [activeEvent] = await db
-      .select()
+      .select({ id: stocktakeEvents.id, status: stocktakeEvents.status })
       .from(stocktakeEvents)
       .where(eq(stocktakeEvents.status, "active"));
 
-    let fallbackEvent = activeEvent;
-    if (!fallbackEvent) {
+    event = activeEvent;
+    if (!event) {
       const [setupEvent] = await db
-        .select()
+        .select({ id: stocktakeEvents.id, status: stocktakeEvents.status })
         .from(stocktakeEvents)
         .where(eq(stocktakeEvents.status, "setup"));
-      fallbackEvent = setupEvent;
+      event = setupEvent;
     }
-
-    resolvedEventId = fallbackEvent?.id ?? null;
   }
 
-  if (!resolvedEventId) {
+  if (!event || !loginStatusesFor(type).includes(event.status)) {
     return NextResponse.json({ items: [] });
   }
 
   if (type === "team") {
     const teamList = await db
-      .select({ id: teams.id, name: teams.name, members: teams.members })
+      .select({ id: teams.id, name: teams.name })
       .from(teams)
-      .where(eq(teams.eventId, resolvedEventId));
+      .where(eq(teams.eventId, event.id));
     return NextResponse.json({ items: teamList });
   }
 
-  if (type === "supervisor") {
-    const supervisorList = await db
-      .select({ id: supervisors.id, name: supervisors.name })
-      .from(supervisors)
-      .where(and(eq(supervisors.eventId, resolvedEventId), eq(supervisors.role, "supervisor")));
-    return NextResponse.json({ items: supervisorList });
-  }
-
-  if (type === "auditor") {
-    const auditorList = await db
-      .select({ id: supervisors.id, name: supervisors.name })
-      .from(supervisors)
-      .where(and(eq(supervisors.eventId, resolvedEventId), eq(supervisors.role, "auditor")));
-    return NextResponse.json({ items: auditorList });
-  }
-
-  return NextResponse.json({ items: [] });
+  const staffList = await db
+    .select({ id: supervisors.id, name: supervisors.name })
+    .from(supervisors)
+    .where(and(eq(supervisors.eventId, event.id), eq(supervisors.role, type)));
+  return NextResponse.json({ items: staffList });
 }

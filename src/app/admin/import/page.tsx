@@ -14,7 +14,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { Upload, FileSpreadsheet, CheckCircle2, ArrowLeft, Loader2, Copy } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Upload, FileSpreadsheet, CheckCircle2, ArrowLeft, Loader2, Copy, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -25,6 +32,28 @@ interface ImportSummary {
   totalValue: number;
   mappedFields: string[];
   unmappedHeaders: string[];
+}
+
+/**
+ * The upload (POST) and copy-from-event (PUT) responses don't necessarily carry the
+ * same fields (a copy has no column mapping), so fill every field with a safe default.
+ */
+function normalizeSummary(raw: Partial<ImportSummary> | null | undefined): ImportSummary {
+  return {
+    totalItems: Number(raw?.totalItems) || 0,
+    uniqueBins: Number(raw?.uniqueBins) || 0,
+    uniqueBrands: Number(raw?.uniqueBrands) || 0,
+    totalValue: Number(raw?.totalValue) || 0,
+    mappedFields: Array.isArray(raw?.mappedFields) ? raw.mappedFields : [],
+    unmappedHeaders: Array.isArray(raw?.unmappedHeaders) ? raw.unmappedHeaders : [],
+  };
+}
+
+interface PendingConfirm {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
 }
 
 interface EventOption {
@@ -48,6 +77,8 @@ function ImportPageContent() {
   const [copying, setCopying] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
   const processingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Confirmation dialog (re-import over existing items, or deleting recorded counts)
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
 
   const startProcessingProgress = useCallback(() => {
     setProcessingProgress(0);
@@ -68,17 +99,23 @@ function ImportPageContent() {
   }, []);
 
   const loadEvents = useCallback(async () => {
-    const res = await fetch("/api/admin/events");
-    if (res.ok) {
-      const data = await res.json();
-      setEvents(data.events || []);
-      // Only auto-select if no URL param provided
-      if (!urlEventId) {
-        const setupEvent = data.events?.find(
-          (e: EventOption) => e.status === "setup"
-        );
-        if (setupEvent) setSelectedEventId(String(setupEvent.id));
+    try {
+      const res = await fetch("/api/admin/events");
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data.events || []);
+        // Only auto-select if no URL param provided
+        if (!urlEventId) {
+          const setupEvent = data.events?.find(
+            (e: EventOption) => e.status === "setup"
+          );
+          if (setupEvent) setSelectedEventId(String(setupEvent.id));
+        }
+      } else {
+        toast.error("Failed to load events");
       }
+    } catch {
+      toast.error("Failed to load events");
     }
   }, [urlEventId]);
 
@@ -98,6 +135,36 @@ function ImportPageContent() {
   }, [loadEvents, loadExistingEvents]);
 
   const selectedEvent = events.find((e) => String(e.id) === selectedEventId);
+  // Items already in the selected event (the copy-from list only holds events with items)
+  const existingItemCount =
+    existingEvents.find((e) => String(e.id) === selectedEventId)?.itemCount ?? 0;
+
+  /** Runs `action` directly, or after confirmation when the event already has items. */
+  const confirmReplaceItems = (action: () => void) => {
+    if (existingItemCount <= 0) {
+      action();
+      return;
+    }
+    setPendingConfirm({
+      title: "Replace existing items?",
+      message:
+        `This event already has ${existingItemCount.toLocaleString()} imported items. ` +
+        "Importing replaces all of them: every bin assignment is removed (teams must be assigned again), " +
+        "open queries and breakdowns are deleted, and the warehouse selection is reset. " +
+        "If counts have already been recorded you will be asked separately before they are deleted.",
+      confirmLabel: "Replace Items",
+      onConfirm: action,
+    });
+  };
+
+  const confirmDeleteCounts = (error: string, retry: () => void) => {
+    setPendingConfirm({
+      title: "Delete recorded counts?",
+      message: `${error} Continue and delete existing counts?`,
+      confirmLabel: "Delete Counts & Import",
+      onConfirm: retry,
+    });
+  };
 
   const handleUpload = (confirmed = false) => {
     if (!file || !selectedEventId) {
@@ -129,18 +196,12 @@ function ImportPageContent() {
       try {
         const data = JSON.parse(xhr.responseText);
         if (xhr.status >= 200 && xhr.status < 300 && data.success) {
-          setSummary(data.summary);
-          toast.success(`Imported ${data.summary.totalItems} items successfully!`);
+          const result = normalizeSummary(data.summary);
+          setSummary(result);
+          toast.success(`Imported ${result.totalItems} items successfully!`);
           loadExistingEvents(); // Refresh so copy-from picks up new data
         } else if (xhr.status === 409 && data.requiresConfirm) {
-          if (window.confirm(`${data.error}
-
-Continue and delete existing counts?`)) {
-            setUploading(false);
-            setUploadProgress(null);
-            handleUpload(true);
-            return;
-          }
+          confirmDeleteCounts(data.error, () => handleUpload(true));
         } else {
           toast.error(data.error || "Import failed");
         }
@@ -171,18 +232,14 @@ Continue and delete existing counts?`)) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceEventId: Number(copySourceId), targetEventId: Number(selectedEventId), confirm: confirmed }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
-        setSummary(data.summary);
-        toast.success(`Copied ${data.summary.totalItems} items`);
+        const result = normalizeSummary(data.summary);
+        setSummary(result);
+        toast.success(`Copied ${result.totalItems} items`);
+        loadExistingEvents(); // Refresh item counts (re-import confirmation, copy-from list)
       } else if (res.status === 409 && data.requiresConfirm) {
-        if (window.confirm(`${data.error}
-
-Continue and delete existing counts?`)) {
-          setCopying(false);
-          await handleCopyFromEvent(true);
-          return;
-        }
+        confirmDeleteCounts(data.error, () => handleCopyFromEvent(true));
       } else {
         toast.error(data.error || "Copy failed");
       }
@@ -269,7 +326,7 @@ Continue and delete existing counts?`)) {
 
           {!uploading && (
             <Button
-              onClick={() => handleUpload()}
+              onClick={() => confirmReplaceItems(() => handleUpload())}
               disabled={!file || !selectedEventId}
               className="w-full h-12"
             >
@@ -320,7 +377,7 @@ Continue and delete existing counts?`)) {
               </SelectContent>
             </Select>
             <Button
-              onClick={() => handleCopyFromEvent()}
+              onClick={() => confirmReplaceItems(() => handleCopyFromEvent())}
               disabled={!copySourceId || !selectedEventId || copying}
               className="w-full h-12 gap-2"
             >
@@ -347,7 +404,7 @@ Continue and delete existing counts?`)) {
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <div className="text-2xl font-bold text-green-800">
-                  {summary.totalItems.toLocaleString()}
+                  {(summary.totalItems ?? 0).toLocaleString()}
                 </div>
                 <div className="text-sm text-green-600">Total Items</div>
               </div>
@@ -365,17 +422,17 @@ Continue and delete existing counts?`)) {
               </div>
               <div>
                 <div className="text-2xl font-bold text-green-800">
-                  R{summary.totalValue.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                  R{(summary.totalValue ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0})}
                 </div>
                 <div className="text-sm text-green-600">Total Value</div>
               </div>
             </div>
 
-            {summary.mappedFields.length > 0 && (
+            {(summary.mappedFields ?? []).length > 0 && (
               <div className="mb-3">
                 <div className="text-sm font-medium mb-1">Mapped Columns:</div>
                 <div className="flex flex-wrap gap-1">
-                  {summary.mappedFields.map((f, i) => (
+                  {(summary.mappedFields ?? []).map((f, i) => (
                     <Badge key={i} variant="secondary" className="text-xs">
                       {f}
                     </Badge>
@@ -384,13 +441,13 @@ Continue and delete existing counts?`)) {
               </div>
             )}
 
-            {summary.unmappedHeaders.length > 0 && (
+            {(summary.unmappedHeaders ?? []).length > 0 && (
               <div>
                 <div className="text-sm font-medium mb-1">
                   Unmapped Columns (ignored):
                 </div>
                 <div className="flex flex-wrap gap-1">
-                  {summary.unmappedHeaders.map((h, i) => (
+                  {(summary.unmappedHeaders ?? []).map((h, i) => (
                     <Badge
                       key={i}
                       variant="outline"
@@ -405,6 +462,39 @@ Continue and delete existing counts?`)) {
           </CardContent>
         </Card>
       )}
+
+      <Dialog
+        open={!!pendingConfirm}
+        onOpenChange={(open) => {
+          if (!open) setPendingConfirm(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              {pendingConfirm?.title}
+            </DialogTitle>
+          </DialogHeader>
+          {selectedEvent && <div className="font-medium">{selectedEvent.name}</div>}
+          <p className="text-sm text-muted-foreground">{pendingConfirm?.message}</p>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setPendingConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const action = pendingConfirm?.onConfirm;
+                setPendingConfirm(null);
+                action?.();
+              }}
+            >
+              {pendingConfirm?.confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

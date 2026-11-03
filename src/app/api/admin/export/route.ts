@@ -4,17 +4,16 @@ import { items, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { requireUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import { parseId } from "@/lib/ids";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin"] });
   if (auth.response) return auth.response;
 
-  const eventId = request.nextUrl.searchParams.get("eventId");
-  if (!eventId) {
-    return NextResponse.json({ error: "eventId required" }, { status: 400 });
+  const eid = parseId(request.nextUrl.searchParams.get("eventId"));
+  if (!eid) {
+    return NextResponse.json({ error: "A numeric eventId is required" }, { status: 400 });
   }
-
-  const eid = Number(eventId);
 
   const events = await db
     .select()

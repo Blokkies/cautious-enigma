@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { TeamsManager } from "@/components/teams/teams-manager";
 import type { EventOption, SupervisorInfo, TeamInfo } from "@/components/teams/types";
 
@@ -25,27 +26,40 @@ function TeamsPageContent() {
   const [loading, setLoading] = useState(true);
 
   const loadEvents = useCallback(async () => {
-    const res = await fetch("/api/admin/events");
-    if (res.ok) {
-      const data = await res.json();
-      setEvents(data.events || []);
-      if (!urlEventId) {
-        const setupEvent = data.events?.find(
-          (e: EventOption) => e.status === "setup" || e.status === "active"
-        );
-        if (setupEvent) setSelectedEventId(String(setupEvent.id));
+    try {
+      const res = await fetch("/api/admin/events");
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data.events || []);
+        if (!urlEventId) {
+          const setupEvent = data.events?.find(
+            (e: EventOption) => e.status === "setup" || e.status === "active"
+          );
+          if (setupEvent) setSelectedEventId(String(setupEvent.id));
+        }
+      } else {
+        toast.error("Failed to load events");
       }
+    } catch {
+      toast.error("Failed to load events");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [urlEventId]);
 
   const loadTeams = useCallback(async () => {
     if (!selectedEventId) return;
-    const res = await fetch(`/api/admin/teams?eventId=${selectedEventId}`);
-    if (res.ok) {
-      const data = await res.json();
-      setTeamsList(data.teams || []);
-      setSupervisorsList(data.supervisors || []);
+    try {
+      const res = await fetch(`/api/admin/teams?eventId=${selectedEventId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTeamsList(data.teams || []);
+        setSupervisorsList(data.supervisors || []);
+      } else {
+        toast.error("Failed to load teams");
+      }
+    } catch {
+      toast.error("Failed to load teams");
     }
   }, [selectedEventId]);
 

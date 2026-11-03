@@ -42,7 +42,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
-import { cn } from "@/lib/utils";
+import { cn, normalizeMembers } from "@/lib/utils";
+import { PIN_MAX_LENGTH, PIN_MIN_LENGTH, pinError, sanitizePinInput } from "@/components/teams/pin";
 
 // --- Types ---
 interface EventInfo {
@@ -52,7 +53,9 @@ interface EventInfo {
   startDate: string;
   endDate: string;
   status: string;
+  /** Items assigned to a team (GET /api/admin/events counts only assigned items here). */
   itemCount: number;
+  /** All imported items. */
   totalItemCount: number;
   teamCount: number;
   supervisorCount: number;
@@ -64,6 +67,20 @@ interface ImportSummary {
   uniqueBrands: number;
   totalValue: number;
   warehouses?: string[];
+  /** Warehouses the server kept selected for the event after this import. */
+  selectedWarehouses?: string[];
+}
+
+/** Upload (POST) and copy (PUT) summaries: default any missing field so rendering can't crash. */
+function normalizeImportSummary(raw: Partial<ImportSummary> | null | undefined): ImportSummary {
+  return {
+    totalItems: Number(raw?.totalItems) || 0,
+    uniqueBins: Number(raw?.uniqueBins) || 0,
+    uniqueBrands: Number(raw?.uniqueBrands) || 0,
+    totalValue: Number(raw?.totalValue) || 0,
+    warehouses: Array.isArray(raw?.warehouses) ? raw.warehouses : undefined,
+    selectedWarehouses: Array.isArray(raw?.selectedWarehouses) ? raw.selectedWarehouses : undefined,
+  };
 }
 
 interface TeamInfo {
@@ -85,6 +102,8 @@ interface Readiness {
   hasSupervisors: boolean;
   allItemsAssigned: boolean;
   unassignedCount: number;
+  /** Why the server will refuse activation, or null when it is ready. */
+  blocker?: string | null;
 }
 
 type WizardStep = "details" | "import" | "teams" | "review";
@@ -218,6 +237,13 @@ export default function AdminSetup() {
   const [supForm, setSupForm] = useState({ name: "", pin: "" });
   const [addingTeam, setAddingTeam] = useState(false);
   const [addingSupervisor, setAddingSupervisor] = useState(false);
+  const [pendingMemberDelete, setPendingMemberDelete] = useState<{
+    id: number;
+    type: "team" | "supervisor";
+    name: string;
+  } | null>(null);
+  const [deletingMember, setDeletingMember] = useState(false);
+  const [savingWarehouses, setSavingWarehouses] = useState(false);
 
   // Step 4: Review
   const [readiness, setReadiness] = useState<Readiness | null>(null);
@@ -468,6 +494,12 @@ export default function AdminSetup() {
 
   // Step 1: Create event
   const handleCreateEvent = async () => {
+    // Back -> Continue must not create a second event: reuse the one from this wizard
+    // session (its details can't be edited here; the fields are read-only once created).
+    if (wizardEventId) {
+      goToStep("import");
+      return;
+    }
     if (!form.name.trim()) {
       toast.error("Event name is required");
       return;
@@ -525,9 +557,10 @@ export default function AdminSetup() {
       try {
         const data = JSON.parse(xhr.responseText);
         if (xhr.status >= 200 && xhr.status < 300 && data.success) {
-          setImportSummary(data.summary);
-          setSelectedWarehouses(new Set());
-          toast.success(`Imported ${data.summary.totalItems} items`);
+          const summary = normalizeImportSummary(data.summary);
+          setImportSummary(summary);
+          setSelectedWarehouses(new Set(summary.selectedWarehouses ?? []));
+          toast.success(`Imported ${summary.totalItems} items`);
           markComplete("import");
           loadExistingEvents(); // Refresh so copy-from picks up new data
         } else if (xhr.status === 409 && data.requiresConfirm) {
@@ -570,9 +603,10 @@ Continue and delete existing counts?`)) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setImportSummary(data.summary);
-        setSelectedWarehouses(new Set());
-        toast.success(`Copied ${data.summary.totalItems} items`);
+        const summary = normalizeImportSummary(data.summary);
+        setImportSummary(summary);
+        setSelectedWarehouses(new Set(summary.selectedWarehouses ?? []));
+        toast.success(`Copied ${summary.totalItems} items`);
         markComplete("import");
       } else if (res.status === 409 && data.requiresConfirm) {
         if (window.confirm(`${data.error}
@@ -594,8 +628,13 @@ Continue and delete existing counts?`)) {
 
   // Step 3: Add team/supervisor
   const handleAddTeam = async () => {
-    if (!teamForm.name.trim() || !teamForm.pin || teamForm.pin.length < 4) {
-      toast.error("Team name and 4+ digit PIN required");
+    if (!teamForm.name.trim() || !teamForm.pin) {
+      toast.error(`Team name and ${PIN_MIN_LENGTH}+ digit PIN required`);
+      return;
+    }
+    const teamPinError = pinError(teamForm.pin);
+    if (teamPinError) {
+      toast.error(teamPinError);
       return;
     }
     setAddingTeam(true);
@@ -628,8 +667,13 @@ Continue and delete existing counts?`)) {
   };
 
   const handleAddSupervisor = async () => {
-    if (!supForm.name.trim() || !supForm.pin || supForm.pin.length < 4) {
-      toast.error("Name and 4+ digit PIN required");
+    if (!supForm.name.trim() || !supForm.pin) {
+      toast.error(`Name and ${PIN_MIN_LENGTH}+ digit PIN required`);
+      return;
+    }
+    const supPinError = pinError(supForm.pin);
+    if (supPinError) {
+      toast.error(supPinError);
       return;
     }
     setAddingSupervisor(true);
@@ -659,10 +703,10 @@ Continue and delete existing counts?`)) {
     }
   };
 
-  const handleDeleteTeamOrSup = async (
-    id: number,
-    type: "team" | "supervisor"
-  ) => {
+  const handleDeleteTeamOrSup = async () => {
+    if (!pendingMemberDelete || deletingMember) return;
+    const { id, type } = pendingMemberDelete;
+    setDeletingMember(true);
     try {
       const res = await fetch("/api/admin/teams", {
         method: "DELETE",
@@ -671,11 +715,47 @@ Continue and delete existing counts?`)) {
       });
       if (res.ok) {
         toast.success(`${type === "team" ? "Team" : "Supervisor"} removed`);
+        setPendingMemberDelete(null);
         loadTeams();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || `Failed to remove ${type}`);
       }
     } catch {
       toast.error("Network error");
+    } finally {
+      setDeletingMember(false);
     }
+  };
+
+  // Step 2 -> 3: save the warehouse selection (when there is a choice) before moving on
+  const handleImportContinue = async () => {
+    if (!importSummary) return;
+    if (importSummary.warehouses && importSummary.warehouses.length > 1 && wizardEventId) {
+      setSavingWarehouses(true);
+      try {
+        const res = await fetch("/api/admin/events", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: wizardEventId,
+            warehouses: Array.from(selectedWarehouses),
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          toast.error(data.error || "Failed to save warehouse selection");
+          return;
+        }
+      } catch {
+        toast.error("Network error: warehouse selection not saved");
+        return;
+      } finally {
+        setSavingWarehouses(false);
+      }
+    }
+    markComplete("import");
+    goToStep("teams");
   };
 
   // Step 4: Activate
@@ -748,6 +828,7 @@ Continue and delete existing counts?`)) {
                     onChange={(e) =>
                       setForm((p) => ({ ...p, name: e.target.value }))
                     }
+                    disabled={!!wizardEventId}
                     placeholder="e.g. Rubicon Stocktake 2026"
                     className="h-12"
                   />
@@ -759,6 +840,7 @@ Continue and delete existing counts?`)) {
                     onChange={(e) =>
                       setForm((p) => ({ ...p, location: e.target.value }))
                     }
+                    disabled={!!wizardEventId}
                     placeholder="e.g. Newton Park Warehouse"
                     className="h-12"
                   />
@@ -772,6 +854,7 @@ Continue and delete existing counts?`)) {
                       onChange={(e) =>
                         setForm((p) => ({ ...p, startDate: e.target.value }))
                       }
+                      disabled={!!wizardEventId}
                       className="h-12"
                     />
                   </div>
@@ -783,17 +866,23 @@ Continue and delete existing counts?`)) {
                       onChange={(e) =>
                         setForm((p) => ({ ...p, endDate: e.target.value }))
                       }
+                      disabled={!!wizardEventId}
                       className="h-12"
                     />
                   </div>
                 </div>
+                {wizardEventId && (
+                  <p className="text-xs text-muted-foreground">
+                    This event has already been created. Its details can&apos;t be changed in the wizard.
+                  </p>
+                )}
                 <div className="flex justify-end pt-2">
                   <Button
                     onClick={handleCreateEvent}
                     disabled={creating}
                     className="gap-1"
                   >
-                    {creating ? "Creating..." : "Create & Continue"}
+                    {creating ? "Creating..." : wizardEventId ? "Continue" : "Create & Continue"}
                     <ChevronRight className="h-4 w-4" />
                   </Button>
                 </div>
@@ -1034,22 +1123,8 @@ Continue and delete existing counts?`)) {
                     )}
                     {importSummary && (
                       <Button
-                        onClick={async () => {
-                          // Save warehouse selection if multiple warehouses exist
-                          if (importSummary.warehouses && importSummary.warehouses.length > 1 && wizardEventId) {
-                            await fetch("/api/admin/events", {
-                              method: "PUT",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                id: wizardEventId,
-                                warehouses: Array.from(selectedWarehouses),
-                              }),
-                            });
-                          }
-                          markComplete("import");
-                          goToStep("teams");
-                        }}
-                        disabled={importSummary.warehouses && importSummary.warehouses.length > 1 && selectedWarehouses.size === 0}
+                        onClick={handleImportContinue}
+                        disabled={savingWarehouses || (importSummary.warehouses && importSummary.warehouses.length > 1 && selectedWarehouses.size === 0)}
                         className="gap-1"
                       >
                         Continue
@@ -1078,16 +1153,16 @@ Continue and delete existing counts?`)) {
                     >
                       <div>
                         <span className="font-medium">{team.name}</span>
-                        {team.members && (
+                        {normalizeMembers(team.members).length > 0 && (
                           <span className="text-sm text-muted-foreground ml-2">
-                            ({(() => { try { return (JSON.parse(team.members) as string[]).join(", "); } catch { return ""; } })()})
+                            ({normalizeMembers(team.members).join(", ")})
                           </span>
                         )}
                       </div>
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleDeleteTeamOrSup(team.id, "team")}
+                        onClick={() => setPendingMemberDelete({ id: team.id, type: "team", name: team.name })}
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
@@ -1110,11 +1185,12 @@ Continue and delete existing counts?`)) {
                         onChange={(e) =>
                           setTeamForm((p) => ({
                             ...p,
-                            pin: e.target.value.replace(/\D/g, ""),
+                            pin: sanitizePinInput(e.target.value),
                           }))
                         }
-                        placeholder="PIN (4+ digits)"
-                        maxLength={6}
+                        placeholder={`PIN (${PIN_MIN_LENGTH}+ digits)`}
+                        inputMode="numeric"
+                        maxLength={PIN_MAX_LENGTH}
                         className="h-10"
                       />
                     </div>
@@ -1167,7 +1243,7 @@ Continue and delete existing counts?`)) {
                         variant="ghost"
                         size="sm"
                         onClick={() =>
-                          handleDeleteTeamOrSup(sup.id, "supervisor")
+                          setPendingMemberDelete({ id: sup.id, type: "supervisor", name: sup.name })
                         }
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
@@ -1190,11 +1266,12 @@ Continue and delete existing counts?`)) {
                         onChange={(e) =>
                           setSupForm((p) => ({
                             ...p,
-                            pin: e.target.value.replace(/\D/g, ""),
+                            pin: sanitizePinInput(e.target.value),
                           }))
                         }
-                        placeholder="PIN (4+ digits)"
-                        maxLength={6}
+                        placeholder={`PIN (${PIN_MIN_LENGTH}+ digits)`}
+                        inputMode="numeric"
+                        maxLength={PIN_MAX_LENGTH}
                         className="h-10"
                       />
                     </div>
@@ -1263,7 +1340,7 @@ Continue and delete existing counts?`)) {
                     />
                     <ReadinessItem
                       ok={readiness.hasSupervisors}
-                      label="Supervisors created"
+                      label="Supervisors created (at least one required)"
                     />
                     <ReadinessItem
                       ok={readiness.allItemsAssigned}
@@ -1279,13 +1356,20 @@ Continue and delete existing counts?`)) {
                       readiness.hasTeams && (
                         <div className="pt-1">
                           <Link
-                            href="/admin/teams/assign"
+                            href={`/admin/teams/assign?eventId=${wizardEventId}`}
                             className="text-sm text-primary hover:underline"
                           >
                             Go to Assign page to assign items to teams
                           </Link>
                         </div>
                       )}
+
+                    {readiness.blocker && (
+                      <div className="flex items-start gap-2 p-3 mt-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                        <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span>{readiness.blocker}</span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-muted-foreground text-sm">
@@ -1311,8 +1395,11 @@ Continue and delete existing counts?`)) {
                       readiness?.hasSupervisors && (
                         <Button
                           onClick={handleActivate}
-                          disabled={activating || !readiness.allItemsAssigned}
-                          title={readiness.allItemsAssigned ? undefined : "Assign all items to teams before activating"}
+                          disabled={activating || !readiness.allItemsAssigned || !!readiness.blocker}
+                          title={
+                            readiness.blocker ||
+                            (readiness.allItemsAssigned ? undefined : "Assign all items to teams before activating")
+                          }
                           className="gap-1"
                         >
                           <Play className="h-4 w-4" />
@@ -1352,7 +1439,11 @@ Continue and delete existing counts?`)) {
 
                   {/* Stats row */}
                   <div className="flex gap-4 mt-3 text-sm text-muted-foreground">
-                    <span>{event.itemCount} items</span>
+                    <span>
+                      {(event.totalItemCount ?? event.itemCount).toLocaleString()} items
+                      {event.totalItemCount !== undefined &&
+                        ` (${event.itemCount.toLocaleString()} assigned)`}
+                    </span>
                     <span>{event.teamCount} teams</span>
                     <span>{event.supervisorCount} supervisors</span>
                   </div>
@@ -1437,6 +1528,47 @@ Continue and delete existing counts?`)) {
           </CardContent>
         </Card>
       )}
+
+      {/* Team / supervisor delete confirmation (wizard step 3) */}
+      <Dialog
+        open={!!pendingMemberDelete}
+        onOpenChange={(open) => {
+          if (!open && !deletingMember) setPendingMemberDelete(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              {pendingMemberDelete?.type === "team" ? "Delete Team?" : "Delete Supervisor?"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="font-medium">{pendingMemberDelete?.name}</div>
+            <p className="text-sm text-muted-foreground">
+              {pendingMemberDelete?.type === "team"
+                ? "The team is removed and all of its bin assignments are cleared, so those items will need to be assigned again."
+                : "The supervisor is removed and can no longer log in to this event."}
+            </p>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setPendingMemberDelete(null)}
+              disabled={deletingMember}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteTeamOrSup}
+              disabled={deletingMember}
+            >
+              {deletingMember ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirmation Dialog */}
       <Dialog

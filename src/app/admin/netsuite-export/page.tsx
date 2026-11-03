@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Download, Loader2, FileSpreadsheet, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { classifyExportResponse, uniqueFolderNames } from "@/components/netsuite/zip-helpers";
 
 interface EventInfo {
   id: number;
@@ -43,10 +44,6 @@ const statusColors: Record<string, string> = {
   completed: "bg-blue-100 text-blue-800",
   locked: "bg-gray-100 text-gray-800",
 };
-
-function sanitizeFolderName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_\- ]/g, "_").trim();
-}
 
 export default function NetSuiteExportPage() {
   const [events, setEvents] = useState<EventInfo[]>([]);
@@ -129,12 +126,16 @@ export default function NetSuiteExportPage() {
       let fileCount = 0;
       const totalFetches = selectedEvents.length * VARIANCE_TYPES.length;
       let completedFetches = 0;
+      // Folder per event, unique even when sanitized names collide
+      const folderNames = uniqueFolderNames(selectedEvents);
+      // Files that could not be fetched (not "no data" — real failures)
+      const failures: string[] = [];
 
       for (const event of selectedEvents) {
         setProgressText(
           `Fetching ${event.name} (${selectedEvents.indexOf(event) + 1}/${selectedEvents.length})...`
         );
-        const folderName = sanitizeFolderName(event.name);
+        const folderName = folderNames.get(event.id)!;
 
         const results = await Promise.all(
           VARIANCE_TYPES.map(async (type) => {
@@ -145,7 +146,13 @@ export default function NetSuiteExportPage() {
             });
             try {
               const res = await fetch(`/api/supervisor/export?${params}`);
-              if (!res.ok) return null;
+              if (!res.ok) {
+                const body = await res.text().catch(() => null);
+                // A plain 404 "No data" means the event has no variances of this type
+                if (classifyExportResponse(res.status, body) === "empty") return null;
+                failures.push(`${event.name}: ${type} (HTTP ${res.status})`);
+                return null;
+              }
               const blob = await res.blob();
               const filename = extractFilename(
                 res.headers.get("Content-Disposition"),
@@ -153,6 +160,7 @@ export default function NetSuiteExportPage() {
               );
               return { filename, blob };
             } catch {
+              failures.push(`${event.name}: ${type} (network error)`);
               return null;
             } finally {
               completedFetches++;
@@ -167,6 +175,17 @@ export default function NetSuiteExportPage() {
             fileCount++;
           }
         }
+      }
+
+      // Never hand out a silently incomplete ZIP: NetSuite would miss adjustments.
+      if (failures.length > 0) {
+        const shown = failures.slice(0, 5).join("; ");
+        const more = failures.length > 5 ? ` and ${failures.length - 5} more` : "";
+        toast.error(
+          `Export aborted: ${failures.length} file${failures.length === 1 ? "" : "s"} failed to download (${shown}${more}). Try again.`,
+          { duration: 15000 }
+        );
+        return;
       }
 
       if (fileCount === 0) {

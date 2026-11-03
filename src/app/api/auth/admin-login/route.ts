@@ -4,18 +4,29 @@ import { db } from "@/lib/db";
 import { admins } from "@/lib/db/schema";
 import { createToken, getTokenCookieOptions } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getClientIp } from "@/lib/client-ip";
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin2026";
-if (!process.env.ADMIN_PASSWORD && process.env.NODE_ENV === "production") {
-  throw new Error("ADMIN_PASSWORD must be set in production. Set ADMIN_PASSWORD in .env.local.");
-} else if (!process.env.ADMIN_PASSWORD) {
-  console.warn("[SECURITY] ADMIN_PASSWORD not set — using default. Set ADMIN_PASSWORD in .env.local for production.");
+// Development-only bootstrap password, used when ADMIN_PASSWORD is unset and
+// NODE_ENV is not "production". Production never falls back to it.
+const DEV_BOOTSTRAP_PASSWORD = "admin2026";
+
+/**
+ * Password that may create the first admin while the admins table is empty.
+ * Read per request (not at module load) so a missing env var neither crashes
+ * the build nor locks out admins that already exist in the database.
+ * Returns null in production when ADMIN_PASSWORD is not set.
+ */
+function getBootstrapPassword(): string | null {
+  if (process.env.ADMIN_PASSWORD) return process.env.ADMIN_PASSWORD;
+  if (process.env.NODE_ENV === "production") return null;
+  console.warn("[SECURITY] ADMIN_PASSWORD not set — using the development default. Set ADMIN_PASSWORD for production.");
+  return DEV_BOOTSTRAP_PASSWORD;
 }
 
 export async function POST(request: NextRequest) {
   try {
     // Rate limit by IP: 5 attempts per minute for admin login
-    const ip = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+    const ip = getClientIp(request);
     const { limited, retryAfterMs } = checkRateLimit(`admin-login:${ip}`, 5, 60_000);
     if (limited) {
       return NextResponse.json(
@@ -26,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     const { password } = await request.json();
 
-    if (!password) {
+    if (!password || typeof password !== "string") {
       return NextResponse.json({ error: "Password required" }, { status: 400 });
     }
 
@@ -35,7 +46,15 @@ export async function POST(request: NextRequest) {
 
     // If no admins exist, accept env var password and auto-create admin row
     if (allAdmins.length === 0) {
-      if (password !== ADMIN_PASSWORD) {
+      const bootstrapPassword = getBootstrapPassword();
+      if (bootstrapPassword === null) {
+        console.error("[SECURITY] No admin accounts exist and ADMIN_PASSWORD is not set; admin bootstrap is disabled.");
+        return NextResponse.json(
+          { error: "No admin accounts are configured. Set ADMIN_PASSWORD on the server." },
+          { status: 503 }
+        );
+      }
+      if (password !== bootstrapPassword) {
         return NextResponse.json({ error: "Invalid password" }, { status: 401 });
       }
       const hash = await bcrypt.hash(password, 10);

@@ -1,3 +1,4 @@
+import { PIN_MIN_LENGTH, PIN_MAX_LENGTH } from "@/lib/pin";
 import * as XLSX from "xlsx";
 import { isCsvSource, type SpreadsheetSource } from "./excel";
 
@@ -163,8 +164,8 @@ export function parseTeamExcel(buffer: ArrayBuffer, source?: SpreadsheetSource):
     }
     // Strip non-digit characters
     const pinDigits = pin.replace(/\D/g, "");
-    if (pinDigits.length < 4) {
-      errors.push({ row: rowNum, message: `Team "${name}": PIN must be at least 4 digits (got "${pin}")` });
+    if (pinDigits.length < PIN_MIN_LENGTH || pinDigits.length > PIN_MAX_LENGTH) {
+      errors.push({ row: rowNum, message: `Team "${name}": PIN must be ${PIN_MIN_LENGTH}-${PIN_MAX_LENGTH} digits (got "${pin}")` });
       continue;
     }
 

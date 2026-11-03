@@ -13,6 +13,7 @@ export interface ActivationReadiness {
   /** Items in the event's warehouse scope. */
   itemCount: number;
   teamCount: number;
+  supervisorCount: number;
   /** In-scope items with no team. */
   unassignedCount: number;
 }
@@ -25,7 +26,7 @@ export async function getActivationReadiness(
   exec: typeof db | Tx,
   eventId: number,
   warehouses: string[] | null
-): Promise<ActivationReadiness & { supervisorCount: number }> {
+): Promise<ActivationReadiness> {
   const scope = warehouseFilter(warehouses);
   const [[itemRow], [teamRow], [supervisorRow], [unassignedRow]] = await Promise.all([
     exec.select({ count: countInt() }).from(items).where(and(eq(items.eventId, eventId), scope)),
@@ -50,12 +51,17 @@ export async function getActivationReadiness(
 }
 
 /** Why the event can't be activated yet, or null if it is ready. */
-export function activationBlocker(r: Pick<ActivationReadiness, "itemCount" | "teamCount" | "unassignedCount">): string | null {
+export function activationBlocker(
+  r: Pick<ActivationReadiness, "itemCount" | "teamCount" | "supervisorCount" | "unassignedCount">
+): string | null {
   if (r.itemCount === 0) {
     return "Cannot activate: the event has no items in its selected warehouses. Import stock data first.";
   }
   if (r.teamCount === 0) {
     return "Cannot activate: the event has no counting teams. Create at least one team first.";
+  }
+  if (r.supervisorCount === 0) {
+    return "Cannot activate: the event has no supervisors. Add at least one supervisor first.";
   }
   if (r.unassignedCount > 0) {
     return `Cannot activate: ${r.unassignedCount} item${r.unassignedCount === 1 ? " is" : "s are"} not assigned to a team. Assign all bins first.`;

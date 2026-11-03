@@ -4,10 +4,11 @@ import { db } from "@/lib/db";
 import { executives } from "@/lib/db/schema";
 import { createToken, getTokenCookieOptions } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getClientIp } from "@/lib/client-ip";
 
 export async function POST(request: NextRequest) {
   try {
-    const ip = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+    const ip = getClientIp(request);
     const { limited, retryAfterMs } = checkRateLimit(`exec-login:${ip}`, 5, 60_000);
     if (limited) {
       return NextResponse.json(
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
 
     const { password } = await request.json();
 
-    if (!password) {
+    if (!password || typeof password !== "string") {
       return NextResponse.json({ error: "Password required" }, { status: 400 });
     }
 

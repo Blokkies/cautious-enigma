@@ -5,7 +5,10 @@ import { and, eq, notExists, sql } from "drizzle-orm";
 import { normalizeWarehouse, parseExcel } from "@/lib/excel";
 import { requireUser } from "@/lib/api-auth";
 import { countInt, countDistinctInt, sumFloat } from "@/lib/db/aggregates";
-import { lockEventRow, RouteError, routeErrorResponse, type Tx } from "../event-lock";
+import { normalizeBin } from "@/lib/no-bin";
+import { parseId } from "@/lib/ids";
+import { lockEventRow, parseEventWarehouses, RouteError, routeErrorResponse, type Tx } from "../event-lock";
+import { carryOverWarehouseSelection, FILE_TOO_LARGE, MAX_FILE_SIZE, MAX_REQUEST_SIZE } from "./limits";
 
 // Number of counts already recorded for an event (imports wipe them).
 async function existingCountCount(eventId: number): Promise<number> {
@@ -73,6 +76,48 @@ async function eventWarehouseList(tx: Tx, eid: number): Promise<string[]> {
     .sort();
 }
 
+/**
+ * Replace the event's items (inside the import/copy transaction, after lockEventForImport):
+ * clears the old items and dependents, inserts the new ones, and returns the available
+ * warehouses plus the carried-over selection.
+ */
+async function replaceEventItems(
+  tx: Tx,
+  eid: number,
+  previousSelectionRaw: string | null,
+  rows: (typeof items.$inferInsert)[]
+): Promise<{ warehouses: string[]; selectedWarehouses: string[] }> {
+  const previousWarehouses = await eventWarehouseList(tx, eid);
+  await clearEventItems(tx, eid);
+
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    await tx.insert(items).values(rows.slice(i, i + BATCH_SIZE));
+  }
+
+  const warehouses = await eventWarehouseList(tx, eid);
+  const selectedWarehouses = carryOverWarehouseSelection(
+    parseEventWarehouses(previousSelectionRaw),
+    previousWarehouses,
+    warehouses
+  );
+  return { warehouses, selectedWarehouses };
+}
+
+/** Import summary stats for the event's (new) items. */
+async function importStats(eid: number) {
+  const [totalImported] = await db.select({ count: countInt() }).from(items).where(eq(items.eventId, eid));
+  const [uniqueBins] = await db.select({ count: countDistinctInt(sql`bin_number`) }).from(items).where(eq(items.eventId, eid));
+  const [uniqueBrands] = await db.select({ count: countDistinctInt(sql`brand`) }).from(items).where(eq(items.eventId, eid));
+  const [totalValue] = await db.select({ total: sumFloat(sql`total_value`) }).from(items).where(eq(items.eventId, eid));
+  return {
+    totalItems: totalImported?.count || 0,
+    uniqueBins: uniqueBins?.count || 0,
+    uniqueBrands: uniqueBrands?.count || 0,
+    totalValue: totalValue?.total || 0,
+  };
+}
+
 /** Delete an upload that was replaced, unless another event still links to it. */
 async function deleteReplacedUpload(tx: Tx, oldUploadId: number | null, newUploadId: number | null) {
   if (!oldUploadId || oldUploadId === newUploadId) return;
@@ -126,91 +171,82 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { sourceEventId, targetEventId, confirm } = body;
+    const { confirm } = body;
+    const sourceId = parseId(body.sourceEventId);
+    const eid = parseId(body.targetEventId);
 
-    if (!sourceEventId || !targetEventId) {
-      return NextResponse.json({ error: "sourceEventId and targetEventId required" }, { status: 400 });
+    if (!sourceId || !eid) {
+      return NextResponse.json({ error: "Numeric sourceEventId and targetEventId required" }, { status: 400 });
     }
 
     // Verify target event exists and is in setup (re-checked under a lock in the transaction)
-    const [targetEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, Number(targetEventId)));
+    const [targetEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, eid));
     if (!targetEvent) return NextResponse.json({ error: "Target event not found" }, { status: 404 });
     if (targetEvent.status !== "setup") return NextResponse.json({ error: "Can only import during setup phase" }, { status: 400 });
 
-    const existingCounts = await existingCountCount(Number(targetEventId));
+    const existingCounts = await existingCountCount(eid);
     if (existingCounts > 0 && confirm !== true) {
       return NextResponse.json(countsConfirmError(existingCounts), { status: 409 });
     }
 
     // Verify source event exists and has items
-    const [sourceEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, Number(sourceEventId)));
+    const [sourceEvent] = await db.select().from(stocktakeEvents).where(eq(stocktakeEvents.id, sourceId));
     if (!sourceEvent) return NextResponse.json({ error: "Source event not found" }, { status: 404 });
 
     // Get all items from source event
-    const sourceItems = await db.select().from(items).where(eq(items.eventId, Number(sourceEventId)));
+    const sourceItems = await db.select().from(items).where(eq(items.eventId, sourceId));
     if (sourceItems.length === 0) return NextResponse.json({ error: "Source event has no items" }, { status: 400 });
 
     // Clear existing items and all dependent records, then copy items — all in one transaction
-    const eid = Number(targetEventId);
-    const warehouses = await db.transaction(async (tx) => {
+    const { warehouses, selectedWarehouses } = await db.transaction(async (tx) => {
       // Re-check status under a row lock so activation can't slip in between
       const locked = await lockEventForImport(tx, eid, confirm === true);
-      await clearEventItems(tx, eid);
-
-      // Copy items in batches (without team assignments)
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < sourceItems.length; i += BATCH_SIZE) {
-        const batch = sourceItems.slice(i, i + BATCH_SIZE);
-        await tx.insert(items).values(
-          batch.map((item) => ({
-            eventId: eid,
-            internalId: item.internalId,
-            itemCode: item.itemCode,
-            description: item.description,
-            brand: item.brand,
-            category: item.category,
-            binNumber: item.binNumber,
-            binInternalId: item.binInternalId,
-            // Older imports stored blank warehouses as NULL; normalize so filters can select them
-            warehouse: normalizeWarehouse(item.warehouse),
-            division: item.division,
-            onHand: item.onHand,
-            avgCost: item.avgCost,
-            totalValue: item.totalValue,
-            stockStatus: item.stockStatus,
-            serialNumber: item.serialNumber,
-            isSerialized: item.isSerialized,
-            teamId: null, // Don't copy team assignments
-          }))
-        );
-      }
-
-      const whs = await eventWarehouseList(tx, eid);
+      const result = await replaceEventItems(
+        tx,
+        eid,
+        locked.warehouses,
+        sourceItems.map((item) => ({
+          eventId: eid,
+          internalId: item.internalId,
+          itemCode: item.itemCode,
+          description: item.description,
+          brand: item.brand,
+          category: item.category,
+          // Older imports stored blank bins/warehouses as NULL; normalize so they can be assigned/filtered
+          binNumber: normalizeBin(item.binNumber),
+          binInternalId: item.binInternalId,
+          warehouse: normalizeWarehouse(item.warehouse),
+          division: item.division,
+          onHand: item.onHand,
+          avgCost: item.avgCost,
+          totalValue: item.totalValue,
+          stockStatus: item.stockStatus,
+          serialNumber: item.serialNumber,
+          isSerialized: item.isSerialized,
+          teamId: null, // Don't copy team assignments
+        }))
+      );
 
       // Link the source's upload file (or none); the target's previous file no longer
       // describes its items, so drop it if nothing else links to it.
       const newUploadId = sourceEvent.uploadId ?? null;
       await tx.update(stocktakeEvents)
-        .set({ warehouses: JSON.stringify(whs), uploadId: newUploadId })
+        .set({ warehouses: JSON.stringify(result.selectedWarehouses), uploadId: newUploadId })
         .where(eq(stocktakeEvents.id, eid));
       await deleteReplacedUpload(tx, locked.uploadId, newUploadId);
-      return whs;
+      return result;
     });
 
-    // Summary stats
-    const [totalImported] = await db.select({ count: countInt() }).from(items).where(eq(items.eventId, eid));
-    const [uniqueBins] = await db.select({ count: countDistinctInt(sql`bin_number`) }).from(items).where(eq(items.eventId, eid));
-    const [uniqueBrands] = await db.select({ count: countDistinctInt(sql`brand`) }).from(items).where(eq(items.eventId, eid));
-    const [totalValue] = await db.select({ total: sumFloat(sql`total_value`) }).from(items).where(eq(items.eventId, eid));
-
+    // Same summary shape as POST (no file was parsed, so no column mapping to report)
     return NextResponse.json({
       success: true,
       summary: {
-        totalItems: totalImported?.count || 0,
-        uniqueBins: uniqueBins?.count || 0,
-        uniqueBrands: uniqueBrands?.count || 0,
-        totalValue: totalValue?.total || 0,
+        ...(await importStats(eid)),
         warehouses,
+        selectedWarehouses,
+        mappedFields: [],
+        unmappedHeaders: [],
+        rawRowCount: sourceItems.length,
       },
     });
   } catch (error) {
@@ -226,33 +262,46 @@ export async function POST(request: NextRequest) {
   if (auth.response) return auth.response;
   const { user } = auth;
 
+  // Reject oversized uploads before reading the body (limits memory use too)
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_SIZE) {
+    return NextResponse.json({ error: FILE_TOO_LARGE }, { status: 413 });
+  }
+
+  let formData: FormData;
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File;
-    const eventId = formData.get("eventId") as string;
+    formData = await request.formData();
+  } catch (error) {
+    // Malformed multipart body, or one cut off by the proxy body-size limit
+    console.error("Import: could not read upload:", error);
+    return NextResponse.json(
+      { error: "Could not read the uploaded file. Make sure it is a valid upload no larger than 50MB, then try again." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const file = formData.get("file");
+    const eid = parseId(formData.get("eventId"));
     const confirm = formData.get("confirm") === "true";
 
-    if (!file || !eventId) {
+    if (!(file instanceof File) || !eid) {
       return NextResponse.json(
-        { error: "File and eventId are required" },
+        { error: "File and a numeric eventId are required" },
         { status: 400 }
       );
     }
 
     // Limit file size to 50MB to prevent memory exhaustion
-    const MAX_FILE_SIZE = 50 * 1024 * 1024;
     if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json(
-        { error: "File too large. Maximum size is 50MB." },
-        { status: 413 }
-      );
+      return NextResponse.json({ error: FILE_TOO_LARGE }, { status: 413 });
     }
 
     // Verify event exists and is in setup status (re-checked under a lock in the transaction)
     const [event] = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, Number(eventId)));
+      .where(eq(stocktakeEvents.id, eid));
 
     if (!event) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
@@ -265,7 +314,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const existingCounts = await existingCountCount(Number(eventId));
+    const existingCounts = await existingCountCount(eid);
     if (existingCounts > 0 && !confirm) {
       return NextResponse.json(countsConfirmError(existingCounts), { status: 409 });
     }
@@ -286,40 +335,35 @@ export async function POST(request: NextRequest) {
     }
 
     // Clear existing items and all dependent records, then insert — all in one transaction
-    const eid = Number(eventId);
     const fileBase64 = Buffer.from(buffer).toString("base64");
-    const { upload, warehouses } = await db.transaction(async (tx) => {
+    const { upload, warehouses, selectedWarehouses } = await db.transaction(async (tx) => {
       // Re-check status under a row lock so activation can't slip in between
       const locked = await lockEventForImport(tx, eid, confirm);
-      await clearEventItems(tx, eid);
-
-      // Batch insert items
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < parsed.items.length; i += BATCH_SIZE) {
-        const batch = parsed.items.slice(i, i + BATCH_SIZE);
-        await tx.insert(items)
-          .values(
-            batch.map((item) => ({
-              eventId: eid,
-              internalId: item.internalId || null,
-              itemCode: item.itemCode,
-              description: item.description || null,
-              brand: item.brand || null,
-              category: item.category || null,
-              binNumber: item.binNumber || null,
-              binInternalId: item.binInternalId || null,
-              // Blank warehouse -> "(No warehouse)" so warehouse filters can still select it
-              warehouse: normalizeWarehouse(item.warehouse),
-              division: item.division || null,
-              onHand: item.onHand || 0,
-              avgCost: item.avgCost || 0,
-              totalValue: item.totalValue || 0,
-              stockStatus: item.stockStatus || null,
-              serialNumber: item.serialNumber || null,
-              isSerialized: !!item.serialNumber,
-            }))
-          );
-      }
+      const result = await replaceEventItems(
+        tx,
+        eid,
+        locked.warehouses,
+        parsed.items.map((item) => ({
+          eventId: eid,
+          internalId: item.internalId || null,
+          itemCode: item.itemCode,
+          description: item.description || null,
+          brand: item.brand || null,
+          category: item.category || null,
+          // Blank bin -> "(No bin)" so the item can be assigned (activation needs every item assigned)
+          binNumber: normalizeBin(item.binNumber),
+          binInternalId: item.binInternalId || null,
+          // Blank warehouse -> "(No warehouse)" so warehouse filters can still select it
+          warehouse: normalizeWarehouse(item.warehouse),
+          division: item.division || null,
+          onHand: item.onHand || 0,
+          avgCost: item.avgCost || 0,
+          totalValue: item.totalValue || 0,
+          stockStatus: item.stockStatus || null,
+          serialNumber: item.serialNumber || null,
+          isSerialized: !!item.serialNumber,
+        }))
+      );
 
       // Store uploaded file in database
       const [up] = await tx.insert(uploads).values({
@@ -330,48 +374,23 @@ export async function POST(request: NextRequest) {
         uploadedBy: user.id ? Number(user.id) : null,
       }).returning({ id: uploads.id });
 
-      // Auto-populate event warehouses from distinct warehouse values in imported items
-      const whs = await eventWarehouseList(tx, eid);
-
+      // Keep the event's warehouse selection (where those warehouses still exist)
       await tx.update(stocktakeEvents)
-        .set({ warehouses: JSON.stringify(whs), uploadId: up.id })
+        .set({ warehouses: JSON.stringify(result.selectedWarehouses), uploadId: up.id })
         .where(eq(stocktakeEvents.id, eid));
       // The previous upload is replaced; remove it unless another event still links to it
       await deleteReplacedUpload(tx, locked.uploadId, up.id);
 
-      return { upload: up, warehouses: whs };
+      return { upload: up, ...result };
     });
-
-    // Get import summary
-    const [totalImported] = await db
-      .select({ count: countInt() })
-      .from(items)
-      .where(eq(items.eventId, eid));
-
-    const [uniqueBins] = await db
-      .select({ count: countDistinctInt(sql`bin_number`) })
-      .from(items)
-      .where(eq(items.eventId, eid));
-
-    const [uniqueBrands] = await db
-      .select({ count: countDistinctInt(sql`brand`) })
-      .from(items)
-      .where(eq(items.eventId, eid));
-
-    const [totalValue] = await db
-      .select({ total: sumFloat(sql`total_value`) })
-      .from(items)
-      .where(eq(items.eventId, eid));
 
     return NextResponse.json({
       success: true,
       uploadId: upload.id,
       summary: {
-        totalItems: totalImported?.count || 0,
-        uniqueBins: uniqueBins?.count || 0,
-        uniqueBrands: uniqueBrands?.count || 0,
-        totalValue: totalValue?.total || 0,
+        ...(await importStats(eid)),
         warehouses,
+        selectedWarehouses,
         mappedFields: parsed.mappedFields,
         unmappedHeaders: parsed.unmappedHeaders,
         rawRowCount: parsed.rowCount,

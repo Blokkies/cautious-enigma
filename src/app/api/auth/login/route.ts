@@ -4,6 +4,9 @@ import { teams, supervisors, stocktakeEvents } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { verifyPin, createToken, getTokenCookieOptions } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getClientIp } from "@/lib/client-ip";
+import { parseId } from "@/lib/ids";
+import { TEAM_LOGIN_STATUSES } from "@/lib/login-events";
 
 // PIN logins: teams live in `teams`; supervisors and auditors share `supervisors`
 // and are told apart by `role`. Each account must belong to the chosen event.
@@ -13,10 +16,6 @@ type PinLoginType = (typeof PIN_LOGIN_TYPES)[number];
 function isPinLoginType(type: unknown): type is PinLoginType {
   return PIN_LOGIN_TYPES.includes(type as PinLoginType);
 }
-
-// Teams may only log into events that are still open for counting, the same
-// statuses /api/auth/list offers them (supervisors/auditors also see completed).
-const TEAM_LOGIN_STATUSES = ["active", "setup"];
 
 async function findPinAccount(
   type: PinLoginType,
@@ -40,7 +39,7 @@ async function findPinAccount(
 export async function POST(request: NextRequest) {
   try {
     // Rate limit by IP: 10 attempts per minute
-    const ip = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "unknown";
+    const ip = getClientIp(request);
     const { limited, retryAfterMs } = checkRateLimit(`login:${ip}`, 10, 60_000);
     if (limited) {
       return NextResponse.json(
@@ -58,14 +57,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Ids arrive from the client as numbers or digit strings; anything else is
+    // a bad request, not a database error.
+    const accountId = parseId(id);
+    const hasEventId = eventId !== undefined && eventId !== null && eventId !== "";
+    const requestedEventId = hasEventId ? parseId(eventId) : null;
+    if (accountId === null || (hasEventId && requestedEventId === null)) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    }
+    if (typeof pin !== "string" && typeof pin !== "number") {
+      return NextResponse.json({ error: "Invalid PIN" }, { status: 400 });
+    }
+
     // Resolve the event: use provided eventId, or fall back to the single active
     // event. With several active events the client must say which one.
     let event;
-    if (eventId) {
+    if (requestedEventId !== null) {
       const [result] = await db
         .select()
         .from(stocktakeEvents)
-        .where(eq(stocktakeEvents.id, Number(eventId)));
+        .where(eq(stocktakeEvents.id, requestedEventId));
       event = result;
     } else {
       const activeEvents = await db
@@ -99,8 +110,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const account = await findPinAccount(type, Number(id), event.id);
-    if (!account || !(await verifyPin(pin, account.pinHash))) {
+    const account = await findPinAccount(type, accountId, event.id);
+    if (!account || !(await verifyPin(String(pin), account.pinHash))) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }
 

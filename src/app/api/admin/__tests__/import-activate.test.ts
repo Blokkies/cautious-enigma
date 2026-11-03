@@ -232,9 +232,10 @@ describe("GET /api/admin/activate", () => {
 
 describe("activationBlocker", () => {
   it("is null for a ready event and names the first problem otherwise", () => {
-    expect(activationBlocker({ itemCount: 5, teamCount: 1, unassignedCount: 0 })).toBeNull();
-    expect(activationBlocker({ itemCount: 0, teamCount: 0, unassignedCount: 0 })).toMatch(/no items/);
-    expect(activationBlocker({ itemCount: 5, teamCount: 0, unassignedCount: 5 })).toMatch(/no counting teams/);
-    expect(activationBlocker({ itemCount: 5, teamCount: 1, unassignedCount: 1 })).toMatch(/1 item is not assigned/);
+    expect(activationBlocker({ itemCount: 5, teamCount: 1, supervisorCount: 1, unassignedCount: 0 })).toBeNull();
+    expect(activationBlocker({ itemCount: 0, teamCount: 0, supervisorCount: 0, unassignedCount: 0 })).toMatch(/no items/);
+    expect(activationBlocker({ itemCount: 5, teamCount: 0, supervisorCount: 1, unassignedCount: 5 })).toMatch(/no counting teams/);
+    expect(activationBlocker({ itemCount: 5, teamCount: 1, supervisorCount: 0, unassignedCount: 0 })).toMatch(/no supervisors/);
+    expect(activationBlocker({ itemCount: 5, teamCount: 1, supervisorCount: 1, unassignedCount: 1 })).toMatch(/1 item is not assigned/);
   });
 });

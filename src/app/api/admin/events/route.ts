@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, teams, supervisors } from "@/lib/db/schema";
-import { eq, and, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, isNotNull } from "drizzle-orm";
 import { requireUser } from "@/lib/api-auth";
 import { EVENT_STATUSES as VALID_STATUSES, checkEventsPutTransition } from "@/lib/event-status";
 import { countInt } from "@/lib/db/aggregates";
 import { deleteEventCascade } from "./delete-event";
+import { parseId } from "@/lib/ids";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin"] });
@@ -79,11 +80,12 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { id, status, warehouses } = body;
+    const { status, warehouses } = body;
+    const id = parseId(body.id);
 
     if (!id) {
       return NextResponse.json(
-        { error: "Missing id" },
+        { error: "Missing or invalid id" },
         { status: 400 }
       );
     }
@@ -91,7 +93,7 @@ export async function PUT(request: NextRequest) {
     const [existing] = await db
       .select()
       .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, Number(id)));
+      .where(eq(stocktakeEvents.id, id));
 
     if (!existing) {
       return NextResponse.json(
@@ -120,12 +122,49 @@ export async function PUT(request: NextRequest) {
     }
 
     if (warehouses !== undefined) {
-      updates.warehouses = Array.isArray(warehouses) ? JSON.stringify(warehouses) : null;
+      // The warehouse selection defines what gets counted: only changeable during setup.
+      if (existing.status !== "setup") {
+        return NextResponse.json(
+          { error: `Warehouses can only be changed while the event is in setup (status: ${existing.status})` },
+          { status: 409 }
+        );
+      }
+      // null = all warehouses; otherwise a non-empty list of warehouses present in the event's items
+      if (warehouses === null) {
+        updates.warehouses = null;
+      } else {
+        if (!Array.isArray(warehouses) || warehouses.length === 0 || !warehouses.every((w) => typeof w === "string" && w.length > 0)) {
+          return NextResponse.json(
+            { error: "warehouses must be a non-empty array of warehouse names (or null for all warehouses)" },
+            { status: 400 }
+          );
+        }
+        const selected = Array.from(new Set(warehouses as string[]));
+        const present = await db
+          .select({ warehouse: items.warehouse })
+          .from(items)
+          .where(and(eq(items.eventId, id), inArray(items.warehouse, selected)))
+          .groupBy(items.warehouse);
+        const presentSet = new Set(present.map((r) => r.warehouse));
+        const unknown = selected.filter((w) => !presentSet.has(w));
+        if (unknown.length > 0) {
+          return NextResponse.json(
+            { error: `Unknown warehouse${unknown.length === 1 ? "" : "s"} for this event: ${unknown.join(", ")}` },
+            { status: 400 }
+          );
+        }
+        updates.warehouses = JSON.stringify(selected);
+      }
     }
 
-    await db.update(stocktakeEvents)
+    // A status/warehouse change must not overwrite a concurrent status change
+    const updated = await db.update(stocktakeEvents)
       .set(updates)
-      .where(eq(stocktakeEvents.id, Number(id)));
+      .where(and(eq(stocktakeEvents.id, id), eq(stocktakeEvents.status, existing.status)))
+      .returning({ id: stocktakeEvents.id });
+    if (updated.length === 0) {
+      return NextResponse.json({ error: "Event status changed meanwhile. Reload and try again." }, { status: 409 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -142,13 +181,14 @@ export async function DELETE(request: NextRequest) {
   if (auth.response) return auth.response;
 
   try {
-    const { id } = await request.json();
+    const { id: rawId } = await request.json();
+    const id = parseId(rawId);
 
     if (!id) {
-      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+      return NextResponse.json({ error: "Missing or invalid id" }, { status: 400 });
     }
 
-    return await deleteEventCascade(Number(id));
+    return await deleteEventCascade(id);
   } catch (error) {
     console.error("Delete event error:", error);
     return NextResponse.json(

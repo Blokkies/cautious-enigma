@@ -4,6 +4,7 @@ import { uploads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireUser } from "@/lib/api-auth";
 import { attachmentContentDisposition } from "@/lib/content-disposition";
+import { parseId } from "@/lib/ids";
 
 export async function GET(
   request: NextRequest,
@@ -13,11 +14,14 @@ export async function GET(
   if (auth.response) return auth.response;
 
   try {
-    const { id } = await params;
+    const id = parseId((await params).id);
+    if (id === null) {
+      return NextResponse.json({ error: "Invalid upload id" }, { status: 400 });
+    }
     const [upload] = await db
       .select()
       .from(uploads)
-      .where(eq(uploads.id, Number(id)));
+      .where(eq(uploads.id, id));
 
     if (!upload) {
       return NextResponse.json({ error: "Upload not found" }, { status: 404 });
@@ -26,9 +30,12 @@ export async function GET(
     // Decode base64 back to binary
     const fileBuffer = Buffer.from(upload.fileData, "base64");
 
-    const contentType =
-      upload.mimeType ||
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    // Only a plain "type/subtype" from the stored row; anything odd is served as opaque bytes.
+    const contentType = !upload.mimeType
+      ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : /^[\w.+-]+\/[\w.+-]+$/.test(upload.mimeType)
+        ? upload.mimeType
+        : "application/octet-stream";
 
     const contentDisposition = attachmentContentDisposition(upload.filename || "upload.xlsx");
 
@@ -37,6 +44,9 @@ export async function GET(
         "Content-Type": contentType,
         "Content-Disposition": contentDisposition,
         "Content-Length": String(fileBuffer.length),
+        // The stored mime type came from the uploader: never let a browser
+        // sniff the bytes into something renderable (e.g. HTML).
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {

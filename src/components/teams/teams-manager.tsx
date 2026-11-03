@@ -18,6 +18,7 @@ import {
   type BulkProgress,
   type ImportResult,
 } from "./team-dialogs";
+import { pinError } from "./pin";
 
 interface TeamsManagerProps {
   /**
@@ -73,6 +74,11 @@ export function TeamsManager({
   const [editForm, setEditForm] = useState({ name: "", pin: "" });
   const [editMembers, setEditMembers] = useState<string[]>([""]);
 
+  // In-flight flags so a double click can't create/save twice
+  const [creatingTeam, setCreatingTeam] = useState(false);
+  const [savingTeam, setSavingTeam] = useState(false);
+  const [creatingSupervisor, setCreatingSupervisor] = useState(false);
+
   // Import from Excel
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -87,15 +93,17 @@ export function TeamsManager({
   };
 
   const saveEditTeam = async () => {
-    if (!editTeam) return;
-    if (!editForm.name) {
+    if (!editTeam || savingTeam) return;
+    if (!editForm.name.trim()) {
       toast.error("Team name is required");
       return;
     }
-    if (editForm.pin && editForm.pin.length < 4) {
-      toast.error("PIN must be at least 4 digits");
+    const editPinError = editForm.pin ? pinError(editForm.pin) : null;
+    if (editPinError) {
+      toast.error(editPinError);
       return;
     }
+    setSavingTeam(true);
     try {
       const res = await fetch("/api/admin/teams", {
         method: "PUT",
@@ -112,22 +120,28 @@ export function TeamsManager({
         setEditTeam(null);
         loadTeams();
       } else {
-        toast.error("Failed to update team");
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to update team");
       }
     } catch {
       toast.error("Failed to update team");
+    } finally {
+      setSavingTeam(false);
     }
   };
 
   const createTeam = async () => {
-    if (!teamForm.name || !teamForm.pin) {
+    if (creatingTeam) return;
+    if (!teamForm.name.trim() || !teamForm.pin) {
       toast.error("Team name and PIN are required");
       return;
     }
-    if (teamForm.pin.length < 4) {
-      toast.error("PIN must be at least 4 digits");
+    const teamPinError = pinError(teamForm.pin);
+    if (teamPinError) {
+      toast.error(teamPinError);
       return;
     }
+    setCreatingTeam(true);
     try {
       const res = await fetch("/api/admin/teams", {
         method: "POST",
@@ -152,18 +166,23 @@ export function TeamsManager({
       }
     } catch {
       toast.error("Failed to create team");
+    } finally {
+      setCreatingTeam(false);
     }
   };
 
   const createSupervisor = async () => {
-    if (!supForm.name || !supForm.pin) {
+    if (creatingSupervisor) return;
+    if (!supForm.name.trim() || !supForm.pin) {
       toast.error("Name and PIN are required");
       return;
     }
-    if (supForm.pin.length < 4) {
-      toast.error("PIN must be at least 4 digits");
+    const supPinError = pinError(supForm.pin);
+    if (supPinError) {
+      toast.error(supPinError);
       return;
     }
+    setCreatingSupervisor(true);
     try {
       const res = await fetch("/api/admin/teams", {
         method: "POST",
@@ -186,6 +205,8 @@ export function TeamsManager({
       }
     } catch {
       toast.error("Failed to create supervisor");
+    } finally {
+      setCreatingSupervisor(false);
     }
   };
 
@@ -195,15 +216,23 @@ export function TeamsManager({
       toast.error("Enter a valid number (1-50)");
       return;
     }
-    if (!bulkPin || bulkPin.length < 4) {
-      toast.error("Enter a base PIN (at least 4 digits)");
+    const basePinError = bulkPin ? pinError(bulkPin) : "Enter a base PIN";
+    if (basePinError) {
+      toast.error(basePinError);
+      return;
+    }
+    // Sequential PINs keep the base PIN's width (leading zeros) and must stay valid
+    const lastPin = String(parseInt(bulkPin, 10) + count - 1).padStart(bulkPin.length, "0");
+    const lastPinError = pinError(lastPin);
+    if (lastPinError) {
+      toast.error(`Base PIN too high for ${count} teams: ${lastPinError.toLowerCase()}`);
       return;
     }
 
     let created = 0;
     setBulkProgress({ current: 0, total: count, created: 0 });
     for (let i = 1; i <= count; i++) {
-      const pin = String(parseInt(bulkPin) + i - 1).padStart(4, "0");
+      const pin = String(parseInt(bulkPin, 10) + i - 1).padStart(bulkPin.length, "0");
       try {
         const res = await fetch("/api/admin/teams", {
           method: "POST",
@@ -414,6 +443,7 @@ export function TeamsManager({
         members={teamMembers}
         setMembers={setTeamMembers}
         onCreate={createTeam}
+        submitting={creatingTeam}
       />
 
       <EditTeamDialog
@@ -424,6 +454,7 @@ export function TeamsManager({
         members={editMembers}
         setMembers={setEditMembers}
         onSave={saveEditTeam}
+        submitting={savingTeam}
       />
 
       <BulkCreateDialog
@@ -506,7 +537,8 @@ export function TeamsManager({
             </div>
           )}
 
-          {!readOnly && (
+          {/* Only admins may create supervisors/auditors (the API returns 403 otherwise). */}
+          {!readOnly && !isSupervisorView && (
             <Button onClick={() => { setAddSupOpen(true); setSupForm({ name: "", pin: "" }); }} className="gap-1">
               <Plus className="h-4 w-4" />
               Add Supervisor
@@ -524,11 +556,12 @@ export function TeamsManager({
         form={supForm}
         setForm={setSupForm}
         onCreate={createSupervisor}
+        submitting={creatingSupervisor}
       />
 
       {/* Auditors */}
       {isSupervisorView && (
-        <AuditorSection eventId={eventId} isAuditor={readOnly} supervisorsList={supervisorsList} onCreated={loadTeams} showPins={showPins} />
+        <AuditorSection eventId={eventId} isAuditor={readOnly || isSupervisorView} supervisorsList={supervisorsList} onCreated={loadTeams} showPins={showPins} />
       )}
     </>
   );
@@ -537,17 +570,21 @@ export function TeamsManager({
 function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated, showPins }: { eventId: string; isAuditor: boolean; supervisorsList: SupervisorInfo[]; onCreated: () => void; showPins: boolean }) {
   const [addAuditorOpen, setAddAuditorOpen] = useState(false);
   const [auditorForm, setAuditorForm] = useState({ name: "", pin: "" });
+  const [creatingAuditor, setCreatingAuditor] = useState(false);
   const auditors = supervisorsList.filter(s => s.role === "auditor");
 
   const createAuditor = async () => {
-    if (!auditorForm.name || !auditorForm.pin) {
+    if (creatingAuditor) return;
+    if (!auditorForm.name.trim() || !auditorForm.pin) {
       toast.error("Name and PIN are required");
       return;
     }
-    if (auditorForm.pin.length < 4) {
-      toast.error("PIN must be at least 4 digits");
+    const auditorPinError = pinError(auditorForm.pin);
+    if (auditorPinError) {
+      toast.error(auditorPinError);
       return;
     }
+    setCreatingAuditor(true);
     try {
       const res = await fetch("/api/admin/teams", {
         method: "POST",
@@ -565,10 +602,13 @@ function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated, showPi
         setAddAuditorOpen(false);
         onCreated();
       } else {
-        toast.error("Failed to create auditor");
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Failed to create auditor");
       }
     } catch {
       toast.error("Failed to create auditor");
+    } finally {
+      setCreatingAuditor(false);
     }
   };
 
@@ -618,6 +658,7 @@ function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated, showPi
         form={auditorForm}
         setForm={setAuditorForm}
         onCreate={createAuditor}
+        submitting={creatingAuditor}
       />
     </>
   );

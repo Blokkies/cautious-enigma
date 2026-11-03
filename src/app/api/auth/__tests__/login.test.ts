@@ -160,4 +160,53 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBeTruthy();
   });
+  it.each([
+    ["non-numeric account id", { type: "team", id: "abc", pin: "1234", eventId: 7 }],
+    ["fractional account id", { type: "team", id: 1.5, pin: "1234", eventId: 7 }],
+    ["non-numeric eventId", { type: "team", id: 3, pin: "1234", eventId: "seven" }],
+    ["object eventId", { type: "team", id: 3, pin: "1234", eventId: { id: 7 } }],
+  ])("rejects a %s with 400 before touching the database", async (_label, body) => {
+    const res = await login(body);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Invalid id" });
+    expect(fromTables).toEqual([]);
+  });
+
+  it("rejects a non-string, non-number PIN with 400", async () => {
+    const res = await login({ type: "team", id: 3, pin: { $ne: 1 }, eventId: 7 });
+    expect(res.status).toBe(400);
+    expect(fromTables).toEqual([]);
+  });
+
+  it("accepts a numeric PIN", async () => {
+    selectResults.push([EVENT], [{ id: 3, name: "Alpha", pinHash }]);
+    const res = await login({ type: "team", id: 3, pin: 1234, eventId: "7" });
+    expect(res.status).toBe(200);
+  });
+
+  it("rate-limits on the proxy-appended X-Forwarded-For entry, ignoring a forged prefix", async () => {
+    const req = (i: number) =>
+      POST(
+        new NextRequest("http://localhost/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": `1.2.3.${i}, 10.7.7.7` },
+          body: JSON.stringify({}),
+        })
+      );
+    for (let i = 0; i < 10; i++) expect((await req(i)).status).toBe(400);
+    expect((await req(99)).status).toBe(429);
+  });
+
+  it("rate-limits on X-Real-Ip when present", async () => {
+    const req = (i: number) =>
+      POST(
+        new NextRequest("http://localhost/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-real-ip": "10.6.6.6", "x-forwarded-for": `5.5.5.${i}` },
+          body: JSON.stringify({}),
+        })
+      );
+    for (let i = 0; i < 10; i++) expect((await req(i)).status).toBe(400);
+    expect((await req(99)).status).toBe(429);
+  });
 });

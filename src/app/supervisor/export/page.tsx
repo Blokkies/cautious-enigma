@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,12 +97,19 @@ function ExportPageContent() {
   const eventParam = isAdmin && selectedEventId ? `&eventId=${selectedEventId}` : "";
   const adminWaiting = isAdmin && !selectedEventId;
 
+  // Only the latest stats request may update state (switching events quickly must not
+  // let a slower response for the previous event overwrite the current one).
+  const statsRequestId = useRef(0);
+
   const loadStats = useCallback(async () => {
     if (authLoading || adminWaiting) return;
+    const requestId = ++statsRequestId.current;
     try {
       const res = await fetch(`/api/supervisor/dashboard${eventParam ? `?${eventParam.slice(1)}` : ""}`);
+      if (requestId !== statsRequestId.current) return;
       if (res.ok) {
         const data = await res.json();
+        if (requestId !== statsRequestId.current) return;
         setStats({
           total: data.overall.total,
           counted: data.overall.counted,
@@ -114,7 +121,7 @@ function ExportPageContent() {
     } catch {
       // offline
     } finally {
-      setLoading(false);
+      if (requestId === statsRequestId.current) setLoading(false);
     }
   }, [authLoading, adminWaiting, eventParam]);
 
@@ -189,6 +196,7 @@ function ExportPageContent() {
             value={selectedEventId ? String(selectedEventId) : undefined}
             onValueChange={(v) => {
               setLoading(true);
+              setStats(null); // don't show the previous event's numbers
               setSelectedEventId(Number(v));
             }}
           >

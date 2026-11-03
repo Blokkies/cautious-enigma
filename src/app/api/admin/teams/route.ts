@@ -7,6 +7,24 @@ import { hashPin } from "@/lib/auth";
 import { requireUser, resolveEventId, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 import { checkEventWritable } from "../event-guard";
 import { countInt } from "@/lib/db/aggregates";
+import { parseId } from "@/lib/ids";
+import { normalizePin, PIN_RULE_MESSAGE } from "@/lib/pin";
+
+// Account kinds this route manages. Teams live in `teams`; supervisors and
+// auditors share `supervisors`, told apart by `role`.
+const ACCOUNT_TYPES = ["team", "supervisor", "auditor"] as const;
+type AccountType = (typeof ACCOUNT_TYPES)[number];
+const SUPERVISOR_ROLES = ["supervisor", "auditor"] as const;
+
+/** Missing type means "team" (the historical default); unknown strings are rejected. */
+function parseAccountType(value: unknown): AccountType | null {
+  if (value === undefined || value === null || value === "") return "team";
+  return ACCOUNT_TYPES.includes(value as AccountType) ? (value as AccountType) : null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin", "supervisor", "auditor"] });
@@ -50,9 +68,10 @@ export async function GET(request: NextRequest) {
     .from(supervisors)
     .where(eq(supervisors.eventId, eid));
 
+  // Supervisor/auditor PINs are their login credentials: only admins see them.
   const supervisorListSafe = supervisorList.map((s) => ({
     ...s,
-    pinPlain: (user.type === "supervisor" || user.type === "admin") ? s.pinPlain : undefined,
+    pinPlain: user.type === "admin" ? s.pinPlain : undefined,
   }));
 
   return NextResponse.json({ teams: enriched, supervisors: supervisorListSafe });
@@ -65,14 +84,32 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { type, name, members, pin, role } = body;
+    const { name, members, role } = body;
     const eid = resolveEventId(user, body.eventId);
 
-    if (!eid || !name || !pin) {
+    if (!eid || !isNonEmptyString(name) || body.pin === undefined || body.pin === null || body.pin === "") {
       return NextResponse.json(
         { error: "eventId, name, and pin are required" },
         { status: 400 }
       );
+    }
+
+    const type = parseAccountType(body.type);
+    if (!type) {
+      return NextResponse.json({ error: "Invalid type" }, { status: 400 });
+    }
+    if (role !== undefined && role !== null && !SUPERVISOR_ROLES.includes(role)) {
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+    }
+    // Supervisors manage the teams of their own event only (resolveEventId pins
+    // them to their token's event); creating supervisors/auditors is admin-only.
+    if (user.type !== "admin" && type !== "team") {
+      return NextResponse.json({ error: "Only admins can create supervisors and auditors" }, { status: 403 });
+    }
+
+    const pin = normalizePin(body.pin);
+    if (!pin) {
+      return NextResponse.json({ error: PIN_RULE_MESSAGE }, { status: 400 });
     }
 
     const guard = await checkEventWritable(eid, user.type);
@@ -131,16 +168,26 @@ export async function PUT(request: NextRequest) {
   const { user } = auth;
 
   try {
-    const { id, name, members, pin } = await request.json();
+    const { id: rawId, name, members, pin: rawPin } = await request.json();
 
-    if (!id || !name) {
+    if (!rawId || !isNonEmptyString(name)) {
       return NextResponse.json(
         { error: "id and name are required" },
         { status: 400 }
       );
     }
+    const id = parseId(rawId);
+    if (id === null) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    }
+    // PIN is optional on edit (keep the current one); if given it must be valid.
+    const hasPin = rawPin !== undefined && rawPin !== null && rawPin !== "";
+    const pin = hasPin ? normalizePin(rawPin) : null;
+    if (hasPin && !pin) {
+      return NextResponse.json({ error: PIN_RULE_MESSAGE }, { status: 400 });
+    }
 
-    const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
+    const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, id));
     if (!team) {
       return NextResponse.json({ error: "Team not found" }, { status: 404 });
     }
@@ -156,14 +203,14 @@ export async function PUT(request: NextRequest) {
       members: normalizeMembers(members).length ? JSON.stringify(normalizeMembers(members)) : null,
     };
 
-    if (pin && pin.length >= 4) {
+    if (pin) {
       updateData.pinHash = await hashPin(pin);
       updateData.pinPlain = pin;
     }
 
     await db.update(teams)
       .set(updateData)
-      .where(eq(teams.id, Number(id)));
+      .where(eq(teams.id, id));
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -181,14 +228,22 @@ export async function DELETE(request: NextRequest) {
   const { user } = auth;
 
   try {
-    const { id, type } = await request.json();
+    const body = await request.json();
+    const type = parseAccountType(body.type);
+    if (!type) {
+      return NextResponse.json({ error: "Invalid type" }, { status: 400 });
+    }
+    const id = parseId(body.id);
+    if (id === null) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    }
 
-    if (type === "supervisor") {
-      // Supervisors cannot delete other supervisors
-      if (user.type === "supervisor") {
+    if (type === "supervisor" || type === "auditor") {
+      // Supervisors cannot delete supervisors or auditors
+      if (user.type !== "admin") {
         return NextResponse.json({ error: "Supervisors cannot delete other supervisors" }, { status: 403 });
       }
-      const supId = Number(id);
+      const supId = id;
       const [sup] = await db.select({ eventId: supervisors.eventId }).from(supervisors).where(eq(supervisors.id, supId));
       if (!sup) {
         return NextResponse.json({ error: "Supervisor not found" }, { status: 404 });
@@ -230,7 +285,7 @@ export async function DELETE(request: NextRequest) {
         await tx.delete(supervisors).where(eq(supervisors.id, supId));
       });
     } else {
-      const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));
+      const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, id));
       if (!team) {
         return NextResponse.json({ error: "Team not found" }, { status: 404 });
       }

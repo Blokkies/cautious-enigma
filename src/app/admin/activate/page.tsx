@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +20,10 @@ interface EventInfo {
   id: number;
   name: string;
   status: string;
+  /** Items assigned to a team (the events API counts assigned items here). */
   itemCount: number;
+  /** All imported items. */
+  totalItemCount?: number;
   teamCount: number;
   supervisorCount: number;
 }
@@ -31,8 +34,22 @@ interface ReadinessCheck {
   hasSupervisors: boolean;
   allItemsAssigned: boolean;
   unassignedCount: number;
-  /** Why the server will refuse activation (no items / no teams / unassigned items), or null. */
+  /** Why the server will refuse activation (no items / no teams / no supervisors / unassigned items), or null. */
   blocker?: string | null;
+}
+
+const NO_SUPERVISOR_BLOCKER =
+  "Cannot activate: the event has no supervisors. Create at least one supervisor first.";
+
+/**
+ * The blocker to show/enforce: the server's, or (for a server that does not report it
+ * yet) the missing-supervisor rule, since supervisors are required to activate.
+ */
+function effectiveBlocker(r: ReadinessCheck | null): string | null {
+  if (!r) return null;
+  if (r.blocker) return r.blocker;
+  if (!r.hasSupervisors) return NO_SUPERVISOR_BLOCKER;
+  return null;
 }
 
 function ActivatePageContent() {
@@ -46,32 +63,47 @@ function ActivatePageContent() {
   const [activating, setActivating] = useState(false);
 
   const loadEvents = useCallback(async () => {
-    const res = await fetch("/api/admin/events");
-    if (res.ok) {
-      const data = await res.json();
-      setEvents(data.events || []);
-      if (!urlEventId) {
-        const setupEvent = data.events?.find(
-          (e: EventInfo) => e.status === "setup"
-        );
-        if (setupEvent) setSelectedEventId(String(setupEvent.id));
+    try {
+      const res = await fetch("/api/admin/events");
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data.events || []);
+        if (!urlEventId) {
+          const setupEvent = data.events?.find(
+            (e: EventInfo) => e.status === "setup"
+          );
+          // Keep the user's current pick when reloading after an action
+          if (setupEvent) setSelectedEventId((cur) => cur || String(setupEvent.id));
+        }
+      } else {
+        toast.error("Failed to load events");
       }
+    } catch {
+      toast.error("Failed to load events");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [urlEventId]);
 
+  // Only the newest readiness request may update state, so a slow response for a
+  // previously selected event can't overwrite the current event's readiness.
+  const readinessRequestId = useRef(0);
+
   const checkReadiness = useCallback(async () => {
+    const requestId = ++readinessRequestId.current;
     if (!selectedEventId) return;
     try {
       const res = await fetch(
         `/api/admin/activate?eventId=${selectedEventId}`
       );
+      if (requestId !== readinessRequestId.current) return;
       if (res.ok) {
         const data = await res.json();
+        if (requestId !== readinessRequestId.current) return;
         setReadiness(data);
       }
     } catch {
-      // error
+      if (requestId === readinessRequestId.current) toast.error("Failed to check readiness");
     }
   }, [selectedEventId]);
 
@@ -86,9 +118,10 @@ function ActivatePageContent() {
   const handleActivate = async () => {
     if (!selectedEventId) return;
 
-    // The server refuses activation with no items, no teams or unassigned items
-    if (readiness?.blocker) {
-      toast.error(readiness.blocker);
+    // The server refuses activation with no items, no teams, no supervisors or unassigned items
+    const blocker = effectiveBlocker(readiness);
+    if (blocker) {
+      toast.error(blocker);
       return;
     }
 
@@ -214,6 +247,7 @@ function ActivatePageContent() {
   const selectedEvent = events.find(
     (e) => String(e.id) === selectedEventId
   );
+  const blocker = effectiveBlocker(readiness);
 
   if (loading) {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
@@ -242,7 +276,14 @@ function ActivatePageContent() {
 
       <h1 className="text-2xl font-bold">Activate Stocktake</h1>
 
-      <Select value={selectedEventId} onValueChange={setSelectedEventId}>
+      <Select
+        value={selectedEventId}
+        onValueChange={(v) => {
+          // Drop the previous event's readiness so it is never shown for the new one
+          setReadiness(null);
+          setSelectedEventId(v);
+        }}
+      >
         <SelectTrigger className="h-12">
           <SelectValue placeholder="Select event..." />
         </SelectTrigger>
@@ -277,9 +318,13 @@ function ActivatePageContent() {
             <div className="grid grid-cols-3 gap-4 text-center">
               <div>
                 <div className="text-2xl font-bold">
-                  {selectedEvent.itemCount.toLocaleString()}
+                  {(selectedEvent.totalItemCount ?? selectedEvent.itemCount).toLocaleString()}
                 </div>
-                <div className="text-sm text-muted-foreground">Items</div>
+                <div className="text-sm text-muted-foreground">
+                  Items
+                  {selectedEvent.totalItemCount !== undefined &&
+                    ` (${selectedEvent.itemCount.toLocaleString()} assigned)`}
+                </div>
               </div>
               <div>
                 <div className="text-2xl font-bold">
@@ -323,10 +368,10 @@ function ActivatePageContent() {
               </div>
             )}
 
-            {readiness?.blocker && selectedEvent.status === "setup" && (
+            {blocker && selectedEvent.status === "setup" && (
               <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-sm">
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{readiness.blocker}</span>
+                <span>{blocker}</span>
               </div>
             )}
 
@@ -334,7 +379,7 @@ function ActivatePageContent() {
             {selectedEvent.status === "setup" && (
               <Button
                 onClick={handleActivate}
-                disabled={activating || !!readiness?.blocker}
+                disabled={activating || !readiness || !!blocker}
                 className="w-full h-14 text-lg gap-2"
                 size="lg"
               >

@@ -227,7 +227,7 @@ describe("parseTeamExcel", () => {
       { row: 3, message: 'Duplicate team name: "alpha"' },
       { row: 4, message: "Team name is empty" },
       { row: 5, message: 'Team "Beta": PIN is empty' },
-      { row: 6, message: 'Team "Gamma": PIN must be at least 4 digits (got "12")' },
+      { row: 6, message: 'Team "Gamma": PIN must be 4-6 digits (got "12")' },
     ]);
   });
 
@@ -261,9 +261,10 @@ describe("parseTeamExcel", () => {
     expect(parseTeamExcel(buf).validTeams).toEqual([{ name: "Alpha", pin: "0042", members: [] }]);
   });
 
-  it("uses the raw value for long numeric PINs shown in scientific notation", () => {
+  it("reads long numeric PINs from the raw value (not scientific notation) and rejects them as too long", () => {
     const result = parseTeamExcel(workbookFromRows([["Team Name", "PIN"], ["Alpha", 123456789012]]));
-    expect(result.validTeams[0]?.pin).toBe("123456789012");
+    expect(result.validTeams).toEqual([]);
+    expect(result.errors[0]?.message).toContain('got "123456789012"');
   });
 
   it("reads CSV teams with quoted comma-separated members", () => {

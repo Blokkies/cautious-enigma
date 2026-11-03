@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import bcrypt from "bcryptjs";
+import { seedAdmin } from "./admin-seed";
 import dotenv from "dotenv";
 
 dotenv.config({ path: ".env.local" });
@@ -290,6 +290,10 @@ UPDATE stocktake_events e
     AND NOT (e.warehouses::jsonb ? '(No warehouse)')
     AND EXISTS (SELECT 1 FROM items i WHERE i.event_id = e.id AND (i.warehouse IS NULL OR trim(i.warehouse) = ''));
 UPDATE items SET warehouse = '(No warehouse)' WHERE warehouse IS NULL OR trim(warehouse) = '';
+
+-- Backfill: blank bins are now stored as "(No bin)" (NO_BIN in src/lib/no-bin.ts) so every
+-- item can be listed/assigned on the assignment page. Idempotent: rewritten rows no longer match.
+UPDATE items SET bin_number = '(No bin)' WHERE bin_number IS NULL OR trim(bin_number) = '';
 `;
 
 const compositeIndexes = `
@@ -359,15 +363,25 @@ async function migrate() {
     await sql.unsafe(stmt + ";");
   }
 
-  // Seed default admin if admins table is empty
-  const result = await sql`SELECT COUNT(*) as count FROM admins`;
-  const adminCount = Number(result[0].count);
-  if (adminCount === 0) {
-    const defaultPassword = process.env.ADMIN_PASSWORD || "admin2026";
-    const hash = bcrypt.hashSync(defaultPassword, 10);
-    await sql`INSERT INTO admins (name, password_hash) VALUES ('Admin', ${hash})`;
-    console.log("Default admin seeded (name: Admin)");
-  }
+  // Seed the first admin / replace a lingering default password (see admin-seed.ts)
+  await seedAdmin(
+    {
+      count: async () => Number((await sql`SELECT COUNT(*) as count FROM admins`)[0].count),
+      list: async () =>
+        (await sql`SELECT id, name, password_hash FROM admins`).map((r) => ({
+          id: Number(r.id),
+          name: String(r.name),
+          passwordHash: String(r.password_hash),
+        })),
+      insert: async (name, passwordHash) => {
+        await sql`INSERT INTO admins (name, password_hash) VALUES (${name}, ${passwordHash})`;
+      },
+      updateHash: async (id, passwordHash) => {
+        await sql`UPDATE admins SET password_hash = ${passwordHash} WHERE id = ${id}`;
+      },
+    },
+    { ADMIN_PASSWORD: process.env.ADMIN_PASSWORD, NODE_ENV: process.env.NODE_ENV }
+  );
 
   console.log("Database migration completed successfully!");
   await sql.end();

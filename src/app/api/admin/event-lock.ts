@@ -44,6 +44,22 @@ export async function lockEventRow(tx: Tx, eventId: number) {
   return event ?? null;
 }
 
+/**
+ * Same rule as checkEventWritable (event-guard.ts), for a status read under lockEventRow:
+ * count-deleting writes are refused on completed/locked events, and non-admins may only
+ * write while the event is in setup or active. Returns the error message, or null.
+ */
+export function eventWriteError(status: string, userType: string, deletesCounts = false): string | null {
+  const closed = status === "completed" || status === "locked";
+  if (deletesCounts && closed) {
+    return "This stocktake is completed or locked. Count data cannot be deleted.";
+  }
+  if (userType !== "admin" && status !== "setup" && status !== "active") {
+    return "This stocktake is completed or locked. No further changes are allowed.";
+  }
+  return null;
+}
+
 /** Parse the event's `warehouses` JSON (null / empty / invalid = all warehouses). */
 export function parseEventWarehouses(raw: string | null | undefined): string[] | null {
   if (!raw) return null;

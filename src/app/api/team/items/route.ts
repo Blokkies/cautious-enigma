@@ -1,3 +1,4 @@
+import { normalizeMembers } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, verificationAssignments, serialDiscrepancies, teams } from "@/lib/db/schema";
@@ -143,10 +144,7 @@ export async function GET(request: NextRequest) {
     .from(teams)
     .where(and(eq(teams.id, user.id), eq(teams.eventId, user.eventId)));
 
-  let memberNames: string[] = [];
-  if (team?.members) {
-    try { memberNames = JSON.parse(team.members); } catch { /* ignore */ }
-  }
+  const memberNames = normalizeMembers(team?.members);
 
   return NextResponse.json({
     items: teamItems.map((item) => ({

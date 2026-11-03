@@ -1,3 +1,4 @@
+import { normalizeMembers } from "@/lib/utils";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
@@ -104,7 +105,7 @@ export async function POST(request: NextRequest) {
       .values({
         eventId: eid,
         name,
-        members: members ? JSON.stringify(members) : null,
+        members: normalizeMembers(members).length ? JSON.stringify(normalizeMembers(members)) : null,
         pinHash: pinHashed,
         pinPlain: pin,
       })
@@ -152,7 +153,7 @@ export async function PUT(request: NextRequest) {
 
     const updateData: { name: string; members: string | null; pinHash?: string; pinPlain?: string } = {
       name,
-      members: members ? JSON.stringify(members) : null,
+      members: normalizeMembers(members).length ? JSON.stringify(normalizeMembers(members)) : null,
     };
 
     if (pin && pin.length >= 4) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cn, safeJsonParse } from "./utils";
+import { cn, normalizeMembers, safeJsonParse } from "./utils";
 
 describe("safeJsonParse", () => {
   it("parses valid JSON", () => {
@@ -29,5 +29,16 @@ describe("safeJsonParse", () => {
 describe("cn", () => {
   it("merges class names and resolves tailwind conflicts", () => {
     expect(cn("p-2", false && "hidden", "p-4")).toBe("p-4");
+  });
+});
+
+describe("normalizeMembers", () => {
+  it("accepts arrays, JSON strings and plain text", () => {
+    expect(normalizeMembers(["Ann", " Bob "])).toEqual(["Ann", "Bob"]);
+    expect(normalizeMembers('["Ann","Bob"]')).toEqual(["Ann", "Bob"]);
+    expect(normalizeMembers('"E2E"')).toEqual(["E2E"]);
+    expect(normalizeMembers("Ann, Bob")).toEqual(["Ann", "Bob"]);
+    expect(normalizeMembers(null)).toEqual([]);
+    expect(normalizeMembers({})).toEqual([]);
   });
 });

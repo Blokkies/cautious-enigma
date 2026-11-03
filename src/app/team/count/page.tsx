@@ -28,6 +28,7 @@ import { BinSelectionView } from "@/components/count/bin-selection-view";
 import { CountingView, CountCompleteView, RecountView, ReviewView } from "@/components/count/counting-views";
 import { SerialVerificationView, VerificationCountingView } from "@/components/count/verification-views";
 import { RejectedSyncBanner } from "@/components/count/rejected-sync-banner";
+import { normalizeMembers } from "@/lib/utils";
 import {
   cacheTeamItems,
   getCachedItemsScope,
@@ -190,7 +191,7 @@ export default function CountingPage() {
       (data.verificationItems || []).filter((v) => !pendingVerificationIds.has(v.verificationId))
     );
     setSerialVerificationTasks(data.serialVerificationTasks || []);
-    if (data.members) setMembers(data.members);
+    if (data.members) setMembers(normalizeMembers(data.members));
     if (fromCache) toast.info("Offline — showing items saved on this device");
     setPageState("bin-selection");
   }, [userEventId, userTeamId]);

@@ -1,6 +1,7 @@
+import { normalizeMembers } from "@/lib/utils";
+
 export function parseMembers(members: string | null): string[] {
-  if (!members) return [];
-  try { return JSON.parse(members) as string[]; } catch { return []; }
+  return normalizeMembers(members);
 }
 
 export interface TeamInfo {

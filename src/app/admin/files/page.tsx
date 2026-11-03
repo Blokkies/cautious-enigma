@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@/components/admin/page-header";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -137,7 +138,11 @@ export default function AdminFilesPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Uploaded Files</h1>
+      <PageHeader
+        className="mb-2"
+        title="Files"
+        description="Every stock file uploaded to a stocktake. Download the original to check what was imported."
+      />
 
       {uploads.length === 0 ? (
         <Card>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken } from "@/lib/token";
+import { legacyAdminRedirect } from "@/lib/admin-routes";
 
 const PUBLIC_PATHS = ["/", "/api/auth/login", "/api/auth/admin-login", "/api/auth/executive-login", "/api/auth/logout", "/api/auth/list", "/api/auth/me", "/api/health"];
 
@@ -20,6 +21,13 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/sw.js")
   ) {
     return NextResponse.next();
+  }
+
+  // Old admin URLs (bookmarks, links) move to the redesigned admin area. The target is
+  // itself an /admin route, so the role checks below still apply on the next request.
+  const legacyTarget = legacyAdminRedirect(pathname, request.nextUrl.searchParams);
+  if (legacyTarget) {
+    return NextResponse.redirect(new URL(legacyTarget, request.url));
   }
 
   const token = request.cookies.get("stocktake-token")?.value;

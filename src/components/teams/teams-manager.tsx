@@ -36,7 +36,7 @@ interface TeamsManagerProps {
 }
 
 /**
- * Teams + supervisors management shared by /admin/teams and /supervisor/teams.
+ * Teams + supervisors management shared by the admin event People tab and /supervisor/teams.
  * Renders the cards and dialogs below the page header.
  */
 export function TeamsManager({

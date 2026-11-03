@@ -7,6 +7,7 @@ import { EVENT_STATUSES as VALID_STATUSES, checkEventsPutTransition } from "@/li
 import { countInt } from "@/lib/db/aggregates";
 import { deleteEventCascade } from "./delete-event";
 import { parseId } from "@/lib/ids";
+import { hasDetailFields, validateEventDetails } from "@/lib/event-details";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin"] });
@@ -41,22 +42,19 @@ export async function POST(request: NextRequest) {
   if (auth.response) return auth.response;
 
   try {
-    const { name, location, startDate, endDate } = await request.json();
-
-    if (!name) {
-      return NextResponse.json(
-        { error: "Event name is required" },
-        { status: 400 }
-      );
+    const body = await request.json();
+    const details = validateEventDetails({ ...body, name: body?.name ?? "" });
+    if (!details.ok) {
+      return NextResponse.json({ error: details.error }, { status: 400 });
     }
 
     const [result] = await db
       .insert(stocktakeEvents)
       .values({
-        name,
-        location: location || null,
-        startDate: startDate || null,
-        endDate: endDate || null,
+        name: details.updates.name!,
+        location: details.updates.location ?? null,
+        startDate: details.updates.startDate ?? null,
+        endDate: details.updates.endDate ?? null,
         status: "setup",
       })
       .returning({ id: stocktakeEvents.id });
@@ -103,6 +101,15 @@ export async function PUT(request: NextRequest) {
     }
 
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    // Name/location/dates are editable in any status.
+    if (body && typeof body === "object" && hasDetailFields(body)) {
+      const details = validateEventDetails(body, existing);
+      if (!details.ok) {
+        return NextResponse.json({ error: details.error }, { status: 400 });
+      }
+      Object.assign(updates, details.updates);
+    }
 
     if (status) {
       if (!VALID_STATUSES.includes(status)) {
@@ -157,7 +164,7 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // A status/warehouse change must not overwrite a concurrent status change
+    // A status/warehouse/details change must not overwrite a concurrent status change
     const updated = await db.update(stocktakeEvents)
       .set(updates)
       .where(and(eq(stocktakeEvents.id, id), eq(stocktakeEvents.status, existing.status)))

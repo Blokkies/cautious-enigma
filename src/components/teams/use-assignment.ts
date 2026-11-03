@@ -22,7 +22,7 @@ function byWarehouse(a: BinInfo, b: BinInfo): number {
 }
 
 /**
- * State + handlers for the bin assignment page, shared by /admin/teams/assign and
+ * State + handlers for the bin assignment page, shared by the admin event Bins tab and
  * /supervisor/teams/assign. `eventId` is the event being assigned (string, "" = none yet).
  */
 export function useAssignment(eventId: string) {

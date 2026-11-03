@@ -4,6 +4,8 @@ import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { LogOut, Download, ArrowLeft } from "lucide-react";
+import { adminRoutes } from "@/lib/admin-routes";
+import { parseId } from "@/lib/ids";
 
 export default function CompletedLayout({
   children,
@@ -27,7 +29,7 @@ export default function CompletedLayout({
               variant="ghost"
               size="sm"
               onClick={() => {
-                if (user?.type === "admin") router.push("/admin/dashboard");
+                if (user?.type === "admin") router.push(adminRoutes.overview);
                 else if (user?.type === "supervisor") router.push("/supervisor");
                 else router.back();
               }}
@@ -49,9 +51,9 @@ export default function CompletedLayout({
                     router.push("/supervisor/export");
                     return;
                   }
-                  // Carry the summary's selected event over to the export page
-                  const eventId = new URLSearchParams(window.location.search).get("eventId");
-                  router.push(eventId ? `/admin/export?eventId=${encodeURIComponent(eventId)}` : "/admin/export");
+                  // Carry the summary's selected event over to that event's exports
+                  const eventId = parseId(new URLSearchParams(window.location.search).get("eventId"));
+                  router.push(eventId ? adminRoutes.event(eventId, "exports") : adminRoutes.exports);
                 }}
                 className="gap-1"
               >

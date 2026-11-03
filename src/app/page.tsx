@@ -56,7 +56,7 @@ export default function LoginPage() {
       if (user.type === "team") router.push("/team");
       else if (user.type === "supervisor") router.push("/supervisor");
       else if (user.type === "auditor") router.push("/supervisor");
-      else if (user.type === "admin") router.push("/admin/dashboard");
+      else if (user.type === "admin") router.push("/admin");
       else if (user.type === "executive") router.push("/executive");
     }
   }, [user, loading, router]);

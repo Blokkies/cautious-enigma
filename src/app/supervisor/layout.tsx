@@ -182,38 +182,34 @@ export default function SupervisorLayout({
         </div>
       </nav>
       {/* Side nav for desktop */}
-      <div className="hidden md:flex">
-        <aside className="w-48 fixed left-0 top-14 bottom-0 bg-white border-r p-3 space-y-1">
-          {filteredNavItems.map(({ href, icon: Icon, label, badgeKey }) => {
-            const isActive = pathname === href;
-            const count = getBadgeCount(badgeKey);
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-gray-50"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                <span className="flex-1">{label}</span>
-                {count > 0 && (
-                  <span className="min-w-[20px] h-[20px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1">
-                    {count > 99 ? "99+" : count}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </aside>
-        <main className="md:ml-48 flex-1 p-4 pb-20 md:pb-4 w-full">
-          {children}
-        </main>
-      </div>
-      <main className="md:hidden p-4 pb-20">{children}</main>
+      <aside className="hidden md:block w-48 fixed left-0 top-14 bottom-0 bg-white border-r p-3 space-y-1">
+        {filteredNavItems.map(({ href, icon: Icon, label, badgeKey }) => {
+          const isActive = pathname === href;
+          const count = getBadgeCount(badgeKey);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
+                isActive
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-gray-50"
+              )}
+            >
+              <Icon className="h-4 w-4" />
+              <span className="flex-1">{label}</span>
+              {count > 0 && (
+                <span className="min-w-[20px] h-[20px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1">
+                  {count > 99 ? "99+" : count}
+                </span>
+              )}
+            </Link>
+          );
+        })}
+      </aside>
+      {/* Rendered once: the nav switches between bottom bar and sidebar via CSS */}
+      <main className="p-4 pb-20 md:ml-48 md:pb-4">{children}</main>
     </div>
   );
 }

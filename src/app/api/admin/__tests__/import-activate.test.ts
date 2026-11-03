@@ -225,6 +225,10 @@ describe("GET /api/admin/activate", () => {
     const body = await res.json();
     expect(body).toMatchObject({ unassignedCount: 2, allItemsAssigned: false });
     expect(body.blocker).toMatch(/2 items are not assigned/);
+    // Counts behind the flags, for the setup wizard
+    expect(body).toHaveProperty("itemCount");
+    expect(body).toHaveProperty("teamCount");
+    expect(body).toHaveProperty("supervisorCount");
     const unassigned = log().find((r) => r.table === "items" && whereText(r).includes('"team_id" is null'))!;
     expect(whereText(unassigned)).toContain('"items"."warehouse" in');
   });

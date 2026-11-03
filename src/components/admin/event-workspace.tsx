@@ -2,8 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, MapPin, SearchX } from "lucide-react";
+import { useState } from "react";
+import { CalendarDays, ChevronDown, Download, MapPin, MoreHorizontal, Pencil, SearchX, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { dangerActions, primaryAction, statusTransitions } from "@/lib/event-lifecycle";
+import { setupProgress } from "@/lib/setup-progress";
+import { LIFECYCLE_COPY, useLifecycleAction } from "./panels/lifecycle-actions";
+import { EditEventDetailsDialog } from "./panels/event-details-form";
+import { readinessCounts, useEventReadiness } from "./panels/use-event-data";
 import { cn } from "@/lib/utils";
 import { activeEventTab, adminRoutes, EVENT_TABS, type EventTab } from "@/lib/admin-routes";
 import { formatDateRange } from "@/lib/format";
@@ -79,8 +93,7 @@ export function EventTabs({ eventId }: { eventId: number }) {
 /**
  * Header + tabs for /admin/events/[id]/** workspace pages. Handles the event's loading,
  * error and not-found states; children render only once the event is loaded.
- * `actions` replaces the default primary action (phase 2 adds the contextual
- * next-step button and the actions menu).
+ * `actions` replaces the default header actions (the contextual next step and the actions menu).
  */
 export function EventWorkspaceFrame({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
   const { eventId, event, loading, error, notFound, reload } = useAdminEvent();
@@ -113,12 +126,7 @@ export function EventWorkspaceFrame({ children, actions }: { children: React.Rea
     );
   }
 
-  const defaultActions =
-    event.status === "setup" ? (
-      <Button asChild>
-        <Link href={adminRoutes.setup(event.id, "details")}>Continue setup</Link>
-      </Button>
-    ) : null;
+  const defaultActions = <WorkspaceActions />;
 
   return (
     <>
@@ -137,6 +145,105 @@ export function EventWorkspaceFrame({ children, actions }: { children: React.Rea
       </PageHeader>
       <EventTabs eventId={event.id} />
       {children}
+    </>
+  );
+}
+
+/**
+ * Header actions: the contextual next step (Continue setup / Go live / Mark complete / Lock /
+ * Reopen) and a menu with edit details, download items, the other status change, reset and delete.
+ */
+export function WorkspaceActions() {
+  const { event } = useAdminEvent();
+  const inSetup = event?.status === "setup";
+  const readiness = useEventReadiness(event, inSetup);
+  const { run, dialog } = useLifecycleAction();
+  const [editOpen, setEditOpen] = useState(false);
+  if (!event) return null;
+
+  const progress = readiness.data ? setupProgress(readinessCounts(readiness.data)) : null;
+  const primary = primaryAction(event.status, !!progress?.ready);
+  const secondaryTransitions = statusTransitions(event.status).filter((a) => a !== primary);
+  const dangers = dangerActions(event.status);
+
+  let primaryButton: React.ReactNode = null;
+  if (primary === "continue-setup") {
+    primaryButton = (
+      <Button asChild>
+        <Link href={adminRoutes.setup(event.id, progress?.next ?? "items")}>
+          <Wand2 />
+          Continue setup
+        </Link>
+      </Button>
+    );
+  } else if (primary) {
+    const copy = LIFECYCLE_COPY[primary];
+    const Icon = copy.icon;
+    primaryButton = (
+      <Button onClick={() => void run(primary)}>
+        <Icon />
+        {copy.label}
+      </Button>
+    );
+  }
+
+  return (
+    <>
+      {primaryButton}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" aria-label="More actions">
+            <MoreHorizontal className="sm:hidden" />
+            <span className="hidden sm:inline">Actions</span>
+            <ChevronDown className="hidden sm:inline" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-60">
+          <DropdownMenuItem onSelect={() => setEditOpen(true)}>
+            <Pencil />
+            Edit details
+          </DropdownMenuItem>
+          {inSetup && primary !== "continue-setup" && (
+            <DropdownMenuItem asChild>
+              <Link href={adminRoutes.setup(event.id, "review")}>
+                <Wand2 />
+                Open setup wizard
+              </Link>
+            </DropdownMenuItem>
+          )}
+          {event.totalItemCount > 0 && (
+            <DropdownMenuItem asChild>
+              <a href={`/api/admin/export?eventId=${event.id}`} download>
+                <Download />
+                Download imported items
+              </a>
+            </DropdownMenuItem>
+          )}
+          {secondaryTransitions.length > 0 && <DropdownMenuSeparator />}
+          {secondaryTransitions.map((a) => {
+            const Icon = LIFECYCLE_COPY[a].icon;
+            return (
+              <DropdownMenuItem key={a} onSelect={() => void run(a)}>
+                <Icon />
+                {LIFECYCLE_COPY[a].label}
+              </DropdownMenuItem>
+            );
+          })}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs font-normal text-slate-500">Danger zone</DropdownMenuLabel>
+          {dangers.map((a) => {
+            const Icon = LIFECYCLE_COPY[a].icon;
+            return (
+              <DropdownMenuItem key={a} onSelect={() => void run(a)} className="text-red-700 focus:bg-red-50 focus:text-red-800">
+                <Icon />
+                {LIFECYCLE_COPY[a].label} stocktake
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <EditEventDetailsDialog open={editOpen} onOpenChange={setEditOpen} />
+      {dialog}
     </>
   );
 }

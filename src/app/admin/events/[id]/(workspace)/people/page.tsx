@@ -1,10 +1,17 @@
 "use client";
 
-import { useAdminEvent } from "@/components/admin/event-context";
-import { TeamsPageContent } from "@/components/admin/legacy/teams-legacy";
+import { useState } from "react";
+import { PeoplePanel } from "@/components/admin/panels/people-panel";
+import { LoginSheet } from "@/components/admin/panels/login-sheet";
 
-// People tab. Interim: the previous teams & supervisors screen, pinned to this event. Phase 2 replaces it.
+// People tab: teams, supervisors and auditors, plus the printable login sheet.
 export default function EventPeoplePage() {
-  const { eventId } = useAdminEvent();
-  return <TeamsPageContent key={eventId} eventId={String(eventId)} />;
+  // Bumped after every change so the login sheet re-reads names and PINs.
+  const [version, setVersion] = useState(0);
+  return (
+    <div className="space-y-8">
+      <PeoplePanel onChanged={() => setVersion((v) => v + 1)} />
+      <LoginSheet key={version} />
+    </div>
+  );
 }

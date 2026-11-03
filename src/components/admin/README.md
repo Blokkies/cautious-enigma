@@ -20,20 +20,20 @@ Restrained SaaS admin, light theme only.
 
 | URL | File | State after phase 1 |
 | --- | --- | --- |
-| `/admin` | `src/app/admin/page.tsx` | Overview. Interim: the old dashboard in the new shell, updated for setup/locked events |
-| `/admin/events` | `src/app/admin/events/page.tsx` | Interim: the old events list and setup wizard (`legacy/setup-legacy.tsx`) |
-| `/admin/events/new` | `src/app/admin/events/new/page.tsx` | Placeholder (details guide plus a link to the events list) |
-| `/admin/events/[id]/setup/[step]` | `src/app/admin/events/[id]/setup/[step]/page.tsx` | Placeholder: stepper and guide panel work; the step body links to the matching workspace tab. Unknown step returns 404 |
-| `/admin/events/[id]` | `(workspace)/page.tsx` | Overview tab. Interim: old readiness/status screen (`legacy/activate-legacy.tsx`) |
-| `/admin/events/[id]/items` | `(workspace)/items/page.tsx` | Interim: old import screen |
-| `/admin/events/[id]/people` | `(workspace)/people/page.tsx` | Interim: old teams screen (TeamsManager) |
-| `/admin/events/[id]/bins` | `(workspace)/bins/page.tsx` | Interim: old assignment screen |
+| `/admin` | `src/app/admin/page.tsx` | Overview: welcome card when empty, status tiles, Live now / In setup / Finished groups, 15s refresh |
+| `/admin/events` | `src/app/admin/events/page.tsx` | Events table (cards on mobile) with status filter and search, kept in `?status=` and `?q=` |
+| `/admin/events/new` | `src/app/admin/events/new/page.tsx` | Wizard step 1: details form, creates the event and continues at `setup/items` |
+| `/admin/events/[id]/setup/[step]` | `src/app/admin/events/[id]/setup/[step]/page.tsx` | Wizard steps (details, items, warehouses, people, bins, review) built from the panels. Step state comes from readiness counts; non-setup events get an "already live" screen. Unknown step returns 404 |
+| `/admin/events/[id]` | `(workspace)/page.tsx` | Overview tab: lifecycle stepper, readiness checklist + Continue setup (setup) or KPIs (live/finished), `LifecycleActions` |
+| `/admin/events/[id]/items` | `(workspace)/items/page.tsx` | `ItemsPanel` + `WarehousesPanel` |
+| `/admin/events/[id]/people` | `(workspace)/people/page.tsx` | `PeoplePanel` + `LoginSheet` |
+| `/admin/events/[id]/bins` | `(workspace)/bins/page.tsx` | `BinsPanel` |
 | `/admin/events/[id]/results` | `(workspace)/results/page.tsx` | Shared completed summary (`components/completed/completed-dashboard.tsx`), pinned to the event |
 | `/admin/events/[id]/exports` | `(workspace)/exports/page.tsx` | Shared export screen (`components/export/export-page-content.tsx`), pinned to the event |
 | `/admin/exports` | `src/app/admin/exports/page.tsx` | NetSuite multi-event export (moved from `/admin/netsuite-export`) |
 | `/admin/files` | `src/app/admin/files/page.tsx` | Uploaded files |
 | `/admin/accounts` | `src/app/admin/accounts/page.tsx` | Admin and executive accounts (moved from `/admin/settings`, now uses `useConfirm`) |
-| `/admin/help` | `src/app/admin/help/page.tsx` | Lifecycle and the six setup guides are written; other sections are stubs with their anchors |
+| `/admin/help` | `src/app/admin/help/page.tsx` | Full guide. Setup sections reuse `guide-content.ts`; Help-only copy lives in `help-content.tsx` |
 
 `src/app/admin/events/[id]/layout.tsx` wraps every event route in `AdminEventProvider`. The `(workspace)` route group adds the workspace header and tabs. The wizard sits outside that group, so it is not nested inside the tabs.
 
@@ -169,6 +169,13 @@ Lay cards out in `grid grid-cols-2 gap-3 lg:grid-cols-4`.
 
 `<ErrorState title? message={error} onRetry={reload} retrying? />`
 
+### Event lists (`event-list.ts`)
+
+Pure helpers used by the Overview and Events pages (tested in `__tests__/event-list.test.ts`):
+`DashboardEvent` / `EventListItem` types, `groupEvents` (live / setup / finished), `countByStatus`,
+`filterEvents(events, status, query)` with `STATUS_FILTERS`, `setupChecklist(counts)` ("3 of 5 steps" on top of
+`setupProgress`), `parseTimestamp` (Postgres text timestamps), `timeAgo` and `eventZipName`.
+
 ### Guides (`guide-content.ts`, `guide-panel.tsx`)
 
 `guide-content.ts` is plain data:
@@ -208,8 +215,7 @@ const { eventId, event, loading, error, notFound, reload } = useAdminEvent();
 - `EventWorkspaceFrame({ children, actions? })` is used by the `(workspace)` layout.
   - It handles the loading, error and not-found states.
   - It renders the breadcrumbs, the name with its `StatusBadge`, the location and dates (`EventMeta`) and the `EventTabs`.
-  - By default, setup events get a "Continue setup" action pointing to `setup/details`.
-  - Phase 2: replace the default action with the contextual next action and an actions menu. Either pass `actions`, or edit `defaultActions` here.
+  - By default the header shows `WorkspaceActions`: the contextual next step (Continue setup at the right wizard step / Go live once ready / Mark complete / Lock / Reopen) and an Actions menu (edit details, download imported items, the other status change, reset, delete). Pass `actions` to replace it.
 - `EventTabs({ eventId })` and `EventMeta({ location, startDate, endDate })` can be used on their own.
 
 ## Helpers in `src/lib`
@@ -245,19 +251,20 @@ It now returns every event with its real status.
 - **Setup events** have `setup: { itemCount, teamCount, supervisorCount, unassignedCount }`. The counts are scoped to the selected warehouses. Their count statistics are 0.
 - **Other events** have `setup: null`.
 
-## Interim code to replace in phase 2
+## Panels (`panels/`)
 
-`src/components/admin/legacy/*` holds the old pages, unchanged apart from these edits:
+Shared by the workspace tabs and the setup wizard. Each reads the event from `useAdminEvent()`, calls `reload()` after a change, and takes an optional `onChanged`.
 
-- `useSearchParams` was replaced by an `eventId` prop.
-- Links were updated.
+- `ItemsPanel`: upload (XHR with real upload %, then an indeterminate "Processing" bar) or copy from another event; replace and delete-counts confirmations; mapping report; item stats; download imported items; sample CSV (`lib/sample-stock-csv.ts`). Read-only outside setup.
+- `WarehousesPanel({ onDirtyChange?, hideWhenEmpty? })`: in-scope warehouses with per-warehouse stats; explicit Save. Read-only outside setup.
+- `PeoplePanel`: `TeamsManager` (admin variant) with teams, supervisors and auditors.
+- `BinsPanel({ peopleHref? })`: one-click auto-balance across all teams, unassigned counter, then the full manual tools (filters, counted badges, re-assign).
+- `ReadinessChecklist({ eventId, state, linkTo })` and `LifecycleActions` / `useLifecycleAction()` (every status change, reset and delete in one place; rules in `lib/event-lifecycle.ts`).
+- `LoginSheet`: printable / copyable names, PINs and site address.
+- `EventDetailsForm`, `EditEventDetailsDialog`, `saveEventDetails`.
+- Data hooks (`use-event-data.ts`): `useJson`, `useReadiness`, `useEventReadiness(event)` (re-fetches when the event context reloads), `useItemsOverview`.
 
-The old pages still have their own titles and event pickers, and some still call `window.confirm`. Phase 2 should replace each one, then delete the file:
+## API changes in phase 2
 
-| Legacy file | Used by | Replaced by |
-| --- | --- | --- |
-| `setup-legacy.tsx` | `/admin/events` | Events table and the wizard |
-| `activate-legacy.tsx` | Workspace Overview tab | New Overview tab |
-| `import-legacy.tsx` | Items tab | New Items tab |
-| `teams-legacy.tsx` | People tab | New People tab |
-| `assign-legacy.tsx` | Bins tab | New Bins tab |
+- `GET /api/admin/import?eventId=X` (new, additive): `{ eventId, status, summary: { totalItems, uniqueBins, uniqueBrands, totalValue }, warehouses: [{ warehouse, itemCount, binCount, totalValue }], selectedWarehouses (null = all), upload: { filename, fileSize, createdAt } | null }`. Without `eventId` it still lists events with items.
+- `GET /api/admin/activate?eventId=X` also returns `itemCount`, `teamCount` and `supervisorCount`.

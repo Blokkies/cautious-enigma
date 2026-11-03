@@ -162,7 +162,8 @@ export function CompletedDashboardContent({ eventId }: { eventId?: string } = {}
 
   return (
     <div className="space-y-6 pb-8">
-      {/* Event Header */}
+      {/* Event Header (the admin workspace shows its own header when pinned) */}
+      {!pinned && (
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">{event.name}</h1>
@@ -210,6 +211,7 @@ export function CompletedDashboardContent({ eventId }: { eventId?: string } = {}
           </Badge>
         </div>
       </div>
+      )}
 
       {/* Completion Overview */}
       <Card>

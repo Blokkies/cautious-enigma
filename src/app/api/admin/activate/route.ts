@@ -28,6 +28,10 @@ export async function GET(request: NextRequest) {
     hasSupervisors: readiness.hasSupervisors,
     allItemsAssigned: readiness.allItemsAssigned,
     unassignedCount: readiness.unassignedCount,
+    // Counts behind the flags (in-scope items), for the setup wizard and readiness checklist
+    itemCount: readiness.itemCount,
+    teamCount: readiness.teamCount,
+    supervisorCount: readiness.supervisorCount,
     blocker: activationBlocker(readiness),
   });
 }

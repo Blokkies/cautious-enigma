@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
+import { useConfirm } from "@/components/admin/confirm-dialog";
+import { planAutoBalance, type BalancePlanEntry } from "./auto-balance";
 import {
   binKey,
   naturalCompare,
@@ -26,6 +28,8 @@ function byWarehouse(a: BinInfo, b: BinInfo): number {
  * /supervisor/teams/assign. `eventId` is the event being assigned (string, "" = none yet).
  */
 export function useAssignment(eventId: string) {
+  // Confirmation dialogs; render `confirmDialog` from the returned state once on the page.
+  const [confirm, confirmDialog] = useConfirm();
   const [unassignedBins, setUnassignedBins] = useState<BinInfo[]>([]);
   const [teamDetails, setTeamDetails] = useState<TeamDetail[]>([]);
   const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
@@ -257,6 +261,32 @@ export function useAssignment(eventId: string) {
     setBalanceTeams(new Set());
   };
 
+  /** POST an auto-balance plan; returns true on success. */
+  const sendBalancePlan = async (plan: BalancePlanEntry[], mode: BalanceMode, brand: string): Promise<boolean> => {
+    const res = await fetch("/api/admin/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventId: Number(eventId),
+        action: "auto-balance",
+        assignments: plan.map((t) => ({ teamId: t.teamId, bins: t.bins })),
+        // Only the filtered brand's items are distributed
+        ...(brand ? { brand } : {}),
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast.error(data.error || "Auto-balance failed");
+      return false;
+    }
+    const data = await res.json().catch(() => ({}));
+    const summary = plan
+      .map((t) => `${t.name}: +${t.bins.length} bins (${mode === "equal-bins" ? `${t.totalBins} bins` : `${t.totalItems} items`} total)`)
+      .join(", ");
+    toast.success(typeof data.assignedCount === "number" ? `Assigned ${data.assignedCount} items. ${summary}` : summary);
+    return true;
+  };
+
   const handleAutoBalance = async () => {
     const binsToBalance = unassignedBins; // already filtered by warehouse/brand
     if (binsToBalance.length === 0) {
@@ -270,98 +300,69 @@ export function useAssignment(eventId: string) {
       return;
     }
 
-    const binCount = binsToBalance.length;
-    const teamCount = targetTeams.length;
     const modeLabel = balanceMode === "equal-bins" ? "equal bins" : "equal items";
-    if (!confirm(`Distribute ${binCount} bins across ${teamCount} teams (${modeLabel})?`)) return;
+    const ok = await confirm({
+      title: "Auto-balance bins?",
+      description: `Distribute ${binsToBalance.length} unassigned bin${binsToBalance.length === 1 ? "" : "s"} across ${targetTeams.length} selected team${targetTeams.length === 1 ? "" : "s"} (${modeLabel}).`,
+      confirmLabel: "Distribute bins",
+    });
+    if (!ok) return;
 
     setBalancing(true);
     try {
-      // Sort bins naturally so physically adjacent bins stay together
-      const sorted = [...binsToBalance].sort((a, b) => naturalCompare(a.bin_number, b.bin_number) || byWarehouse(a, b));
-
-      // Build team trackers sorted by existing load (least loaded first)
-      const teamTotals = targetTeams.map((t) => ({
-        teamId: t.id,
-        name: t.name,
-        currentBins: t.bins.length,
-        currentItems: t.itemCount,
-        bins: [] as BinRef[],
-      }));
-
-      // Sort teams by current load so the least-loaded teams get bins first
-      if (balanceMode === "equal-bins") {
-        teamTotals.sort((a, b) => a.currentBins - b.currentBins);
-      } else {
-        teamTotals.sort((a, b) => a.currentItems - b.currentItems);
-      }
-
-      if (balanceMode === "equal-bins") {
-        // Split sorted bins into contiguous chunks, one per team
-        const totalBins = sorted.length;
-        const n = teamTotals.length;
-        let idx = 0;
-        for (let t = 0; t < n; t++) {
-          // Remaining teams get remaining bins split evenly
-          const remaining = n - t;
-          const chunkSize = Math.ceil((totalBins - idx) / remaining);
-          for (let j = 0; j < chunkSize && idx < totalBins; j++, idx++) {
-            teamTotals[t].bins.push(toBinRef(sorted[idx]));
-          }
-        }
-      } else {
-        // Split sorted bins into contiguous chunks targeting equal item counts
-        const totalNewItems = sorted.reduce((s, b) => s + b.item_count, 0);
-        const totalExistingItems = teamTotals.reduce((s, t) => s + t.currentItems, 0);
-        const targetPerTeam = (totalNewItems + totalExistingItems) / teamTotals.length;
-        let idx = 0;
-        for (let t = 0; t < teamTotals.length; t++) {
-          const isLast = t === teamTotals.length - 1;
-          let runningItems = teamTotals[t].currentItems;
-          while (idx < sorted.length) {
-            if (!isLast && runningItems >= targetPerTeam && teamTotals[t].bins.length > 0) break;
-            teamTotals[t].bins.push(toBinRef(sorted[idx]));
-            runningItems += sorted[idx].item_count;
-            teamTotals[t].currentItems += sorted[idx].item_count;
-            idx++;
-          }
-        }
-      }
-
-      const assignments = teamTotals
-        .filter((t) => t.bins.length > 0)
-        .map((t) => ({ teamId: t.teamId, bins: t.bins }));
-
-      const res = await fetch("/api/admin/assign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          eventId: Number(eventId),
-          action: "auto-balance",
-          assignments,
-          // Only the filtered brand's items are distributed
-          ...(brandFilter ? { brand: brandFilter } : {}),
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const summary = teamTotals
-          .filter((t) => t.bins.length > 0)
-          .map((t) => {
-            const finalTotal = balanceMode === "equal-bins"
-              ? t.currentBins + t.bins.length
-              : t.currentItems;
-            return `${t.name}: +${t.bins.length} bins (${finalTotal} total ${balanceMode === "equal-bins" ? "bins" : "items"})`;
-          })
-          .join(", ");
-        toast.success(`Assigned ${data.assignedCount} items (${summary})`);
+      const plan = planAutoBalance(
+        binsToBalance,
+        targetTeams.map((t) => ({ id: t.id, name: t.name, currentBins: t.bins.length, currentItems: t.itemCount })),
+        balanceMode
+      );
+      if (await sendBalancePlan(plan, balanceMode, brandFilter)) {
         setSelectedBins(new Set());
         setBalanceTeams(new Set());
         loadData();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || "Auto-balance failed");
+      }
+    } catch {
+      toast.error("Auto-balance failed");
+    } finally {
+      setBalancing(false);
+    }
+  };
+
+  /**
+   * One click: share every unassigned bin (ignoring the brand filter) across all teams.
+   * Re-reads the unfiltered assignment data first so nothing hidden by a filter is missed.
+   */
+  const handleAutoBalanceAll = async (mode: BalanceMode = balanceMode) => {
+    if (!eventId || balancing) return;
+    setBalancing(true);
+    try {
+      const res = await fetch(`/api/admin/assign?${new URLSearchParams({ eventId })}`);
+      if (!res.ok) {
+        toast.error("Could not load the bins to balance. Try again.");
+        return;
+      }
+      const data = await res.json();
+      const bins: BinInfo[] = data.unassignedBins || [];
+      const teams: TeamDetail[] = data.teamDetails || [];
+      if (teams.length === 0) {
+        toast.error("Add at least one team first");
+        return;
+      }
+      if (bins.length === 0) {
+        toast.success("Every bin is already assigned");
+        loadData();
+        return;
+      }
+      const plan = planAutoBalance(
+        bins,
+        teams.map((t) => ({ id: t.id, name: t.name, currentBins: t.bins.length, currentItems: t.itemCount })),
+        mode
+      );
+      if (await sendBalancePlan(plan, mode, "")) {
+        setSelectedBins(new Set());
+        setBalanceTeams(new Set());
+        setBinItemsCache({});
+        setExpandedBins(new Set());
+        loadData();
       }
     } catch {
       toast.error("Auto-balance failed");
@@ -427,7 +428,13 @@ export function useAssignment(eventId: string) {
         toast.error(data.error || "Failed to unassign");
         return false;
       }
-      if (!confirm(`${data.countedCount} count(s) already recorded in these bins will be permanently deleted. Unassign anyway?`)) return false;
+      const ok = await confirm({
+        title: "Delete recorded counts?",
+        description: `${data.countedCount} count${data.countedCount === 1 ? " is" : "s are"} already recorded in these bins. Unassigning permanently deletes ${data.countedCount === 1 ? "it" : "them"}.`,
+        confirmLabel: "Delete counts and unassign",
+        destructive: true,
+      });
+      if (!ok) return false;
       res = await send(true);
     }
     if (!res.ok) {
@@ -502,7 +509,14 @@ export function useAssignment(eventId: string) {
   };
 
   const handleUnassignAll = async (teamId: number) => {
-    if (!confirm("Unassign ALL items from this team?")) return;
+    const teamName = teamDetails.find((t) => t.id === teamId)?.name ?? "this team";
+    const ok = await confirm({
+      title: `Unassign every bin from ${teamName}?`,
+      description: "The bins go back to the unassigned list. You can assign them again afterwards.",
+      confirmLabel: "Unassign all",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       if (await sendUnassign({ teamId, all: true })) {
         toast.success("All items unassigned");
@@ -598,6 +612,7 @@ export function useAssignment(eventId: string) {
     selectAllTeamsForBalance,
     clearBalanceTeams,
     handleAutoBalance,
+    handleAutoBalanceAll,
     selectedTeamBins,
     toggleTeamBin,
     toggleAllTeamBins,
@@ -610,6 +625,8 @@ export function useAssignment(eventId: string) {
     handleUnassignBins,
     handleUnassignAll,
     resetForEventChange,
+    /** Confirmation dialog element: render it once wherever this hook is used. */
+    confirmDialog,
   };
 }
 

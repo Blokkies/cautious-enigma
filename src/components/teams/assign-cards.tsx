@@ -27,6 +27,7 @@ import {
   ArrowRightLeft,
   Lock,
 } from "lucide-react";
+import { formatMoney } from "@/lib/format";
 import { binKey, naturalCompare, toBinRef, type BalanceMode, type BinSortMode, type TeamDetail } from "./assign-types";
 import type { AssignedBinFilters, AssignmentState } from "./use-assignment";
 import type { ReassignState } from "./reassign-dialog";
@@ -181,7 +182,7 @@ export function TeamAssignmentsCard({ assign, readOnly = false, filters, reassig
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground">
-                      R{team.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      {formatMoney(team.totalValue, { decimals: 0 })}
                     </span>
                     {!readOnly && selectedCount > 0 && (
                       <>
@@ -852,7 +853,7 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0 ml-2">
                                     <span>qty: {item.on_hand}</span>
-                                    <span>R{item.total_value?.toLocaleString(undefined, { maximumFractionDigits: 0 }) ?? '0'}</span>
+                                    <span>{formatMoney(item.total_value, { decimals: 0 })}</span>
                                   </div>
                                 </div>
                               ))

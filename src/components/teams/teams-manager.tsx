@@ -2,12 +2,11 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, Users, Shield, Pencil, Upload, Eye, EyeOff } from "lucide-react";
+import { ClipboardCheck, Eye, EyeOff, Layers, Pencil, Plus, Shield, Trash2, Upload, Users, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { generateTeamTemplate } from "@/lib/team-excel";
+import { formatNumber } from "@/lib/format";
+import { useConfirm } from "@/components/admin/confirm-dialog";
 import { parseMembers, type SupervisorInfo, type TeamInfo } from "./types";
 import {
   AddPersonDialog,
@@ -22,22 +21,26 @@ import { pinError } from "./pin";
 
 interface TeamsManagerProps {
   /**
-   * admin: supervisors list shows every supervisor (incl. auditors) with a delete button.
-   * supervisor: auditors are split into their own section; supervisors cannot be deleted.
+   * admin: can also add and delete supervisors and auditors.
+   * supervisor: manages teams only; supervisors and auditors are listed read-only
+   * (the API refuses supervisor/auditor changes from a supervisor).
    */
   variant: "admin" | "supervisor";
-  /** Event id as sent to the API (admin: selected event, supervisor: String(token eventId)). */
+  /** Event id as sent to the API (admin: the workspace event, supervisor: String(token eventId)). */
   eventId: string;
   /** Auditors get a read-only view (no PIN reveal, no create/edit/delete). */
   readOnly?: boolean;
   teamsList: TeamInfo[];
   supervisorsList: SupervisorInfo[];
+  /** Called after every change. */
   reloadTeams: () => void;
 }
 
+type PersonType = "supervisor" | "auditor";
+
 /**
- * Teams + supervisors management shared by the admin event People tab and /supervisor/teams.
- * Renders the cards and dialogs below the page header.
+ * Teams, supervisors and auditors, shared by the admin People panel and /supervisor/teams.
+ * Renders three sections plus their dialogs.
  */
 export function TeamsManager({
   variant,
@@ -48,19 +51,19 @@ export function TeamsManager({
   reloadTeams: loadTeams,
 }: TeamsManagerProps) {
   const isSupervisorView = variant === "supervisor";
+  // Only admins create/delete supervisors and auditors.
+  const canManagePeople = !readOnly && !isSupervisorView;
   const [showPins, setShowPins] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
 
   // Team form
   const [addTeamOpen, setAddTeamOpen] = useState(false);
   const [teamForm, setTeamForm] = useState({ name: "", pin: "" });
   const [teamMembers, setTeamMembers] = useState<string[]>([""]);
 
-  // Supervisor form
-  const [addSupOpen, setAddSupOpen] = useState(false);
-  const [supForm, setSupForm] = useState({
-    name: "",
-    pin: "",
-  });
+  // Supervisor / auditor form (one dialog, `personType` picks the role)
+  const [personType, setPersonType] = useState<PersonType | null>(null);
+  const [personForm, setPersonForm] = useState({ name: "", pin: "" });
 
   // Bulk create
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -77,7 +80,7 @@ export function TeamsManager({
   // In-flight flags so a double click can't create/save twice
   const [creatingTeam, setCreatingTeam] = useState(false);
   const [savingTeam, setSavingTeam] = useState(false);
-  const [creatingSupervisor, setCreatingSupervisor] = useState(false);
+  const [creatingPerson, setCreatingPerson] = useState(false);
 
   // Import from Excel
   const [importOpen, setImportOpen] = useState(false);
@@ -111,7 +114,7 @@ export function TeamsManager({
         body: JSON.stringify({
           id: editTeam.id,
           name: editForm.name,
-          members: editMembers.filter(m => m.trim()),
+          members: editMembers.filter((m) => m.trim()),
           pin: editForm.pin || undefined,
         }),
       });
@@ -150,7 +153,7 @@ export function TeamsManager({
           eventId: Number(eventId),
           type: "team",
           name: teamForm.name,
-          members: teamMembers.filter(m => m.trim()),
+          members: teamMembers.filter((m) => m.trim()),
           pin: teamForm.pin,
         }),
       });
@@ -171,42 +174,43 @@ export function TeamsManager({
     }
   };
 
-  const createSupervisor = async () => {
-    if (creatingSupervisor) return;
-    if (!supForm.name.trim() || !supForm.pin) {
+  /** Create a supervisor or auditor (admin only). */
+  const createPerson = async () => {
+    if (creatingPerson || !personType) return;
+    if (!personForm.name.trim() || !personForm.pin) {
       toast.error("Name and PIN are required");
       return;
     }
-    const supPinError = pinError(supForm.pin);
-    if (supPinError) {
-      toast.error(supPinError);
+    const personPinError = pinError(personForm.pin);
+    if (personPinError) {
+      toast.error(personPinError);
       return;
     }
-    setCreatingSupervisor(true);
+    setCreatingPerson(true);
     try {
       const res = await fetch("/api/admin/teams", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           eventId: Number(eventId),
-          type: "supervisor",
-          name: supForm.name,
-          pin: supForm.pin,
+          type: personType,
+          name: personForm.name,
+          pin: personForm.pin,
         }),
       });
       if (res.ok) {
-        toast.success("Supervisor created");
-        setSupForm({ name: "", pin: "" });
-        setAddSupOpen(false);
+        toast.success(personType === "auditor" ? "Auditor created" : "Supervisor created");
+        setPersonForm({ name: "", pin: "" });
+        setPersonType(null);
         loadTeams();
       } else {
         const data = await res.json().catch(() => ({}));
-        toast.error(data.error || "Failed to create supervisor");
+        toast.error(data.error || `Failed to create ${personType}`);
       }
     } catch {
-      toast.error("Failed to create supervisor");
+      toast.error(`Failed to create ${personType}`);
     } finally {
-      setCreatingSupervisor(false);
+      setCreatingPerson(false);
     }
   };
 
@@ -250,7 +254,8 @@ export function TeamsManager({
       }
       setBulkProgress({ current: i, total: count, created });
     }
-    toast.success(`Created ${created} of ${count} teams`);
+    if (created === count) toast.success(`Created ${created} teams`);
+    else toast.error(`Created ${created} of ${count} teams. Check for duplicate names and try the rest again.`);
     setBulkProgress(null);
     setBulkOpen(false);
     setBulkPin("");
@@ -259,31 +264,34 @@ export function TeamsManager({
 
   // Auditors live in the supervisors table, so they are deleted with type "supervisor";
   // `label` only changes the wording shown to the user.
-  const handleDelete = async (id: number, type: "team" | "supervisor", label: string = type) => {
-    if (
-      !confirm(
-        `Delete this ${label}? ${type === "team" ? "All item assignments will be removed." : ""}`
-      )
-    )
-      return;
-
-    try {
-      const res = await fetch("/api/admin/teams", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, type }),
-      });
-      if (res.ok) {
-        // Supervisor view only deletes teams and capitalises the toast.
-        toast.success(isSupervisorView ? "Team deleted" : `${label} deleted`);
+  const handleDelete = (id: number, name: string, type: "team" | "supervisor", label: string = type) => {
+    void confirm({
+      title: `Delete ${label} "${name}"?`,
+      description:
+        type === "team" ? (
+          <p>
+            The team can no longer log in and its bins go back to the unassigned list. Any counts, queries and
+            breakdowns it recorded are deleted too. This cannot be undone.
+          </p>
+        ) : (
+          <p>This {label} can no longer log in to this stocktake.</p>
+        ),
+      confirmLabel: `Delete ${label}`,
+      destructive: true,
+      onConfirm: async () => {
+        const res = await fetch("/api/admin/teams", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, type }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Delete failed");
+        }
+        toast.success(`${label.charAt(0).toUpperCase()}${label.slice(1)} deleted`);
         loadTeams();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || "Delete failed");
-      }
-    } catch {
-      toast.error("Delete failed");
-    }
+      },
+    });
   };
 
   const downloadTemplate = () => {
@@ -312,7 +320,7 @@ export function TeamsManager({
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(data.error || "Import failed");
         return;
@@ -329,111 +337,132 @@ export function TeamsManager({
     }
   };
 
-  // Supervisor view lists auditors separately (see AuditorSection).
-  const visibleSupervisors = isSupervisorView
-    ? supervisorsList.filter(s => s.role !== "auditor")
-    : supervisorsList;
+  const supervisorsOnly = supervisorsList.filter((s) => s.role !== "auditor");
+  const auditors = supervisorsList.filter((s) => s.role === "auditor");
+
+  const openPersonDialog = (type: PersonType) => {
+    setPersonForm({ name: "", pin: "" });
+    setPersonType(type);
+  };
 
   return (
-    <>
-      {/* Teams List */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Users className="h-5 w-5" />
-              Teams ({teamsList.length})
-            </CardTitle>
-            {!readOnly && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowPins((v) => !v)}
-                className="gap-1.5 text-muted-foreground"
-              >
-                {showPins ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                {showPins ? "Hide PINs" : "Show PINs"}
+    <div className="space-y-6">
+      <PeopleSection
+        icon={Users}
+        title="Counting teams"
+        count={teamsList.length}
+        description="Each team logs in with its own PIN and counts only the bins assigned to it."
+        actions={
+          !readOnly && (
+            <Button variant="outline" size="sm" onClick={() => setShowPins((v) => !v)} aria-pressed={showPins}>
+              {showPins ? <EyeOff /> : <Eye />}
+              {showPins ? "Hide PINs" : "Show PINs"}
+            </Button>
+          )
+        }
+        footer={
+          !readOnly && (
+            <>
+              <Button size="sm" onClick={() => { setAddTeamOpen(true); setTeamForm({ name: "", pin: "" }); setTeamMembers([""]); }}>
+                <Plus />
+                Add team
               </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {teamsList.length > 0 ? (
-            <div className="space-y-2 mb-4">
-              {teamsList.map((team) => {
-                const memberList = parseMembers(team.members);
-                return (
-                  <div
-                    key={team.id}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                  >
-                    <div>
-                      <div className="font-medium">{team.name}</div>
-                      <div className="text-sm text-muted-foreground">
-                        {memberList.length > 0 ? memberList.join(", ") : "No members set"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {showPins && team.pinPlain && (
-                        <Badge variant="outline" className="font-mono text-xs">
-                          PIN: {team.pinPlain}
-                        </Badge>
-                      )}
-                      <Badge variant="secondary">
-                        {team.assignedItems} items
-                      </Badge>
-                      {!readOnly && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => openEditDialog(team)}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDelete(team.id, "team")}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </>
-                      )}
+              <Button size="sm" variant="outline" onClick={() => setBulkOpen(true)}>
+                <Layers />
+                Bulk create
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => { setImportOpen(true); setImportFile(null); setImportResult(null); }}>
+                <Upload />
+                Import from Excel
+              </Button>
+            </>
+          )
+        }
+      >
+        {teamsList.length > 0 ? (
+          <ul className="divide-y divide-slate-100">
+            {teamsList.map((team) => {
+              const memberList = parseMembers(team.members);
+              return (
+                <li key={team.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 sm:flex-nowrap">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-slate-900">{team.name}</div>
+                    <div className="truncate text-xs text-slate-500">
+                      {memberList.length > 0 ? memberList.join(", ") : "No members listed"}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-muted-foreground mb-4">
-              No teams yet. Create teams below.
-            </p>
-          )}
+                  {showPins && <PinChip pin={team.pinPlain} />}
+                  <span className="text-xs tabular-nums text-slate-500">{formatNumber(team.assignedItems)} items</span>
+                  {!readOnly && (
+                    <div className="flex items-center">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500" onClick={() => openEditDialog(team)} aria-label={`Edit ${team.name}`}>
+                        <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-slate-500 hover:text-red-700"
+                        onClick={() => handleDelete(team.id, team.name, "team")}
+                        aria-label={`Delete ${team.name}`}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="px-4 py-6 text-sm text-slate-500">
+            No teams yet.{!readOnly && " Add them one at a time, create a numbered batch, or import a list from Excel."}
+          </p>
+        )}
+      </PeopleSection>
 
-          {!readOnly && (
-            <>
-              <Separator className="my-4" />
+      <PeopleSection
+        icon={Shield}
+        title="Supervisors"
+        count={supervisorsOnly.length}
+        description="Supervisors watch progress, review variances, send recounts to another team and answer queries. You need at least one to go live."
+        footer={
+          canManagePeople && (
+            <Button size="sm" onClick={() => openPersonDialog("supervisor")}>
+              <Plus />
+              Add supervisor
+            </Button>
+          )
+        }
+      >
+        <PersonList
+          people={supervisorsOnly}
+          showPins={showPins}
+          emptyText={canManagePeople ? "No supervisors yet. Add at least one before going live." : "No supervisors."}
+          onDelete={canManagePeople ? (p) => handleDelete(p.id, p.name, "supervisor", "supervisor") : undefined}
+        />
+      </PeopleSection>
 
-              <div className="flex gap-2 flex-wrap">
-                <Button onClick={() => { setAddTeamOpen(true); setTeamForm({ name: "", pin: "" }); setTeamMembers([""]); }} className="gap-1">
-                  <Plus className="h-4 w-4" />
-                  Add Team
-                </Button>
-                <Button onClick={() => setBulkOpen(true)} variant="outline" className="gap-1">
-                  <Plus className="h-4 w-4" />
-                  Bulk Create
-                </Button>
-                <Button onClick={() => { setImportOpen(true); setImportFile(null); setImportResult(null); }} variant="outline" className="gap-1">
-                  <Upload className="h-4 w-4" />
-                  Import from Excel
-                </Button>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <PeopleSection
+        icon={ClipboardCheck}
+        title="Auditors"
+        count={auditors.length}
+        description="Optional. Auditors see the supervisor screens read-only (progress, variances, results) and cannot change anything."
+        footer={
+          canManagePeople && (
+            <Button size="sm" variant="outline" onClick={() => openPersonDialog("auditor")}>
+              <Plus />
+              Add auditor
+            </Button>
+          )
+        }
+      >
+        <PersonList
+          people={auditors}
+          showPins={showPins}
+          emptyText="No auditors. They are optional."
+          onDelete={canManagePeople ? (p) => handleDelete(p.id, p.name, "supervisor", "auditor") : undefined}
+        />
+      </PeopleSection>
 
       <AddTeamDialog
         open={addTeamOpen}
@@ -484,182 +513,98 @@ export function TeamsManager({
         onImport={importTeams}
       />
 
-      {/* Supervisors */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Shield className="h-5 w-5" />
-            {!isSupervisorView && visibleSupervisors.some((s) => s.role === "auditor")
-              ? "Supervisors & Auditors"
-              : "Supervisors"}{" "}
-            ({visibleSupervisors.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {visibleSupervisors.length > 0 && (
-            <div className="space-y-2 mb-4">
-              {visibleSupervisors.map((sup) => (
-                <div
-                  key={sup.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                >
-                  <div className="font-medium flex items-center gap-2">
-                    {sup.name}
-                    {!isSupervisorView && sup.role === "auditor" && (
-                      <Badge variant="secondary" className="text-xs">Auditor</Badge>
-                    )}
-                  </div>
-                  {isSupervisorView ? (
-                    showPins && sup.pinPlain && (
-                      <Badge variant="outline" className="font-mono text-xs">
-                        PIN: {sup.pinPlain}
-                      </Badge>
-                    )
-                  ) : (
-                    <div className="flex items-center gap-3">
-                      {showPins && sup.pinPlain && (
-                        <Badge variant="outline" className="font-mono text-xs">
-                          PIN: {sup.pinPlain}
-                        </Badge>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDelete(sup.id, "supervisor", sup.role === "auditor" ? "auditor" : "supervisor")}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Only admins may create supervisors/auditors (the API returns 403 otherwise). */}
-          {!readOnly && !isSupervisorView && (
-            <Button onClick={() => { setAddSupOpen(true); setSupForm({ name: "", pin: "" }); }} className="gap-1">
-              <Plus className="h-4 w-4" />
-              Add Supervisor
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-
       <AddPersonDialog
-        open={addSupOpen}
-        onClose={() => setAddSupOpen(false)}
-        title="Add Supervisor"
-        namePlaceholder="Supervisor name"
-        submitLabel="Create Supervisor"
-        form={supForm}
-        setForm={setSupForm}
-        onCreate={createSupervisor}
-        submitting={creatingSupervisor}
+        open={personType !== null}
+        onClose={() => setPersonType(null)}
+        title={personType === "auditor" ? "Add auditor" : "Add supervisor"}
+        namePlaceholder={personType === "auditor" ? "Auditor name" : "Supervisor name"}
+        submitLabel={personType === "auditor" ? "Create auditor" : "Create supervisor"}
+        form={personForm}
+        setForm={setPersonForm}
+        onCreate={createPerson}
+        submitting={creatingPerson}
       />
 
-      {/* Auditors */}
-      {isSupervisorView && (
-        <AuditorSection eventId={eventId} isAuditor={readOnly || isSupervisorView} supervisorsList={supervisorsList} onCreated={loadTeams} showPins={showPins} />
-      )}
-    </>
+      {confirmDialog}
+    </div>
   );
 }
 
-function AuditorSection({ eventId, isAuditor, supervisorsList, onCreated, showPins }: { eventId: string; isAuditor: boolean; supervisorsList: SupervisorInfo[]; onCreated: () => void; showPins: boolean }) {
-  const [addAuditorOpen, setAddAuditorOpen] = useState(false);
-  const [auditorForm, setAuditorForm] = useState({ name: "", pin: "" });
-  const [creatingAuditor, setCreatingAuditor] = useState(false);
-  const auditors = supervisorsList.filter(s => s.role === "auditor");
-
-  const createAuditor = async () => {
-    if (creatingAuditor) return;
-    if (!auditorForm.name.trim() || !auditorForm.pin) {
-      toast.error("Name and PIN are required");
-      return;
-    }
-    const auditorPinError = pinError(auditorForm.pin);
-    if (auditorPinError) {
-      toast.error(auditorPinError);
-      return;
-    }
-    setCreatingAuditor(true);
-    try {
-      const res = await fetch("/api/admin/teams", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          eventId: Number(eventId),
-          type: "auditor",
-          name: auditorForm.name,
-          pin: auditorForm.pin,
-        }),
-      });
-      if (res.ok) {
-        toast.success("Auditor created");
-        setAuditorForm({ name: "", pin: "" });
-        setAddAuditorOpen(false);
-        onCreated();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || "Failed to create auditor");
-      }
-    } catch {
-      toast.error("Failed to create auditor");
-    } finally {
-      setCreatingAuditor(false);
-    }
-  };
-
+function PeopleSection({
+  icon: Icon,
+  title,
+  count,
+  description,
+  actions,
+  footer,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  count: number;
+  description: string;
+  actions?: React.ReactNode;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Eye className="h-5 w-5" />
-            Auditors ({auditors.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {auditors.length > 0 && (
-            <div className="space-y-2 mb-4">
-              {auditors.map((aud) => (
-                <div
-                  key={aud.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                >
-                  <div className="font-medium">{aud.name}</div>
-                  {showPins && aud.pinPlain && (
-                    <Badge variant="outline" className="font-mono text-xs">
-                      PIN: {aud.pinPlain}
-                    </Badge>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <div className="min-w-0">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+            <Icon className="h-4 w-4 text-slate-400" aria-hidden="true" />
+            {title}
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium tabular-nums text-slate-600">{count}</span>
+          </h3>
+          <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+        </div>
+        {actions || null}
+      </header>
+      {children}
+      {footer ? <div className="flex flex-wrap gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3">{footer}</div> : null}
+    </section>
+  );
+}
 
-          {!isAuditor && (
-            <Button onClick={() => { setAddAuditorOpen(true); setAuditorForm({ name: "", pin: "" }); }} className="gap-1">
-              <Plus className="h-4 w-4" />
-              Add Auditor
+function PinChip({ pin }: { pin?: string | null }) {
+  return pin ? (
+    <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-xs tabular-nums text-slate-700">PIN {pin}</span>
+  ) : (
+    <span className="text-xs text-slate-400">PIN hidden</span>
+  );
+}
+
+function PersonList({
+  people,
+  showPins,
+  emptyText,
+  onDelete,
+}: {
+  people: SupervisorInfo[];
+  showPins: boolean;
+  emptyText: string;
+  onDelete?: (person: SupervisorInfo) => void;
+}) {
+  if (people.length === 0) return <p className="px-4 py-6 text-sm text-slate-500">{emptyText}</p>;
+  return (
+    <ul className="divide-y divide-slate-100">
+      {people.map((p) => (
+        <li key={p.id} className="flex items-center gap-4 px-4 py-3">
+          <div className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{p.name}</div>
+          {showPins && <PinChip pin={p.pinPlain} />}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-slate-500 hover:text-red-700"
+              onClick={() => onDelete(p)}
+              aria-label={`Delete ${p.name}`}
+            >
+              <Trash2 />
             </Button>
           )}
-        </CardContent>
-      </Card>
-
-      <AddPersonDialog
-        open={addAuditorOpen}
-        onClose={() => setAddAuditorOpen(false)}
-        title="Add Auditor"
-        namePlaceholder="Auditor name"
-        submitLabel="Create Auditor"
-        form={auditorForm}
-        setForm={setAuditorForm}
-        onCreate={createAuditor}
-        submitting={creatingAuditor}
-      />
-    </>
+        </li>
+      ))}
+    </ul>
   );
 }

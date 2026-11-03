@@ -192,7 +192,11 @@ export function ExportPageContent({ eventId }: { eventId?: number } = {}) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">Export Data</h1>
+        {pinned ? (
+          <h2 className="text-base font-semibold text-slate-900">Export files</h2>
+        ) : (
+          <h1 className="text-2xl font-bold">Export Data</h1>
+        )}
         {isAdmin && !pinned && events.length > 0 && (
           <Select
             value={selectedEventId ? String(selectedEventId) : undefined}

@@ -54,6 +54,7 @@ export default function SupervisorAssignPage() {
 
       {/* Re-assign dialog */}
       <ReassignDialog assign={assign} reassign={reassign} />
+      {assign.confirmDialog}
     </div>
   );
 }

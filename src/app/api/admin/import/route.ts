@@ -131,10 +131,75 @@ async function deleteReplacedUpload(tx: Tx, oldUploadId: number | null, newUploa
   );
 }
 
-// GET: List events that have imported items (for "copy from" feature)
+/**
+ * GET ?eventId=X: the event's current items at a glance (used by the admin Items and
+ * Warehouses screens, which must work after a reload, not only right after an import).
+ */
+async function eventItemsOverview(eid: number) {
+  const [event] = await db
+    .select({ id: stocktakeEvents.id, status: stocktakeEvents.status, warehouses: stocktakeEvents.warehouses, uploadId: stocktakeEvents.uploadId })
+    .from(stocktakeEvents)
+    .where(eq(stocktakeEvents.id, eid));
+  if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
+
+  const [stats, warehouseRows, uploadRows] = await Promise.all([
+    importStats(eid),
+    db
+      .select({
+        warehouse: items.warehouse,
+        itemCount: countInt(),
+        binCount: countDistinctInt(sql`bin_number`),
+        totalValue: sumFloat(sql`total_value`),
+      })
+      .from(items)
+      .where(eq(items.eventId, eid))
+      .groupBy(items.warehouse),
+    event.uploadId
+      ? db
+          .select({ filename: uploads.filename, fileSize: uploads.fileSize, createdAt: uploads.createdAt })
+          .from(uploads)
+          .where(eq(uploads.id, event.uploadId))
+      : Promise.resolve([]),
+  ]);
+
+  const warehouses = warehouseRows
+    .filter((r) => !!r.warehouse && r.warehouse.trim().length > 0)
+    .map((r) => ({
+      warehouse: r.warehouse as string,
+      itemCount: Number(r.itemCount) || 0,
+      binCount: Number(r.binCount) || 0,
+      totalValue: Number(r.totalValue) || 0,
+    }))
+    .sort((a, b) => a.warehouse.localeCompare(b.warehouse));
+
+  return NextResponse.json({
+    eventId: event.id,
+    status: event.status,
+    summary: stats,
+    warehouses,
+    /** null = all warehouses. */
+    selectedWarehouses: parseEventWarehouses(event.warehouses),
+    upload: uploadRows[0] ?? null,
+  });
+}
+
+// GET: List events that have imported items (for "copy from" feature).
+// With ?eventId=X: that event's item summary, per-warehouse stats and warehouse selection.
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin"] });
   if (auth.response) return auth.response;
+
+  const rawEventId = request.nextUrl.searchParams.get("eventId");
+  if (rawEventId !== null) {
+    const eid = parseId(rawEventId);
+    if (!eid) return NextResponse.json({ error: "A numeric eventId is required" }, { status: 400 });
+    try {
+      return await eventItemsOverview(eid);
+    } catch (error) {
+      console.error("Error loading event items overview:", error);
+      return NextResponse.json({ error: "Failed to load the event's items" }, { status: 500 });
+    }
+  }
 
   try {
     const allEvents = await db

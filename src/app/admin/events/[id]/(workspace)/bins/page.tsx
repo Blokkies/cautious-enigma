@@ -1,10 +1,8 @@
 "use client";
 
-import { useAdminEvent } from "@/components/admin/event-context";
-import { AssignPageContent } from "@/components/admin/legacy/assign-legacy";
+import { BinsPanel } from "@/components/admin/panels/bins-panel";
 
-// Bins tab. Interim: the previous assignment screen, pinned to this event. Phase 2 replaces it.
+// Bins tab: auto-balance plus the full manual assignment tools.
 export default function EventBinsPage() {
-  const { eventId } = useAdminEvent();
-  return <AssignPageContent key={eventId} eventId={String(eventId)} />;
+  return <BinsPanel />;
 }

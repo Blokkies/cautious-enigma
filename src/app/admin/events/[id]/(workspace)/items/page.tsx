@@ -1,10 +1,18 @@
 "use client";
 
-import { useAdminEvent } from "@/components/admin/event-context";
-import { ImportPageContent } from "@/components/admin/legacy/import-legacy";
+import { useState } from "react";
+import { ItemsPanel } from "@/components/admin/panels/items-panel";
+import { WarehousesPanel } from "@/components/admin/panels/warehouses-panel";
 
-// Items tab. Interim: the previous import screen, pinned to this event. Phase 2 replaces it.
+// Items tab: the stock file (import / replace / copy, mapping report, totals, download) and
+// the warehouse selection. Both are read-only once the event leaves setup.
 export default function EventItemsPage() {
-  const { eventId } = useAdminEvent();
-  return <ImportPageContent key={eventId} eventId={String(eventId)} />;
+  // Bumped after every import so the warehouse list re-reads.
+  const [version, setVersion] = useState(0);
+  return (
+    <div className="space-y-8">
+      <ItemsPanel onChanged={() => setVersion((v) => v + 1)} />
+      <WarehousesPanel key={version} hideWhenEmpty />
+    </div>
+  );
 }

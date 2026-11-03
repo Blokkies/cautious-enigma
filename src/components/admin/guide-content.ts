@@ -135,11 +135,11 @@ export const SETUP_GUIDES: Record<SetupStep, GuideContent> = {
       "Add your counting teams. For more than a handful, use bulk create or import them from an Excel sheet (Team Name, PIN, Members).",
       "Give each team a PIN of 4 to 6 digits and, optionally, list the members' names.",
       "Add at least one supervisor with their own PIN. You cannot go live without one.",
-      "Add auditors if someone independent needs to check counts. This is optional.",
+      "Add auditors if someone independent needs to watch progress and results without changing anything. This is optional.",
       "Note the PINs down or print the login sheet on the final step so you can hand them out.",
     ],
     tips: [
-      "Teams count the bins assigned to them and raise queries. Supervisors review variances, order recounts and approve breakdowns. Auditors carry out the verification counts supervisors order.",
+      "Teams count the bins assigned to them and raise queries. Supervisors review variances, send recounts to a different team and approve breakdowns. Auditors see the supervisor screens read-only.",
       "Teams can log in during setup to check their PIN works, but counting only opens once you go live.",
       "In the Excel import, format the PIN column as text so PINs that start with 0 keep their zero.",
       "You can add or edit teams and PINs later, including while the count is live.",
@@ -155,7 +155,7 @@ export const SETUP_GUIDES: Record<SetupStep, GuideContent> = {
         items: [
           "Team: counts its assigned bins on a phone or tablet.",
           "Supervisor: monitors progress, reviews variances, answers queries.",
-          "Auditor: performs verification counts ordered by a supervisor.",
+          "Auditor: sees the supervisor screens read-only and can download exports. Cannot change anything.",
           "Admin (you): sets up the stocktake, controls its status and exports results.",
         ],
       },

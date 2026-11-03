@@ -1,301 +1,587 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Archive,
-  CheckCircle2,
-  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  Check,
+  CircleDot,
   Clock,
+  FileOutput,
   Loader2,
-  Users,
   MessageSquare,
   Package,
+  Plus,
+  RotateCw,
   ScanBarcode,
-  UserCheck,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { downloadAllAsZip } from "@/lib/download-all-zip";
-import { adminRoutes } from "@/lib/admin-routes";
+import { adminRoutes, SETUP_STEP_LABELS, SETUP_STEPS } from "@/lib/admin-routes";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { PageHeader } from "@/components/admin/page-header";
 import { StatusBadge } from "@/components/admin/status-badge";
-import { EmptyState } from "@/components/admin/empty-state";
-import { PageSkeleton } from "@/components/admin/loading-state";
-import Link from "next/link";
-import { ClipboardList } from "lucide-react";
+import { StatCard } from "@/components/admin/stat-card";
+import { ErrorState } from "@/components/admin/error-state";
+import { StatCardsSkeleton } from "@/components/admin/loading-state";
+import { EventMeta } from "@/components/admin/event-workspace";
+import {
+  countByStatus,
+  eventZipName,
+  groupEvents,
+  setupChecklist,
+  timeAgo,
+  type DashboardEvent,
+} from "@/components/admin/event-list";
 
-interface EventSummary {
-  id: number;
-  name: string;
-  location: string | null;
-  status: string;
-  startDate: string | null;
-  totalItems: number;
-  countedItems: number;
-  matchedItems: number;
-  varianceItems: number;
-  varianceValue: number;
-  overCount: number;
-  overValue: number;
-  underCount: number;
-  underValue: number;
-  netVarianceValue: number;
-  progressPercent: number;
-  teamCount: number;
-  supervisorCount: number;
-  openQueries: number;
-  pendingBreakdowns: number;
-  openSerialDiscrepancies: number;
-  /** Setup checklist counts (setup events only). */
-  setup: { itemCount: number; teamCount: number; supervisorCount: number; unassignedCount: number } | null;
-}
+const REFRESH_MS = 15_000;
 
-// Overview. Interim: the previous dashboard inside the new shell; phase 2 rebuilds it
-// (welcome card, status tiles, Live now / In setup / Finished groups).
-export default function AdminOverviewPage() {
-  const [events, setEvents] = useState<EventSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [downloadingEventId, setDownloadingEventId] = useState<number | null>(null);
-  const router = useRouter();
+/** Polls the dashboard. Refreshes keep the current data on screen (no flicker). */
+function useDashboard() {
+  const [events, setEvents] = useState<DashboardEvent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const inFlight = useRef(false);
 
-  const handleDownloadAll = async (e: React.MouseEvent, event: EventSummary) => {
-    e.stopPropagation();
-    setDownloadingEventId(event.id);
+  const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
-      const safeName = event.name.replace(/[^a-zA-Z0-9_\- ]/g, "").trim().replace(/\s+/g, "_");
-      await downloadAllAsZip(event.id, `${safeName}_all_exports.zip`);
-      toast.success("ZIP download started");
+      const res = await fetch("/api/admin/dashboard", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `The server answered ${res.status}.`);
+      setEvents(Array.isArray(data?.events) ? data.events : []);
+      setError(null);
+      setUpdatedAt(new Date());
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "ZIP download failed");
+      setError(err instanceof Error ? err.message : "Check your connection and try again.");
     } finally {
-      setDownloadingEventId(null);
-    }
-  };
-
-  const loadDashboard = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/dashboard");
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data.events);
-      }
-    } catch {
-      // will retry
-    } finally {
-      setLoading(false);
+      inFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
-    loadDashboard();
-    const interval = setInterval(loadDashboard, 15000);
-    return () => clearInterval(interval);
-  }, [loadDashboard]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; state is set once the request resolves
+    void load();
+    const timer = setInterval(() => {
+      if (typeof document === "undefined" || !document.hidden) load();
+    }, REFRESH_MS);
+    const onVisible = () => {
+      if (!document.hidden) load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
 
-  if (loading) {
-    return <PageSkeleton />;
+  const retry = useCallback(() => {
+    setRetrying(true);
+    load().finally(() => setRetrying(false));
+  }, [load]);
+
+  return { events, error, retrying, updatedAt, retry };
+}
+
+export default function AdminOverviewPage() {
+  const { events, error, retrying, updatedAt, retry } = useDashboard();
+
+  const header = (
+    <PageHeader
+      title="Overview"
+      description="Every stocktake at a glance. Live numbers refresh every 15 seconds."
+      actions={
+        events && events.length > 0 ? (
+          <Button asChild>
+            <Link href={adminRoutes.newEvent}>
+              <Plus />
+              New stocktake
+            </Link>
+          </Button>
+        ) : undefined
+      }
+    >
+      {events && events.length > 0 && <RefreshNote updatedAt={updatedAt} refreshing={retrying} error={error} onRetry={retry} />}
+    </PageHeader>
+  );
+
+  if (events === null) {
+    return (
+      <>
+        {header}
+        {error ? (
+          <ErrorState title="Could not load the overview" message={error} onRetry={retry} retrying={retrying} />
+        ) : (
+          <OverviewSkeleton />
+        )}
+      </>
+    );
   }
 
-  // Live first (by progress ascending), then setup, then completed/locked
-  const rank = (status: string) => (status === "active" ? 0 : status === "setup" ? 1 : 2);
-  const sorted = [...events].sort((a, b) => rank(a.status) - rank(b.status) || a.progressPercent - b.progressPercent);
+  if (events.length === 0) {
+    return (
+      <>
+        {header}
+        <Welcome />
+      </>
+    );
+  }
+
+  const counts = countByStatus(events);
+  const groups = groupEvents(events);
+  const finished = [...groups.finished, ...groups.other];
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        className="mb-0"
-        title="Overview"
-        description="Every stocktake at a glance. Live counts refresh every 15 seconds."
+    <>
+      {header}
+      <div className="space-y-8">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Live now" value={counts.active} icon={CircleDot} hint="Counting open" href={`${adminRoutes.events}?status=active`} />
+          <StatCard label="In setup" value={counts.setup} icon={Clock} hint="Being prepared" href={`${adminRoutes.events}?status=setup`} />
+          <StatCard label="Completed" value={counts.completed} icon={Check} hint="Ready to review and export" href={`${adminRoutes.events}?status=completed`} />
+          <StatCard label="Locked" value={counts.locked} icon={Archive} hint="Closed and archived" href={`${adminRoutes.events}?status=locked`} />
+        </div>
+
+        {groups.live.length > 0 && (
+          <Section title="Live now" description="Teams are counting. Open an event to follow progress or reassign bins.">
+            <div className="grid gap-4 xl:grid-cols-2">
+              {groups.live.map((e) => (
+                <LiveEventCard key={e.id} event={e} />
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {groups.setup.length > 0 && (
+          <Section title="In setup" description="Pick up where you left off. Each step is saved as you go.">
+            <div className="grid gap-4 lg:grid-cols-2">
+              {groups.setup.map((e) => (
+                <SetupEventCard key={e.id} event={e} />
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {finished.length > 0 && (
+          <Section title="Finished" description="Counting has stopped. Review the results and send the variances to NetSuite.">
+            <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+              {finished.map((e) => (
+                <FinishedEventRow key={e.id} event={e} />
+              ))}
+            </div>
+          </Section>
+        )}
+      </div>
+    </>
+  );
+}
+
+function RefreshNote({
+  updatedAt,
+  refreshing,
+  error,
+  onRetry,
+}: {
+  updatedAt: Date | null;
+  refreshing: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  if (error) {
+    return (
+      <p className="flex flex-wrap items-center gap-2 text-xs text-red-700" role="status">
+        Could not refresh: {error}
+        <button type="button" onClick={onRetry} className="font-medium underline underline-offset-2 hover:text-red-900">
+          Try again
+        </button>
+      </p>
+    );
+  }
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-slate-500" aria-live="polite">
+      <RotateCw className={cn("h-3 w-3", refreshing && "animate-spin motion-reduce:animate-none")} aria-hidden="true" />
+      {updatedAt
+        ? `Updated ${updatedAt.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+        : "Updating…"}
+    </p>
+  );
+}
+
+function Section({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+        <p className="text-sm text-slate-500">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const PHASES = [
+  {
+    title: "Set up",
+    body: "Name the stocktake, upload the NetSuite stock file, add teams and supervisors, and assign every bin to a team. The wizard walks you through it.",
+  },
+  {
+    title: "Go live",
+    body: "Hand out the login sheet and open counting. Teams log in on their phones with a PIN.",
+  },
+  {
+    title: "Count",
+    body: "Teams count their bins, even offline. You and the supervisors watch progress here in real time.",
+  },
+  {
+    title: "Review",
+    body: "Supervisors check variances, order recounts and resolve serial number differences.",
+  },
+  {
+    title: "Close & export",
+    body: "Mark the stocktake complete, download the NetSuite adjustment files and lock it.",
+  },
+];
+
+function Welcome() {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white">
+      <div className="border-b border-slate-100 p-5 sm:p-8">
+        <h2 className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl">Welcome. Let&apos;s run your first stocktake.</h2>
+        <p className="mt-2 max-w-2xl text-sm text-slate-600">
+          Every stocktake goes through the same five phases. Setting one up takes about fifteen minutes if you have the
+          NetSuite stock file ready, and you can stop and come back at any point.
+        </p>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <Button asChild size="lg">
+            <Link href={adminRoutes.newEvent}>
+              <Plus />
+              Create your first stocktake
+            </Link>
+          </Button>
+          <Button asChild variant="ghost" size="lg" className="text-slate-600">
+            <Link href={adminRoutes.help("lifecycle")}>Read the guide first</Link>
+          </Button>
+        </div>
+      </div>
+      <ol className="grid divide-y divide-slate-100 sm:grid-cols-5 sm:divide-x sm:divide-y-0">
+        {PHASES.map((phase, i) => (
+          <li key={phase.title} className="p-5">
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums",
+                  i === 0 ? "bg-primary text-primary-foreground" : "bg-slate-100 text-slate-600"
+                )}
+              >
+                {i + 1}
+              </span>
+              <h3 className="text-sm font-semibold text-slate-900">{phase.title}</h3>
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">{phase.body}</p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function CardShell({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <article className={cn("flex flex-col rounded-lg border border-slate-200 bg-white p-4 sm:p-5", className)}>{children}</article>;
+}
+
+function CardTitle({ event }: { event: DashboardEvent }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0 space-y-1">
+        <h3 className="truncate text-base font-semibold text-slate-900">
+          <Link href={adminRoutes.event(event.id)} className="rounded hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {event.name}
+          </Link>
+        </h3>
+        <EventMeta location={event.location} startDate={event.startDate} endDate={event.endDate} />
+      </div>
+      <StatusBadge status={event.status} />
+    </div>
+  );
+}
+
+function Figure({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "positive" | "warning" | "negative" | "muted" }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-slate-500">{label}</dt>
+      <dd
+        className={cn(
+          "mt-0.5 truncate text-sm font-semibold tabular-nums",
+          tone === "positive" && "text-emerald-700",
+          tone === "warning" && "text-amber-700",
+          tone === "negative" && "text-red-700",
+          tone === "muted" && "text-slate-500",
+          !tone && "text-slate-900"
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function Attention({ icon: Icon, count, label, tone }: { icon: typeof MessageSquare; count: number; label: string; tone: "amber" | "violet" }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset",
+        tone === "amber" ? "bg-amber-50 text-amber-800 ring-amber-600/20" : "bg-violet-50 text-violet-700 ring-violet-600/20"
+      )}
+    >
+      <Icon className="h-3 w-3" aria-hidden="true" />
+      {formatNumber(count)} {label}
+    </span>
+  );
+}
+
+function LiveEventCard({ event }: { event: DashboardEvent }) {
+  const pending = Math.max(0, event.totalItems - event.countedItems);
+  const lastCount = timeAgo(event.lastCountAt);
+  const hasAttention = event.openQueries + event.pendingBreakdowns + event.openSerialDiscrepancies > 0;
+
+  return (
+    <CardShell>
+      <CardTitle event={event} />
+
+      <div className="mt-5 flex items-end justify-between gap-3">
+        <div>
+          <div className="text-3xl font-semibold tabular-nums tracking-tight text-slate-900">{event.progressPercent}%</div>
+          <div className="text-xs text-slate-500">
+            {formatNumber(event.countedItems)} of {formatNumber(event.totalItems)} items counted
+          </div>
+        </div>
+        <div className="text-right text-xs text-slate-500">{lastCount ? `Last count ${lastCount}` : "No counts yet"}</div>
+      </div>
+      <Progress
+        value={event.progressPercent}
+        className="mt-2 h-2 bg-slate-100"
+        aria-label={`${event.progressPercent}% counted`}
       />
 
-      {sorted.length === 0 ? (
-        <EmptyState
-          icon={ClipboardList}
-          title="No stocktakes yet"
-          description="A stocktake goes through five phases: set up, go live, count, review, then close and export to NetSuite. Start by creating your first one."
-          action={
-            <Button asChild>
-              <Link href={adminRoutes.events}>Create your first stocktake</Link>
-            </Button>
-          }
+      <dl className="mt-5 grid grid-cols-3 gap-3 border-t border-slate-100 pt-4">
+        <Figure label="Matched" value={formatNumber(event.matchedItems)} tone="positive" />
+        <Figure label="Variances" value={formatNumber(event.varianceItems)} tone={event.varianceItems > 0 ? "warning" : undefined} />
+        <Figure label="Pending" value={formatNumber(pending)} tone="muted" />
+        <Figure label={`Over (${formatNumber(event.overCount)})`} value={formatMoney(event.overValue, { decimals: 0 })} tone="warning" />
+        <Figure label={`Under (${formatNumber(event.underCount)})`} value={formatMoney(-Math.abs(event.underValue), { decimals: 0 })} tone="negative" />
+        <Figure
+          label="Net"
+          value={formatMoney(event.netVarianceValue, { decimals: 0, signed: true })}
+          tone={event.netVarianceValue > 0 ? "warning" : event.netVarianceValue < 0 ? "negative" : undefined}
         />
-      ) : (
-        sorted.map((event) => event.setup ? (
-          <Card
-            key={event.id}
-            className="cursor-pointer transition-colors hover:border-slate-300"
-            onClick={() => router.push(adminRoutes.event(event.id))}
+      </dl>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <span className="inline-flex items-center gap-1">
+          <Users className="h-3.5 w-3.5" aria-hidden="true" />
+          {event.teamCount} {event.teamCount === 1 ? "team" : "teams"}, {event.supervisorCount}{" "}
+          {event.supervisorCount === 1 ? "supervisor" : "supervisors"}
+        </span>
+        {hasAttention && <span className="text-slate-300" aria-hidden="true">|</span>}
+        <Attention icon={MessageSquare} count={event.openQueries} label={event.openQueries === 1 ? "open query" : "open queries"} tone="amber" />
+        <Attention icon={Package} count={event.pendingBreakdowns} label={event.pendingBreakdowns === 1 ? "breakdown to approve" : "breakdowns to approve"} tone="amber" />
+        <Attention
+          icon={ScanBarcode}
+          count={event.openSerialDiscrepancies}
+          label={event.openSerialDiscrepancies === 1 ? "serial discrepancy" : "serial discrepancies"}
+          tone="violet"
+        />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+        <Button asChild size="sm">
+          <Link href={adminRoutes.event(event.id)}>
+            Open event
+            <ArrowRight />
+          </Link>
+        </Button>
+        <Button asChild size="sm" variant="outline">
+          <Link href={adminRoutes.event(event.id, "results")}>
+            <BarChart3 />
+            Results
+          </Link>
+        </Button>
+        <Button asChild size="sm" variant="ghost" className="text-slate-600">
+          <Link href={adminRoutes.event(event.id, "bins")}>Bins</Link>
+        </Button>
+      </div>
+    </CardShell>
+  );
+}
+
+function SetupEventCard({ event }: { event: DashboardEvent }) {
+  const counts = event.setup ?? { itemCount: 0, teamCount: 0, supervisorCount: 0, unassignedCount: 0 };
+  const checklist = setupChecklist(counts);
+  const steps = SETUP_STEPS.filter((s) => s !== "review");
+
+  const detail: Record<(typeof steps)[number], string> = {
+    details: "Name and dates",
+    items: counts.itemCount > 0 ? `${formatNumber(counts.itemCount)} items` : "No stock file yet",
+    warehouses: counts.itemCount > 0 ? "In scope chosen" : "After the stock file",
+    people:
+      counts.teamCount > 0 || counts.supervisorCount > 0
+        ? `${counts.teamCount} ${counts.teamCount === 1 ? "team" : "teams"}, ${counts.supervisorCount} ${counts.supervisorCount === 1 ? "supervisor" : "supervisors"}`
+        : "No teams yet",
+    bins:
+      counts.itemCount === 0
+        ? "After the stock file"
+        : counts.unassignedCount === 0
+          ? "All assigned"
+          : `${formatNumber(counts.unassignedCount)} items unassigned`,
+  };
+
+  return (
+    <CardShell>
+      <CardTitle event={event} />
+
+      <div className="mt-5 flex items-center justify-between gap-3 text-xs text-slate-500">
+        <span>
+          {checklist.completed} of {checklist.total} setup steps done
+        </span>
+        {checklist.ready && <span className="font-medium text-emerald-700">Ready to go live</span>}
+      </div>
+      <Progress value={checklist.percent} className="mt-2 h-1.5 bg-slate-100" aria-label={`${checklist.completed} of ${checklist.total} setup steps done`} />
+
+      <ul className="mt-4 flex-1 space-y-2">
+        {steps.map((step) => {
+          const done = checklist.done[step];
+          const isNext = !checklist.ready && checklist.next === step;
+          return (
+            <li key={step} className="flex items-center gap-2.5 text-sm">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
+                  done ? "bg-emerald-500 text-white" : isNext ? "border-2 border-primary" : "border border-slate-300"
+                )}
+              >
+                {done && <Check className="h-2.5 w-2.5" strokeWidth={3} />}
+              </span>
+              <span className={cn("w-24 shrink-0", done ? "text-slate-700" : isNext ? "font-medium text-slate-900" : "text-slate-500")}>
+                {SETUP_STEP_LABELS[step]}
+              </span>
+              <span className="truncate text-xs text-slate-500">
+                <span className="sr-only">{done ? "Done: " : "To do: "}</span>
+                {detail[step]}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+        <Button asChild size="sm">
+          <Link href={adminRoutes.setup(event.id, checklist.next)}>
+            {checklist.ready ? "Review and go live" : `Continue setup: ${SETUP_STEP_LABELS[checklist.next]}`}
+            <ArrowRight />
+          </Link>
+        </Button>
+        <Button asChild size="sm" variant="ghost" className="text-slate-600">
+          <Link href={adminRoutes.event(event.id)}>Open event</Link>
+        </Button>
+      </div>
+    </CardShell>
+  );
+}
+
+function FinishedEventRow({ event }: { event: DashboardEvent }) {
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const download = async () => {
+    setDownloading("Starting…");
+    try {
+      await downloadAllAsZip(event.id, eventZipName(event.name), (done, total) => setDownloading(`${done} of ${total} files`));
+      toast.success(`Reports for "${event.name}" downloaded`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "The ZIP could not be built. Try again.");
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:gap-6">
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={adminRoutes.event(event.id)}
+            className="truncate rounded text-sm font-semibold text-slate-900 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <CardContent className="pt-6">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="text-lg font-semibold">{event.name}</h2>
-                  {event.location && <div className="text-sm text-muted-foreground">{event.location}</div>}
-                </div>
-                <StatusBadge status={event.status} />
-              </div>
-              <ul className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                <li><span className="font-semibold tabular-nums">{formatNumber(event.setup.itemCount)}</span> <span className="text-muted-foreground">items</span></li>
-                <li><span className="font-semibold tabular-nums">{event.setup.teamCount}</span> <span className="text-muted-foreground">teams</span></li>
-                <li><span className="font-semibold tabular-nums">{event.setup.supervisorCount}</span> <span className="text-muted-foreground">supervisors</span></li>
-                <li><span className="font-semibold tabular-nums">{formatNumber(event.setup.unassignedCount)}</span> <span className="text-muted-foreground">unassigned</span></li>
-              </ul>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card
-            key={event.id}
-            className="cursor-pointer transition-colors hover:border-slate-300"
-            onClick={() => router.push(adminRoutes.event(event.id, "results"))}
-          >
-            <CardContent className="pt-6">
-              {/* Header: name + location + status badge */}
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold">{event.name}</h2>
-                  {event.location && (
-                    <div className="text-sm text-muted-foreground">
-                      {event.location}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-8 w-8"
-                    disabled={downloadingEventId === event.id}
-                    onClick={(e) => handleDownloadAll(e, event)}
-                    title="Download all exports as ZIP"
-                  >
-                    {downloadingEventId === event.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Archive className="h-4 w-4" />
-                    )}
-                  </Button>
-<StatusBadge status={event.status} />
-                </div>
-              </div>
+            {event.name}
+          </Link>
+          <StatusBadge status={event.status} size="sm" />
+        </div>
+        <EventMeta location={event.location} startDate={event.startDate} endDate={event.endDate} />
+      </div>
+      <dl className="grid grid-cols-3 gap-4 md:w-80">
+        <Figure label="Counted" value={`${event.progressPercent}%`} />
+        <Figure label="Variances" value={formatNumber(event.varianceItems)} />
+        <Figure
+          label="Net"
+          value={formatMoney(event.netVarianceValue, { decimals: 0, signed: true })}
+          tone={event.netVarianceValue > 0 ? "warning" : event.netVarianceValue < 0 ? "negative" : undefined}
+        />
+      </dl>
+      <div className="flex flex-wrap gap-2 md:justify-end">
+        <Button asChild size="sm" variant="outline">
+          <Link href={adminRoutes.event(event.id, "results")}>
+            <BarChart3 />
+            Results
+          </Link>
+        </Button>
+        <Button asChild size="sm" variant="outline">
+          <Link href={adminRoutes.event(event.id, "exports")}>
+            <FileOutput />
+            Exports
+          </Link>
+        </Button>
+        <Button size="sm" variant="ghost" className="text-slate-600" onClick={download} disabled={downloading !== null} title="Download every report for this event as one ZIP">
+          {downloading ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <Archive />}
+          {downloading ?? "Download all reports"}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
-              {/* Progress */}
-              <div className="text-center mb-3">
-                <div className="text-4xl font-bold text-primary">
-                  {event.progressPercent}%
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {event.countedItems} / {event.totalItems} items counted
-                </div>
+function OverviewSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" className="space-y-8">
+      <StatCardsSkeleton />
+      <div className="space-y-3">
+        <Skeleton className="h-5 w-32" />
+        <div className="grid gap-4 xl:grid-cols-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="rounded-lg border border-slate-200 bg-white p-5">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="mt-2 h-4 w-32" />
+              <Skeleton className="mt-6 h-8 w-20" />
+              <Skeleton className="mt-3 h-2 w-full" />
+              <div className="mt-6 grid grid-cols-3 gap-3">
+                {Array.from({ length: 6 }, (_, j) => (
+                  <Skeleton key={j} className="h-8" />
+                ))}
               </div>
-              <Progress
-                value={event.progressPercent}
-                className="h-3 mb-4"
-              />
-
-              {/* Stats grid */}
-              <div className="grid grid-cols-3 gap-4 text-center mb-4">
-                <div>
-                  <div className="text-xl font-bold text-green-600">
-                    {event.matchedItems}
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" />
-                    Matched
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xl font-bold text-amber-600">
-                    {event.varianceItems}
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                    <AlertTriangle className="h-3 w-3" />
-                    Variances
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xl font-bold text-gray-500">
-                    {event.totalItems - event.countedItems}
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    Pending
-                  </div>
-                </div>
-              </div>
-
-              {/* Variance breakdown strip */}
-              <div className="flex items-center justify-between gap-3 px-3 py-2 bg-muted/40 rounded-lg mb-4 text-sm">
-                <div className="flex items-center gap-1">
-                  <span className="text-amber-600 font-semibold">
-                    {formatMoney(event.overValue, { decimals: 0 })}
-                  </span>
-                  <span className="text-muted-foreground text-xs">
-                    ({event.overCount}) over
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-red-600 font-semibold">
-                    {formatMoney(event.underValue, { decimals: 0 })}
-                  </span>
-                  <span className="text-muted-foreground text-xs">
-                    ({event.underCount}) under
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className={`font-semibold ${event.netVarianceValue >= 0 ? "text-green-600" : "text-red-600"}`}>
-                    {formatMoney(event.netVarianceValue, { decimals: 0 })}
-                  </span>
-                  <span className="text-muted-foreground text-xs">net</span>
-                </div>
-              </div>
-
-              {/* Footer: teams, supervisors, queries, breakdowns, serial discrepancies */}
-              <div className="flex flex-wrap gap-3 text-xs text-muted-foreground border-t pt-3">
-                <span className="flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  {event.teamCount} teams
-                </span>
-                <span className="flex items-center gap-1">
-                  <UserCheck className="h-3 w-3" />
-                  {event.supervisorCount} supervisors
-                </span>
-                {event.openQueries > 0 && (
-                  <Badge
-                    variant="outline"
-                    className="text-[10px] border-amber-400 text-amber-700"
-                  >
-                    <MessageSquare className="h-3 w-3 mr-1" />
-                    {event.openQueries} open queries
-                  </Badge>
-                )}
-                {event.pendingBreakdowns > 0 && (
-                  <Badge
-                    variant="outline"
-                    className="text-[10px] border-amber-400 text-amber-700"
-                  >
-                    <Package className="h-3 w-3 mr-1" />
-                    {event.pendingBreakdowns} pending breakdowns
-                  </Badge>
-                )}
-                {event.openSerialDiscrepancies > 0 && (
-                  <Badge
-                    variant="outline"
-                    className="text-[10px] border-purple-400 text-purple-700"
-                  >
-                    <ScanBarcode className="h-3 w-3 mr-1" />
-                    {event.openSerialDiscrepancies} serial discrepancies
-                  </Badge>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))
-      )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

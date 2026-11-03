@@ -56,6 +56,7 @@ function formatCurrency(value: number): string {
 const statusColors: Record<string, string> = {
   active: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
   completed: "bg-blue-500/10 text-blue-700 border-blue-500/20",
+  locked: "bg-slate-500/10 text-slate-700 border-slate-500/20",
 };
 
 const EVENT_COLORS = [
@@ -186,7 +187,7 @@ export default function ExecutiveDashboard() {
   if (events.length === 0) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">No active or completed events found.</p>
+        <p className="text-muted-foreground">No active, completed or locked events found.</p>
       </div>
     );
   }
@@ -223,7 +224,7 @@ export default function ExecutiveDashboard() {
               >
                 <div className={cn(
                   "h-2 w-2 rounded-full",
-                  event.status === "active" ? "bg-emerald-500" : "bg-blue-500"
+                  event.status === "active" ? "bg-emerald-500" : event.status === "locked" ? "bg-slate-500" : "bg-blue-500"
                 )} />
                 <span className={cn("font-medium", isSelected ? "text-foreground" : "text-muted-foreground")}>
                   {event.name}

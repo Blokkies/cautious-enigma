@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { exportToExcel, parseExcel, parseNumericCell } from "./excel";
+import { exportToExcel, normalizeWarehouse, NO_WAREHOUSE, parseExcel, parseNumericCell } from "./excel";
 import { generateTeamTemplate, parseTeamExcel } from "./team-excel";
 
 function workbookFromRows(rows: unknown[][], sheetName = "Sheet1"): ArrayBuffer {
@@ -100,6 +100,67 @@ describe("parseExcel", () => {
   });
 });
 
+describe("parseExcel blank first-row cells", () => {
+  it("keeps columns that are blank in the first data row", () => {
+    const result = parseExcel(
+      workbookFromRows([
+        ["Item", "Serial Number", "Warehouse", "Qty"],
+        ["A1", null, null, 1],
+        ["A2", "SN-2", "JHB", 1],
+      ])
+    );
+    expect(result.headers).toEqual(["Item", "Serial Number", "Warehouse", "Qty"]);
+    expect(result.mappedFields).toContain("Serial Number -> serialNumber");
+    expect(result.items[0]).toMatchObject({ itemCode: "A1", serialNumber: "", warehouse: "" });
+    expect(result.items[1]).toMatchObject({ itemCode: "A2", serialNumber: "SN-2", warehouse: "JHB" });
+    expect(result.rowCount).toBe(2);
+  });
+
+});
+
+describe("parseExcel CSV input", () => {
+  const csv = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
+
+  it("splits CSV on commas and keeps quoted commas inside fields", () => {
+    const result = parseExcel(
+      csv('Item,Description,Qty,Avg Cost\n0500,"Widget, large","1,234",R 2.50\n'),
+      { filename: "stock.csv" }
+    );
+    expect(result.headers).toEqual(["Item", "Description", "Qty", "Avg Cost"]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      itemCode: "0500", // text kept, leading zero preserved
+      description: "Widget, large",
+      onHand: 1234,
+      avgCost: 2.5,
+      totalValue: 3085,
+    });
+  });
+
+  it("does not sniff ';' as the separator for CSV files", () => {
+    const result = parseExcel(csv("Item;Qty\nA1;3\n"), { filename: "stock.CSV" });
+    expect(result.headers).toEqual(["Item;Qty"]);
+    expect(result.items).toEqual([]);
+  });
+
+  it("detects CSV by MIME type", () => {
+    const result = parseExcel(csv('Item,Qty\nA1,"1,500"\n'), { mimeType: "text/csv" });
+    expect(result.items[0]).toMatchObject({ itemCode: "A1", onHand: 1500 });
+  });
+});
+
+describe("normalizeWarehouse", () => {
+  it.each([
+    ["", NO_WAREHOUSE],
+    ["   ", NO_WAREHOUSE],
+    [null, NO_WAREHOUSE],
+    [undefined, NO_WAREHOUSE],
+    [" JHB ", "JHB"],
+  ] as const)("%j -> %j", (input, expected) => {
+    expect(normalizeWarehouse(input)).toBe(expected);
+  });
+});
+
 describe("parseNumericCell", () => {
   it.each([
     [42, 42],
@@ -111,6 +172,18 @@ describe("parseNumericCell", () => {
     ["1 234", 1234],
     ["abc", 0],
     ["", 0],
+    // commas are always thousands separators
+    ["1,234", 1234],
+    ["12,345,678", 12345678],
+    ["1,234.56", 1234.56],
+    ["12,5", 125],
+    // currency markers
+    ["R 12.50", 12.5],
+    ["R12.50", 12.5],
+    ["ZAR 1 234.50", 1234.5],
+    ["zar1,000", 1000],
+    ["-R 5", -5],
+    ["R -5", -5],
   ] as const)("%j -> %j", (input, expected) => {
     expect(parseNumericCell(input)).toBe(expected);
   });
@@ -164,6 +237,39 @@ describe("parseTeamExcel", () => {
     ]);
     expect(parseTeamExcel(workbookFromRows([["Team Name"], ["A"]])).errors).toEqual([
       { row: 0, message: "Missing required column: PIN" },
+    ]);
+  });
+
+  it("keeps PIN and Members columns that are blank in the first data row", () => {
+    const result = parseTeamExcel(
+      workbookFromRows([
+        ["Team Name", "Members", "PIN"],
+        ["Alpha", null, null],
+        ["Beta", "Bob", "0042"],
+      ])
+    );
+    expect(result.validTeams).toEqual([{ name: "Beta", pin: "0042", members: ["Bob"] }]);
+    expect(result.errors).toEqual([{ row: 2, message: 'Team "Alpha": PIN is empty' }]);
+  });
+
+  it("keeps leading zeros of PINs stored as numbers with a 0000 format", () => {
+    const sheet = XLSX.utils.aoa_to_sheet([["Team Name", "PIN"], ["Alpha", 42]]);
+    sheet["B2"].z = "0000";
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, "Teams");
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    expect(parseTeamExcel(buf).validTeams).toEqual([{ name: "Alpha", pin: "0042", members: [] }]);
+  });
+
+  it("uses the raw value for long numeric PINs shown in scientific notation", () => {
+    const result = parseTeamExcel(workbookFromRows([["Team Name", "PIN"], ["Alpha", 123456789012]]));
+    expect(result.validTeams[0]?.pin).toBe("123456789012");
+  });
+
+  it("reads CSV teams with quoted comma-separated members", () => {
+    const buf = new TextEncoder().encode('Team Name,PIN,Members\nAlpha,0042,"Alice, Bob"\n').buffer as ArrayBuffer;
+    expect(parseTeamExcel(buf, { filename: "teams.csv" }).validTeams).toEqual([
+      { name: "Alpha", pin: "0042", members: ["Alice", "Bob"] },
     ]);
   });
 

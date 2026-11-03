@@ -1,4 +1,5 @@
-const CACHE_NAME = "stocktake-v2";
+// v3: purge navigations cached before non-OK/redirected responses were filtered out
+const CACHE_NAME = "stocktake-v3";
 
 const STATIC_ASSETS = [
   "/",
@@ -64,11 +65,14 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          // Cache successful responses
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, clone);
-          });
+          // Only cache real, same-origin page loads: never error pages,
+          // redirects (e.g. to /login) or opaque responses.
+          if (response.ok && !response.redirected && response.type === "basic") {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, clone);
+            });
+          }
           return response;
         })
         .catch(() => {

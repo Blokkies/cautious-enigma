@@ -4,6 +4,7 @@ export interface VarianceItem {
   description: string | null;
   brand: string | null;
   binNumber: string | null;
+  warehouse?: string | null;
   onHand: number | null;
   avgCost: number | null;
   countedQty: number;
@@ -52,6 +53,19 @@ export interface EventOption {
 export type VarianceSearchMode = "contains" | "starts" | "exact" | "bin";
 
 export type AcceptAction = "accept_original" | "accept_verification";
+
+/** A recount is in progress: the server rejects accept/edit until it is submitted. */
+export function isRecountPending(v: Pick<VarianceItem, "verificationStatus">): boolean {
+  return v.verificationStatus === "pending";
+}
+
+/**
+ * Accepting or editing a count directly settles a completed-but-undecided
+ * verification (the server marks it "accepted"); mirror that locally.
+ */
+export function closeVerification(status: string | undefined): string | undefined {
+  return status === "completed" ? "accepted" : status;
+}
 
 export function filterVarianceItems(items: VarianceItem[], search: string, searchMode: VarianceSearchMode) {
   if (!search) return items;

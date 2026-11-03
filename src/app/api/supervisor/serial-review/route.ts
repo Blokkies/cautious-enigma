@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { serialDiscrepancies, teams, items, counts, auditLog } from "@/lib/db/schema";
+import { serialDiscrepancies, teams, items, counts, auditLog, verificationAssignments } from "@/lib/db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { requireUser, resolveEventId, checkEventActive, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
+import {
+  requireUser,
+  resolveEventId,
+  checkEventActive,
+  getEventWarehouses,
+  warehouseFilter,
+  filterDiscrepanciesToWarehouses,
+  mergeUnknownsIntoApproved,
+} from "@/lib/api-auth";
 import { safeJsonParse } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
@@ -18,7 +26,7 @@ export async function GET(request: NextRequest) {
 
   const warehouses = await getEventWarehouses(eventId);
 
-  const allDiscrepancies = await db
+  const eventDiscrepancies = await db
     .select({
       id: serialDiscrepancies.id,
       itemCode: serialDiscrepancies.itemCode,
@@ -41,6 +49,9 @@ export async function GET(request: NextRequest) {
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
     .where(eq(serialDiscrepancies.eventId, eventId))
     .orderBy(desc(serialDiscrepancies.createdAt));
+
+  // Same warehouse scoping as the variances page (by the source item's warehouse)
+  const allDiscrepancies = await filterDiscrepanciesToWarehouses(eventId, eventDiscrepancies, warehouses);
 
   // Batch-fetch all serialized items for this event (avoids N+1 per discrepancy)
   const allSerializedItems = await db
@@ -144,9 +155,20 @@ export async function PATCH(request: NextRequest) {
 
       // Get old value for audit
       const [oldDisc] = await db
-        .select({ unknownSerials: serialDiscrepancies.unknownSerials })
+        .select({ unknownSerials: serialDiscrepancies.unknownSerials, verificationStatus: serialDiscrepancies.verificationStatus })
         .from(serialDiscrepancies)
         .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
+
+      if (!oldDisc) {
+        return NextResponse.json({ error: "Discrepancy not found" }, { status: 404 });
+      }
+      // Same rule as the variances page: unknowns are frozen while a team verifies them
+      if (oldDisc.verificationStatus === "pending") {
+        return NextResponse.json(
+          { error: "Cannot modify serials while verification is in progress" },
+          { status: 409 }
+        );
+      }
 
       await db.update(serialDiscrepancies)
         .set({ unknownSerials: JSON.stringify(unknownSerials) })
@@ -206,7 +228,36 @@ export async function PATCH(request: NextRequest) {
         .where(and(eq(counts.itemId, itemId), eq(counts.eventId, user.eventId), eq(counts.countType, "initial")));
 
       if (existingCount) {
+        // Don't rewrite a count the supervisor already settled, or one a
+        // verification team is recounting (its result would then compete).
+        if (existingCount.checkStatus === "accepted") {
+          return NextResponse.json(
+            { error: "This count has already been accepted. Reopen it on the variances page before overriding." },
+            { status: 409 }
+          );
+        }
+        const [pendingVerification] = await db
+          .select({ id: verificationAssignments.id })
+          .from(verificationAssignments)
+          .where(
+            and(
+              eq(verificationAssignments.countId, existingCount.id),
+              eq(verificationAssignments.eventId, user.eventId),
+              eq(verificationAssignments.status, "pending")
+            )
+          );
+        if (pendingVerification) {
+          return NextResponse.json(
+            { error: "A recount is pending for this item. Wait for the verification team to submit before overriding." },
+            { status: 409 }
+          );
+        }
+
         const oldCountedQty = existingCount.countedQty;
+        // Keep the team's comment; append the supervisor note
+        const note = `Supervisor override: ${newStatus}`;
+        const comment = existingCount.comment?.trim() ? `${existingCount.comment.trim()}
+${note}` : note;
         await db.update(counts)
           .set({
             countedQty,
@@ -214,7 +265,7 @@ export async function PATCH(request: NextRequest) {
             varianceValue,
             isMatch,
             countedAt: new Date().toISOString(),
-            comment: `Supervisor override: ${newStatus}`,
+            comment,
           })
           .where(eq(counts.id, existingCount.id));
 
@@ -226,7 +277,7 @@ export async function PATCH(request: NextRequest) {
             action: "serial_override_expected",
             tableName: "counts",
             recordId: existingCount.id,
-            oldValue: JSON.stringify({ countedQty: oldCountedQty, serialNumber: item.serialNumber }),
+            oldValue: JSON.stringify({ countedQty: oldCountedQty, serialNumber: item.serialNumber, comment: existingCount.comment }),
             newValue: JSON.stringify({ countedQty, newStatus, serialNumber: item.serialNumber }),
           });
       } else {
@@ -361,39 +412,66 @@ export async function PATCH(request: NextRequest) {
     // Default: resolve
     const { resolution, resolutionType: bodyResolutionType } = body;
 
-    // Block resolve while a verification team is still working
-    const [discForResolve] = await db
-      .select({ verificationStatus: serialDiscrepancies.verificationStatus })
-      .from(serialDiscrepancies)
-      .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
+    const resolutionType: string = bodyResolutionType || "approved";
 
-    if (discForResolve?.verificationStatus === "pending") {
-      return NextResponse.json(
-        { error: "Cannot resolve while verification is in progress" },
-        { status: 409 }
-      );
+    class ResolveError extends Error {
+      constructor(message: string, public status: number) { super(message); }
     }
 
-    await db.update(serialDiscrepancies)
-      .set({
-        status: "resolved",
-        resolution: resolution || null,
-        resolutionType: bodyResolutionType || "approved",
-        resolvedBy: user.id,
-        resolvedAt: new Date().toISOString(),
-      })
-      .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)));
+    try {
+      await db.transaction(async (tx) => {
+        const [disc] = await tx
+          .select({
+            verificationStatus: serialDiscrepancies.verificationStatus,
+            unknownSerials: serialDiscrepancies.unknownSerials,
+            approvedSerials: serialDiscrepancies.approvedSerials,
+          })
+          .from(serialDiscrepancies)
+          .where(and(eq(serialDiscrepancies.id, discrepancyId), eq(serialDiscrepancies.eventId, user.eventId)))
+          .for("update");
 
-    await db.insert(auditLog)
-      .values({
-        eventId: user.eventId,
-        userId: user.id,
-        userType: "supervisor",
-        action: "serial_discrepancy_resolved",
-        tableName: "serial_discrepancies",
-        recordId: discrepancyId,
-        newValue: JSON.stringify({ resolution: resolution || null }),
+        if (!disc) throw new ResolveError("Discrepancy not found", 404);
+        // Block resolve while a verification team is still working
+        if (disc.verificationStatus === "pending") {
+          throw new ResolveError("Cannot resolve while verification is in progress", 409);
+        }
+
+        // Approving keeps the surplus: move the unknowns into approvedSerials,
+        // like approving them one by one on the variances page. Once resolved,
+        // leftover unknowns no longer count (getCountableDiscrepancySerials).
+        const serialUpdates = resolutionType === "approved"
+          ? mergeUnknownsIntoApproved(disc.unknownSerials, disc.approvedSerials)
+          : {};
+
+        await tx.update(serialDiscrepancies)
+          .set({
+            ...serialUpdates,
+            status: "resolved",
+            resolution: resolution || null,
+            resolutionType,
+            resolvedBy: user.id,
+            resolvedAt: new Date().toISOString(),
+          })
+          .where(eq(serialDiscrepancies.id, discrepancyId));
+
+        await tx.insert(auditLog)
+          .values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "supervisor",
+            action: "serial_discrepancy_resolved",
+            tableName: "serial_discrepancies",
+            recordId: discrepancyId,
+            oldValue: JSON.stringify({ unknownSerials: disc.unknownSerials, approvedSerials: disc.approvedSerials }),
+            newValue: JSON.stringify({ resolution: resolution || null, resolutionType, ...serialUpdates }),
+          });
       });
+    } catch (err) {
+      if (err instanceof ResolveError) {
+        return NextResponse.json({ error: err.message }, { status: err.status });
+      }
+      throw err;
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {

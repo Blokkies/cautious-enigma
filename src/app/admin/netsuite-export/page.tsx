@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
-import { Download, Loader2, FileSpreadsheet } from "lucide-react";
+import { Download, Loader2, FileSpreadsheet, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 interface EventInfo {
@@ -31,6 +31,12 @@ function extractFilename(contentDisposition: string | null, fallback: string): s
   return fallback;
 }
 
+interface UnreviewedInfo {
+  unreviewedCounts: number;
+  unreviewedSerials: number;
+  total: number;
+}
+
 const statusColors: Record<string, string> = {
   setup: "bg-yellow-100 text-yellow-800",
   active: "bg-green-100 text-green-800",
@@ -49,6 +55,10 @@ export default function NetSuiteExportPage() {
   const [generating, setGenerating] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [progressValue, setProgressValue] = useState(0);
+  // Unreviewed variances per event: the NetSuite files only carry accepted
+  // counts and approved serials of resolved discrepancies.
+  const [unreviewed, setUnreviewed] = useState<Record<number, UnreviewedInfo>>({});
+  const requestedUnreviewed = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     async function fetchEvents() {
@@ -65,6 +75,26 @@ export default function NetSuiteExportPage() {
     }
     fetchEvents();
   }, []);
+
+  // Fetch the excluded-unreviewed count for each selected event (once).
+  useEffect(() => {
+    const missing = Array.from(selected).filter((id) => !requestedUnreviewed.current.has(id));
+    for (const id of missing) {
+      requestedUnreviewed.current.add(id);
+      const params = new URLSearchParams({ type: "netsuite_excluded", eventId: String(id) });
+      fetch(`/api/supervisor/export?${params}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: UnreviewedInfo | null) => {
+          if (data) setUnreviewed((prev) => ({ ...prev, [id]: data }));
+        })
+        .catch(() => { /* warning is best-effort */ });
+    }
+  }, [selected]);
+
+  const selectedUnreviewed = events
+    .filter((e) => selected.has(e.id) && (unreviewed[e.id]?.total ?? 0) > 0)
+    .map((e) => ({ event: e, info: unreviewed[e.id]! }));
+  const totalUnreviewed = selectedUnreviewed.reduce((sum, u) => sum + u.info.total, 0);
 
   const allSelected = events.length > 0 && selected.size === events.length;
 
@@ -196,7 +226,34 @@ export default function NetSuiteExportPage() {
       <p className="text-sm text-muted-foreground">
         Select events to include in the NetSuite variance export. Each event produces up to 4
         variance files (nonserialized up/down, serialized up/down) organized in folders.
+        Only reviewed variances are included: accepted counts and approved serials of
+        resolved serial discrepancies.
       </p>
+
+      {totalUnreviewed > 0 && (
+        <Card className="border-amber-300 bg-amber-50">
+          <CardContent className="py-3 flex gap-3 text-sm text-amber-900">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
+            <div className="space-y-1">
+              <div className="font-medium">
+                {totalUnreviewed.toLocaleString()} unreviewed variance
+                {totalUnreviewed === 1 ? "" : "s"} will be excluded from the export
+              </div>
+              <ul className="list-disc pl-4">
+                {selectedUnreviewed.map(({ event, info }) => (
+                  <li key={event.id}>
+                    {event.name}: {info.unreviewedCounts.toLocaleString()} pending count
+                    {info.unreviewedCounts === 1 ? "" : "s"}
+                    {info.unreviewedSerials > 0 &&
+                      `, ${info.unreviewedSerials.toLocaleString()} serial${info.unreviewedSerials === 1 ? "" : "s"} in open discrepancies`}
+                  </li>
+                ))}
+              </ul>
+              <div>Review them on the supervisor variances page before exporting to include them.</div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {generating && (
         <Card>
@@ -256,6 +313,12 @@ export default function NetSuiteExportPage() {
                       <div className="text-xs text-muted-foreground">{event.startDate}</div>
                     )}
                   </div>
+                  {(unreviewed[event.id]?.total ?? 0) > 0 && selected.has(event.id) && (
+                    <Badge variant="outline" className="border-amber-300 text-amber-800 gap-1">
+                      <AlertTriangle className="h-3 w-3" />
+                      {unreviewed[event.id]!.total.toLocaleString()} unreviewed
+                    </Badge>
+                  )}
                   <Badge
                     variant="secondary"
                     className={statusColors[event.status] || ""}

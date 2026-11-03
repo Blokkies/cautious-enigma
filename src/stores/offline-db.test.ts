@@ -105,7 +105,7 @@ describe("isDefinitiveRejection", () => {
     expect(isDefinitiveRejection(s)).toBe(true);
   });
 
-  it.each([401, 408, 429, 500, 502, 503, 504, 200, 204, 302, 0])("%i is retryable / not a rejection", (s) => {
+  it.each([401, 408, 413, 423, 429, 500, 502, 503, 504, 200, 204, 302, 0])("%i is retryable / not a rejection", (s) => {
     expect(isDefinitiveRejection(s)).toBe(false);
   });
 });

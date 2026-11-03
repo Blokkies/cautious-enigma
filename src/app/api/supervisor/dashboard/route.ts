@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { stocktakeEvents, items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
+import { items, counts, teams, queries, breakdowns, serialDiscrepancies } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
+import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats, filterDiscrepanciesToWarehouses } from "@/lib/api-auth";
 import { countInt, sumFloat } from "@/lib/db/aggregates";
+import { pickDefaultReportEventId } from "@/app/api/completed/default-event";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["supervisor", "admin", "auditor", "executive"], status: 401 });
@@ -18,12 +19,8 @@ export async function GET(request: NextRequest) {
     if (paramEventId) {
       eventId = Number(paramEventId);
     } else {
-      const [latest] = await db
-        .select()
-        .from(stocktakeEvents)
-        .orderBy(sql`id DESC`)
-        .limit(1);
-      if (latest) eventId = latest.id;
+      const fallback = await pickDefaultReportEventId();
+      if (fallback) eventId = fallback;
     }
   }
 
@@ -89,15 +86,21 @@ export async function GET(request: NextRequest) {
       )
     );
 
-  const [openSerialDiscrepancies] = await db
-    .select({ count: countInt() })
-    .from(serialDiscrepancies)
-    .where(
-      and(
-        eq(serialDiscrepancies.eventId, eventId),
-        eq(serialDiscrepancies.status, "open")
-      )
-    );
+  // Warehouse-filtered by source item, like the variances and serial-review pages
+  const openSerialDiscrepancyRows = await filterDiscrepanciesToWarehouses(
+    eventId,
+    await db
+      .select({ itemCode: serialDiscrepancies.itemCode })
+      .from(serialDiscrepancies)
+      .where(
+        and(
+          eq(serialDiscrepancies.eventId, eventId),
+          eq(serialDiscrepancies.status, "open")
+        )
+      ),
+    warehouses
+  );
+  const openSerialDiscrepancies = { count: openSerialDiscrepancyRows.length };
 
   // Per-team stats (aggregated in 4 queries instead of 4×N)
   const teamList = await db.select().from(teams).where(eq(teams.eventId, eventId));

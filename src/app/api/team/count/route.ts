@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, auditLog, verificationAssignments } from "@/lib/db/schema";
 import { eq, and, inArray, asc } from "drizzle-orm";
-import { requireUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
+import { teamEventGate } from "../_lib/event-gate";
 
 /**
- * Use the client's countedAt (when the count was actually taken, possibly
- * offline) so replays can be ordered. Invalid or future timestamps fall back
- * to / are clamped at server time.
+ * The client's countedAt (when the count was actually taken, possibly offline),
+ * stored for reporting. It is NOT used to decide which count wins (device
+ * clocks can be skewed): identical submissions are deduplicated by clientId,
+ * different submissions for the same item apply in server arrival order, and
+ * within one sync batch in the client's array order. Invalid or future
+ * timestamps fall back to / are clamped at server time.
  */
 function resolveCountedAt(raw: unknown): string {
   const now = Date.now();
@@ -18,14 +22,12 @@ function resolveCountedAt(raw: unknown): string {
   return new Date(now).toISOString();
 }
 
-/** True when `incoming` is strictly older than the stored row's countedAt. */
-function isOlderThan(incoming: string, stored: string | null | undefined): boolean {
-  if (!stored) return false;
-  const a = Date.parse(incoming);
-  const b = Date.parse(stored);
-  if (isNaN(a) || isNaN(b)) return false;
-  return a < b;
-}
+/**
+ * Verification assignment statuses that lock the original team's initial
+ * count: "pending" (being verified) and "completed" (verified, awaiting the
+ * supervisor's decision; reopen also returns assignments to this state).
+ */
+const EDIT_BLOCKING_VA_STATUSES = ["pending", "completed"];
 
 /** undefined = keep existing comment; null / "" = clear it. */
 function resolveComment(incoming: unknown, existing: string | null): string | null {
@@ -33,15 +35,42 @@ function resolveComment(incoming: unknown, existing: string | null): string | nu
   return typeof incoming === "string" && incoming.length > 0 ? incoming : null;
 }
 
+/**
+ * Comment fields for updating an existing count. Changing the comment text
+ * resets the supervisor's review flag (null = unreviewed) so the edit is seen.
+ */
+function commentUpdate(
+  incoming: unknown,
+  existing: { comment: string | null; commentStatus: string | null }
+): { comment: string | null; commentStatus?: string | null } {
+  const comment = resolveComment(incoming, existing.comment);
+  return comment === existing.comment ? { comment } : { comment, commentStatus: null };
+}
+
+function isValidQty(q: unknown): q is number {
+  return typeof q === "number" && !isNaN(q) && q >= 0;
+}
+
+/**
+ * For a sync batch, the index of the entry that wins for each item: the last
+ * valid entry in the client's array order (the client sends them in save
+ * order). Earlier entries for the same item are superseded.
+ */
+function latestIndexPerItem(batch: Array<{ itemId: number; countedQty: unknown }>): Map<number, number> {
+  const latest = new Map<number, number>();
+  batch.forEach((entry, i) => {
+    if (isValidQty(entry.countedQty)) latest.set(entry.itemId, i);
+  });
+  return latest;
+}
+
 export async function POST(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["team"], status: 401, write: true });
   if (auth.response) return auth.response;
   const { user } = auth;
 
-  const lockError = await checkEventActive(user.eventId);
-  if (lockError) {
-    return NextResponse.json({ error: lockError }, { status: 403 });
-  }
+  const gate = await teamEventGate(user.eventId);
+  if (gate) return gate;
 
   try {
     const body = await request.json();
@@ -199,6 +228,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, count: result.inserted });
     }
 
+    // Replay of an already-applied submission (clientId dedup, scoped to this
+    // team). Runs before the item / pending-verification checks so a replay of
+    // a count the server already has is acknowledged rather than rejected.
+    if (clientId) {
+      const [existing] = await db
+        .select()
+        .from(counts)
+        .where(and(eq(counts.clientId, clientId), eq(counts.teamId, user.id)));
+
+      if (existing) {
+        return NextResponse.json({
+          success: true,
+          count: existing,
+          deduplicated: true,
+        });
+      }
+    }
+
     // Verify item belongs to this team
     const [item] = await db
       .select()
@@ -218,7 +265,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Block edits when item has pending verification
+    // Block edits while the item is under verification (pending, or completed
+    // but not yet decided by the supervisor)
     const [pendingVa] = await db
       .select({ id: verificationAssignments.id })
       .from(verificationAssignments)
@@ -226,7 +274,7 @@ export async function POST(request: NextRequest) {
         and(
           eq(verificationAssignments.itemId, itemId),
           eq(verificationAssignments.eventId, user.eventId),
-          eq(verificationAssignments.status, "pending")
+          inArray(verificationAssignments.status, EDIT_BLOCKING_VA_STATUSES)
         )
       );
 
@@ -235,22 +283,6 @@ export async function POST(request: NextRequest) {
         { error: "This item has a pending verification and cannot be edited" },
         { status: 403 }
       );
-    }
-
-    // Check for duplicate sync (clientId dedup - scoped to this team)
-    if (clientId) {
-      const [existing] = await db
-        .select()
-        .from(counts)
-        .where(and(eq(counts.clientId, clientId), eq(counts.teamId, user.id)));
-
-      if (existing) {
-        return NextResponse.json({
-          success: true,
-          count: existing,
-          deduplicated: true,
-        });
-      }
     }
 
     const variance = countedQty - (item.onHand || 0);
@@ -284,12 +316,10 @@ export async function POST(request: NextRequest) {
           throw new Error("SUPERVISOR_REVIEWED");
         }
 
-        // Same submission already applied by a concurrent request, or an older
-        // replay that must not overwrite a newer count: keep the stored row.
-        if (
-          (clientId && existingCount.clientId === clientId) ||
-          isOlderThan(countedAt, existingCount.countedAt)
-        ) {
+        // Same submission already applied by a concurrent request: keep the
+        // stored row. A different submission always applies (last received
+        // wins); client clocks are not trusted for ordering.
+        if (clientId && existingCount.clientId === clientId) {
           return { row: existingCount, deduplicated: true };
         }
 
@@ -300,7 +330,7 @@ export async function POST(request: NextRequest) {
             variance,
             varianceValue,
             isMatch: computedIsMatch,
-            comment: resolveComment(comment, existingCount.comment),
+            ...commentUpdate(comment, existingCount),
             countedAt,
             syncedAt: new Date().toISOString(),
             clientId: clientId || existingCount.clientId,
@@ -410,10 +440,8 @@ export async function PUT(request: NextRequest) {
   if (auth.response) return auth.response;
   const { user } = auth;
 
-  const lockError = await checkEventActive(user.eventId);
-  if (lockError) {
-    return NextResponse.json({ error: lockError }, { status: 403 });
-  }
+  const gate = await teamEventGate(user.eventId);
+  if (gate) return gate;
 
   try {
     const body = await request.json();
@@ -487,7 +515,7 @@ export async function PUT(request: NextRequest) {
         }
       }
 
-      // ── Bulk pre-fetch: pending verification assignments (block edits) ──
+      // ── Bulk pre-fetch: verification assignments that block edits ──
       const pendingVaSet = new Set<number>();
       if (allItemIds.length > 0) {
         const pendingVaRows = await tx
@@ -497,7 +525,7 @@ export async function PUT(request: NextRequest) {
             and(
               inArray(verificationAssignments.itemId, allItemIds),
               eq(verificationAssignments.eventId, user.eventId),
-              eq(verificationAssignments.status, "pending")
+              inArray(verificationAssignments.status, EDIT_BLOCKING_VA_STATUSES)
             )
           );
         for (const row of pendingVaRows) {
@@ -523,21 +551,16 @@ export async function PUT(request: NextRequest) {
         }
       }
 
-      // ── Order normal counts by countedAt and collapse to the latest per item ──
-      const resolvedAt = countBatch.map((c) => resolveCountedAt(c.countedAt));
-      const order = countBatch
-        .map((_, i) => i)
-        .sort((a, b) => resolvedAt[a].localeCompare(resolvedAt[b]));
-      const latestIndexByItem = new Map<number, number>();
-      for (const i of order) latestIndexByItem.set(countBatch[i].itemId, i);
+      // ── Collapse to the latest entry per item in the client's array order ──
+      const latestIndexByItem = latestIndexPerItem(countBatch);
 
       // ── Process normal counts (pure in-memory lookups + INSERT/UPDATE) ──
-      for (const i of order) {
+      for (let i = 0; i < countBatch.length; i++) {
         const entry = countBatch[i];
         const { itemId, countedQty, comment, clientId } = entry;
-        const countedAt = resolvedAt[i];
+        const countedAt = resolveCountedAt(entry.countedAt);
 
-        if (typeof countedQty !== "number" || isNaN(countedQty) || countedQty < 0) {
+        if (!isValidQty(countedQty)) {
           results[i] = { itemId, error: "countedQty must be a non-negative number" };
           continue;
         }
@@ -576,18 +599,14 @@ export async function PUT(request: NextRequest) {
             continue;
           }
 
-          // Older replay — a newer count is already stored; don't overwrite it
-          if (isOlderThan(countedAt, existingCount.countedAt)) {
-            results[i] = { itemId, deduplicated: true };
-            continue;
-          }
-
+          // Last received wins: this batch arrived after the stored count was
+          // written, so it applies regardless of the client's countedAt.
           const updatedValues = {
             countedQty,
             variance,
             varianceValue,
             isMatch: computedIsMatch,
-            comment: resolveComment(comment, existingCount.comment),
+            ...commentUpdate(comment, existingCount),
             countedAt,
             syncedAt: new Date().toISOString(),
             clientId: clientId || existingCount.clientId,
@@ -648,6 +667,24 @@ export async function PUT(request: NextRequest) {
           }
         }
 
+        // Re-check clientId dedup now that the assignments are locked: a
+        // concurrent single POST carrying the same clientId may have committed
+        // (completing the assignment) while we waited for the lock. Without
+        // this, that replay would be reported "not pending" and rejected
+        // locally although the server applied it.
+        const lateClientIds = verificationBatch
+          .map((v) => v.clientId)
+          .filter((id): id is string => !!id && !dedupSet.has(id));
+        if (lateClientIds.length > 0) {
+          const lateRows = await tx
+            .select({ clientId: counts.clientId })
+            .from(counts)
+            .where(and(inArray(counts.clientId, lateClientIds), eq(counts.teamId, user.id)));
+          for (const row of lateRows) {
+            if (row.clientId) dedupSet.add(row.clientId);
+          }
+        }
+
         // Bulk pre-fetch: items for verification (by itemId from assignments)
         const vaItemIds = Array.from(new Set(Array.from(vaMap.values()).map((va) => va.itemId)));
         const vaItemMap = new Map<number, typeof items.$inferSelect>();
@@ -669,7 +706,7 @@ export async function PUT(request: NextRequest) {
         for (const entry of verificationBatch) {
           const { verificationId, countedQty, comment, clientId } = entry;
 
-          if (typeof countedQty !== "number" || isNaN(countedQty) || countedQty < 0) {
+          if (!isValidQty(countedQty)) {
             verificationResults.push({ verificationId, error: "countedQty must be a non-negative number" });
             continue;
           }

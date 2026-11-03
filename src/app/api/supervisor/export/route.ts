@@ -12,6 +12,12 @@ import {
 } from "@/lib/api-auth";
 import { safeJsonParse } from "@/lib/utils";
 import { exportToExcel } from "@/lib/excel";
+import { countInt } from "@/lib/db/aggregates";
+import { pickDefaultReportEventId } from "@/app/api/completed/default-event";
+import {
+  buildDiscrepancyRows, countUnreviewedDiscrepancySerials, mergeSerializedUpRows,
+  type DiscrepancyExportRow, type VarianceAudience,
+} from "./variance-rows";
 
 // Correlated subquery: pick the initial count per item for this event.
 // The initial count is the source of truth (same as the dashboard and variances page):
@@ -28,11 +34,13 @@ function initialCountJoin(eventId: number) {
 // Build variance rows from items/counts table
 // serialized: true = serialized only, false = non-serialized only, null = both
 // direction: "up" = variance > 0, "down" = variance < 0, "both" = all variances
+// audience: "netsuite" keeps only reviewed (checkStatus 'accepted') counts
 async function buildItemVariances(
   eventId: number,
   serialized: boolean | null,
   direction: "up" | "down" | "both",
   warehouses: string[] | null,
+  audience: VarianceAudience = "review",
 ): Promise<Record<string, unknown>[]> {
   return db
     .select({
@@ -70,13 +78,13 @@ async function buildItemVariances(
         : direction === "down"
           ? sql`${counts.variance} < 0`
           : undefined,
+      audience === "netsuite" ? eq(counts.checkStatus, "accepted") : undefined,
     ))
     .orderBy(sql`abs(${counts.varianceValue}) DESC`);
 }
 
-// Build unknown/approved serial rows from discrepancies (serialized variances UP)
-async function buildDiscrepancyVariances(eventId: number, warehouses: string[] | null): Promise<Record<string, unknown>[]> {
-  const discRows = await db
+async function fetchDiscrepancies(eventId: number): Promise<DiscrepancyExportRow[]> {
+  return db
     .select({
       itemCode: serialDiscrepancies.itemCode,
       description: serialDiscrepancies.description,
@@ -91,75 +99,49 @@ async function buildDiscrepancyVariances(eventId: number, warehouses: string[] |
     .from(serialDiscrepancies)
     .innerJoin(teams, eq(serialDiscrepancies.teamId, teams.id))
     .where(eq(serialDiscrepancies.eventId, eventId));
+}
 
+// Build unknown/approved serial rows from discrepancies (serialized variances UP)
+async function buildDiscrepancyVariances(
+  eventId: number,
+  warehouses: string[] | null,
+  audience: VarianceAudience = "review",
+): Promise<Record<string, unknown>[]> {
+  const discRows = await fetchDiscrepancies(eventId);
   // Look up source item metadata for each unique itemCode
   const refMap = await buildItemRefMap(eventId, discRows.map((d) => d.itemCode), warehouses);
+  return buildDiscrepancyRows(discRows, refMap, warehouses, audience);
+}
 
-  const rows: Record<string, unknown>[] = [];
-  for (const disc of discRows) {
-    const ref = refMap.get(disc.itemCode);
+// NetSuite serialized UP: accepted over-counts on expected serials + approved
+// serials of resolved discrepancies, without adjusting the same serial twice.
+async function buildNetsuiteSerializedUp(eventId: number, warehouses: string[] | null): Promise<Record<string, unknown>[]> {
+  const [countRows, discRows] = await Promise.all([
+    buildItemVariances(eventId, true, "up", warehouses, "netsuite"),
+    buildDiscrepancyVariances(eventId, warehouses, "netsuite"),
+  ]);
+  return mergeSerializedUpRows(countRows, discRows);
+}
 
-    // Skip if source item's warehouse is not in the event's selected warehouses
-    if (isRefOutsideWarehouses(ref, warehouses)) continue;
-
-    // Resolved discrepancies contribute only their approved serials
-    const { unknowns, approved } = getCountableDiscrepancySerials(disc);
-
-    // Open unknowns
-    for (const serial of unknowns) {
-      rows.push({
-        "Item Internal ID": ref?.internalId ?? null,
-        "Item Code": disc.itemCode,
-        "Description": disc.description,
-        "Brand": ref?.brand ?? null,
-        "Category": ref?.category ?? null,
-        "Bin Number": disc.binNumber,
-        "Bin Internal ID": disc.binInternalId,
-        "Warehouse": ref?.warehouse ?? null,
-        "Division": ref?.division ?? null,
-        "Stock Status": ref?.stockStatus ?? null,
-        "Serial Number": serial,
-        "On Hand": 0,
-        "Avg Cost": ref?.avgCost ?? null,
-        "Counted Qty": 1,
-        "Variance": 1,
-        "Variance Value": ref?.avgCost != null ? 1 * ref.avgCost : null,
-        "Check Status": "pending",
-        "Count Type": "initial",
-        "Team": disc.teamName,
-        "Comment": "Unknown serial reported during count",
-        "Counted At": null,
-      });
-    }
-
-    // Approved serials
-    for (const serial of approved) {
-      rows.push({
-        "Item Internal ID": ref?.internalId ?? null,
-        "Item Code": disc.itemCode,
-        "Description": disc.description,
-        "Brand": ref?.brand ?? null,
-        "Category": ref?.category ?? null,
-        "Bin Number": disc.binNumber,
-        "Bin Internal ID": disc.binInternalId,
-        "Warehouse": ref?.warehouse ?? null,
-        "Division": ref?.division ?? null,
-        "Stock Status": ref?.stockStatus ?? null,
-        "Serial Number": serial,
-        "On Hand": 0,
-        "Avg Cost": ref?.avgCost ?? null,
-        "Counted Qty": 1,
-        "Variance": 1,
-        "Variance Value": ref?.avgCost != null ? 1 * ref.avgCost : null,
-        "Check Status": "accepted",
-        "Count Type": "initial",
-        "Team": disc.teamName,
-        "Comment": "Approved unknown serial",
-        "Counted At": null,
-      });
-    }
-  }
-  return rows;
+// How many variances the NetSuite adjustment files leave out because they are
+// not reviewed yet: non-accepted variance counts + serials of open discrepancies.
+async function countUnreviewedVariances(eventId: number, warehouses: string[] | null) {
+  const [[countRow], discRows] = await Promise.all([
+    db
+      .select({ count: countInt() })
+      .from(items)
+      .innerJoin(counts, and(initialCountJoin(eventId), eq(counts.isMatch, false)))
+      .where(and(
+        eq(items.eventId, eventId),
+        warehouseFilter(warehouses),
+        sql`coalesce(${counts.checkStatus}, 'pending') <> 'accepted'`,
+      )),
+    fetchDiscrepancies(eventId),
+  ]);
+  const refMap = await buildItemRefMap(eventId, discRows.map((d) => d.itemCode), warehouses);
+  const unreviewedCounts = countRow?.count ?? 0;
+  const unreviewedSerials = countUnreviewedDiscrepancySerials(discRows, refMap, warehouses);
+  return { unreviewedCounts, unreviewedSerials, total: unreviewedCounts + unreviewedSerials };
 }
 
 export async function GET(request: NextRequest) {
@@ -172,22 +154,22 @@ export async function GET(request: NextRequest) {
 
   let eventId = user.eventId;
 
-  // Admin/executive has eventId=0, find the latest event or use param
+  // Admin/executive has eventId=0: use the eventId param, else fall back to the
+  // active event, then the most recent completed/locked one (never setup).
   if (!eventId || eventId === 0) {
-    const paramEventId = request.nextUrl.searchParams.get("eventId");
-    if (paramEventId) {
-      eventId = Number(paramEventId);
-    } else {
-      const [latest] = await db
-        .select()
-        .from(stocktakeEvents)
-        .orderBy(sql`id DESC`)
-        .limit(1);
-      if (latest) eventId = latest.id;
-    }
+    const paramEventId = Number(request.nextUrl.searchParams.get("eventId"));
+    eventId = paramEventId > 0 ? paramEventId : (await pickDefaultReportEventId()) ?? 0;
+  }
+  if (!eventId) {
+    return NextResponse.json({ error: "No event to export" }, { status: 404 });
   }
 
   const warehouses = await getEventWarehouses(eventId);
+
+  // Count of variances held back from the NetSuite adjustment files
+  if (type === "netsuite_excluded") {
+    return NextResponse.json({ eventId, ...(await countUnreviewedVariances(eventId, warehouses)) });
+  }
 
   // Build filename prefix with warehouse name
   const [eventRow] = await db.select({ name: stocktakeEvents.name }).from(stocktakeEvents).where(eq(stocktakeEvents.id, eventId));
@@ -202,13 +184,14 @@ export async function GET(request: NextRequest) {
   if (type === "serials") {
     data = await buildSerialExport(eventId, warehouses);
   } else if (type === "variances_nonserialized_up") {
-    data = await buildItemVariances(eventId, false, "up", warehouses);
+    // NetSuite adjustment files: reviewed (accepted) variances only
+    data = await buildItemVariances(eventId, false, "up", warehouses, "netsuite");
   } else if (type === "variances_nonserialized_down") {
-    data = await buildItemVariances(eventId, false, "down", warehouses);
+    data = await buildItemVariances(eventId, false, "down", warehouses, "netsuite");
   } else if (type === "variances_serialized_up") {
-    data = await buildDiscrepancyVariances(eventId, warehouses);
+    data = await buildNetsuiteSerializedUp(eventId, warehouses);
   } else if (type === "variances_serialized_down") {
-    data = await buildItemVariances(eventId, true, "down", warehouses);
+    data = await buildItemVariances(eventId, true, "down", warehouses, "netsuite");
   } else if (type === "variances_all" || type === "variances") {
     // All variances: non-serialized (both directions) + serialized down + unknown serials up
     const [itemVariances, discrepancyVariances] = await Promise.all([
@@ -808,7 +791,9 @@ async function buildVerificationsExport(eventId: number): Promise<Record<string,
       countedAt: counts.countedAt,
     })
     .from(counts)
-    .where(and(eq(counts.eventId, eventId), eq(counts.countType, "verification"), inArray(counts.verificationId, verificationIds)));
+    .where(and(eq(counts.eventId, eventId), eq(counts.countType, "verification"), inArray(counts.verificationId, verificationIds)))
+    // Ascending id: when a verification has several counts, the latest one wins in the map below.
+    .orderBy(asc(counts.id));
 
   const verCountMap: Record<number, typeof verCounts[0]> = {};
   for (const vc of verCounts) {

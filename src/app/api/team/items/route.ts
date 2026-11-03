@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, verificationAssignments, serialDiscrepancies, teams } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { requireUser, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest) {
@@ -46,13 +46,14 @@ export async function GET(request: NextRequest) {
     )
     .orderBy(items.binNumber, items.itemCode);
 
-  // Find items with pending verification assignments (locked for original team)
+  // Items under verification (pending, or completed awaiting the supervisor's
+  // decision) are locked for the original team — mirrors /api/team/count
   const pendingVerificationItemIds = await db
     .select({ itemId: verificationAssignments.itemId })
     .from(verificationAssignments)
     .where(and(
       eq(verificationAssignments.eventId, user.eventId),
-      eq(verificationAssignments.status, "pending")
+      inArray(verificationAssignments.status, ["pending", "completed"])
     ));
   const pendingVerificationSet = new Set(pendingVerificationItemIds.map((r) => r.itemId));
 

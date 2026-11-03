@@ -31,6 +31,8 @@ interface ReadinessCheck {
   hasSupervisors: boolean;
   allItemsAssigned: boolean;
   unassignedCount: number;
+  /** Why the server will refuse activation (no items / no teams / unassigned items), or null. */
+  blocker?: string | null;
 }
 
 function ActivatePageContent() {
@@ -84,13 +86,10 @@ function ActivatePageContent() {
   const handleActivate = async () => {
     if (!selectedEventId) return;
 
-    if (readiness && !readiness.allItemsAssigned) {
-      if (
-        !confirm(
-          `${readiness.unassignedCount} items are unassigned. Activate anyway?`
-        )
-      )
-        return;
+    // The server refuses activation with no items, no teams or unassigned items
+    if (readiness?.blocker) {
+      toast.error(readiness.blocker);
+      return;
     }
 
     setActivating(true);
@@ -102,12 +101,12 @@ function ActivatePageContent() {
       });
       if (res.ok) {
         toast.success("Stocktake activated! Teams can now log in.");
-        loadEvents();
-        checkReadiness();
       } else {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         toast.error(data.error || "Activation failed");
       }
+      loadEvents();
+      checkReadiness();
     } catch {
       toast.error("Network error");
     } finally {
@@ -180,7 +179,8 @@ function ActivatePageContent() {
         loadEvents();
         checkReadiness();
       } else {
-        toast.error("Reset failed");
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Reset failed");
       }
     } catch {
       toast.error("Failed to reset stocktake");
@@ -323,11 +323,18 @@ function ActivatePageContent() {
               </div>
             )}
 
+            {readiness?.blocker && selectedEvent.status === "setup" && (
+              <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{readiness.blocker}</span>
+              </div>
+            )}
+
             {/* Action buttons */}
             {selectedEvent.status === "setup" && (
               <Button
                 onClick={handleActivate}
-                disabled={activating}
+                disabled={activating || !!readiness?.blocker}
                 className="w-full h-14 text-lg gap-2"
                 size="lg"
               >

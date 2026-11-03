@@ -278,6 +278,18 @@ ALTER TABLE stocktake_events ADD COLUMN IF NOT EXISTS upload_id INTEGER REFERENC
 CREATE INDEX IF NOT EXISTS idx_events_upload ON stocktake_events(upload_id);
 
 ALTER TABLE counts ADD COLUMN IF NOT EXISTS comment_status TEXT;
+
+ALTER TABLE serial_discrepancies ADD COLUMN IF NOT EXISTS client_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_serial_disc_client_id_team
+  ON serial_discrepancies(client_id, team_id) WHERE client_id IS NOT NULL;
+
+-- Backfill: blank warehouses are now stored as "(No warehouse)" so warehouse filters include them
+UPDATE stocktake_events e
+  SET warehouses = (e.warehouses::jsonb || '["(No warehouse)"]'::jsonb)::text
+  WHERE e.warehouses LIKE '[%'
+    AND NOT (e.warehouses::jsonb ? '(No warehouse)')
+    AND EXISTS (SELECT 1 FROM items i WHERE i.event_id = e.id AND (i.warehouse IS NULL OR trim(i.warehouse) = ''));
+UPDATE items SET warehouse = '(No warehouse)' WHERE warehouse IS NULL OR trim(warehouse) = '';
 `;
 
 const compositeIndexes = `

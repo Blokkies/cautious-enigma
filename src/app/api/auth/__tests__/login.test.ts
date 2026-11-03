@@ -109,6 +109,43 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(200);
   });
 
+  it("lets a team log into a setup event", async () => {
+    selectResults.push([{ ...EVENT, status: "setup" }], [{ id: 3, name: "Alpha", pinHash }]);
+    const res = await login({ type: "team", id: 3, pin: "1234", eventId: 7 });
+    expect(res.status).toBe(200);
+  });
+
+  it.each(["completed", "locked"])("rejects a team login into a %s event with 403", async (status) => {
+    selectResults.push([{ ...EVENT, status }], [{ id: 3, name: "Alpha", pinHash }]);
+    const res = await login({ type: "team", id: 3, pin: "1234", eventId: 7 });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(new RegExp(`stocktake is ${status}`));
+    expect(res.cookies.get("stocktake-token")).toBeUndefined();
+    // Rejected before the account (and PIN) is checked
+    expect(fromTables).toEqual([stocktakeEvents]);
+  });
+
+  it("still lets a supervisor log into a completed event", async () => {
+    selectResults.push([{ ...EVENT, status: "completed" }], [{ id: 3, name: "Alpha", pinHash }]);
+    const res = await login({ type: "supervisor", id: 3, pin: "1234", eventId: 7 });
+    expect(res.status).toBe(200);
+  });
+
+  it("requires an eventId when several events are active", async () => {
+    selectResults.push([EVENT, { ...EVENT, id: 8, name: "Second" }]);
+    const res = await login({ type: "team", id: 3, pin: "1234" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/select an event/i);
+    expect(fromTables).toEqual([stocktakeEvents]);
+  });
+
+  it("returns 400 when no eventId is given and no event is active", async () => {
+    selectResults.push([]);
+    const res = await login({ type: "team", id: 3, pin: "1234" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "No active stocktake event" });
+  });
+
   it("returns 429 once the per-IP limit is exceeded", async () => {
     const req = () =>
       POST(

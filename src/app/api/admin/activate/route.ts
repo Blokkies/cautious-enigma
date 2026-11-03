@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { stocktakeEvents, items, teams, supervisors, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, auditLog, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
-import { eq, and, sql, isNull } from "drizzle-orm";
-import { requireUser } from "@/lib/api-auth";
-import { countInt } from "@/lib/db/aggregates";
+import { eq, and, sql } from "drizzle-orm";
+import { getEventWarehouses, requireUser } from "@/lib/api-auth";
 import { checkEventWritable } from "../event-guard";
 import { ACTIVATE_PUT_TARGETS, canActivate, checkActivatePutTransition } from "@/lib/event-status";
+import { lockEventRow, parseEventWarehouses, RouteError, routeErrorResponse } from "../event-lock";
+import { activationBlocker, getActivationReadiness } from "../readiness";
+import { deleteEventCascade } from "../events/delete-event";
 
-// GET: Check readiness
+// GET: Check readiness (scoped to the event's selected warehouses)
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["admin"] });
   if (auth.response) return auth.response;
@@ -18,20 +20,15 @@ export async function GET(request: NextRequest) {
   }
 
   const eid = Number(eventId);
-
-  const [[itemCount], [teamCount], [supervisorCount], [unassignedCount]] = await Promise.all([
-    db.select({ count: countInt() }).from(items).where(eq(items.eventId, eid)),
-    db.select({ count: countInt() }).from(teams).where(eq(teams.eventId, eid)),
-    db.select({ count: countInt() }).from(supervisors).where(eq(supervisors.eventId, eid)),
-    db.select({ count: countInt() }).from(items).where(and(eq(items.eventId, eid), isNull(items.teamId))),
-  ]);
+  const readiness = await getActivationReadiness(db, eid, await getEventWarehouses(eid));
 
   return NextResponse.json({
-    hasItems: (itemCount?.count || 0) > 0,
-    hasTeams: (teamCount?.count || 0) > 0,
-    hasSupervisors: (supervisorCount?.count || 0) > 0,
-    allItemsAssigned: (unassignedCount?.count || 0) === 0,
-    unassignedCount: unassignedCount?.count || 0,
+    hasItems: readiness.hasItems,
+    hasTeams: readiness.hasTeams,
+    hasSupervisors: readiness.hasSupervisors,
+    allItemsAssigned: readiness.allItemsAssigned,
+    unassignedCount: readiness.unassignedCount,
+    blocker: activationBlocker(readiness),
   });
 }
 
@@ -42,32 +39,44 @@ export async function POST(request: NextRequest) {
 
   try {
     const { eventId } = await request.json();
+    const eid = Number(eventId);
 
-    const events = await db
-      .select()
-      .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, Number(eventId)));
+    await db.transaction(async (tx) => {
+      // Lock the event row: a concurrent import/copy/reset holds the same lock, so the
+      // readiness check below sees a consistent item/assignment state.
+      const event = await lockEventRow(tx, eid);
+      if (!event) throw new RouteError(404, { error: "Event not found" });
+      if (!canActivate(event.status)) {
+        throw new RouteError(409, { error: `Event is not in setup phase (status: ${event.status})` });
+      }
 
-    const [event] = events;
+      const readiness = await getActivationReadiness(tx, eid, parseEventWarehouses(event.warehouses));
+      const blocker = activationBlocker(readiness);
+      if (blocker) {
+        throw new RouteError(400, {
+          error: blocker,
+          readiness: {
+            itemCount: readiness.itemCount,
+            teamCount: readiness.teamCount,
+            unassignedCount: readiness.unassignedCount,
+          },
+        });
+      }
 
-    if (!event) {
-      return NextResponse.json({ error: "Event not found" }, { status: 404 });
-    }
-
-    if (!canActivate(event.status)) {
-      return NextResponse.json(
-        { error: "Event is not in setup phase" },
-        { status: 400 }
-      );
-    }
-
-    // Activate this event
-    await db.update(stocktakeEvents)
-      .set({ status: "active", updatedAt: new Date().toISOString() })
-      .where(eq(stocktakeEvents.id, Number(eventId)));
+      // Conditional update: only a setup event becomes active
+      const updated = await tx.update(stocktakeEvents)
+        .set({ status: "active", updatedAt: new Date().toISOString() })
+        .where(and(eq(stocktakeEvents.id, eid), eq(stocktakeEvents.status, "setup")))
+        .returning({ id: stocktakeEvents.id });
+      if (updated.length === 0) {
+        throw new RouteError(409, { error: "Event status changed while activating. Reload and try again." });
+      }
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    const routeError = routeErrorResponse(error);
+    if (routeError) return routeError;
     console.error("Activate error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
@@ -96,6 +105,13 @@ export async function PUT(request: NextRequest) {
         );
       }
       await db.transaction(async (tx) => {
+        // Re-check under a row lock: the event may have been completed meanwhile
+        const locked = await lockEventRow(tx, eid);
+        if (!locked) throw new RouteError(404, { error: "Event not found" });
+        const recheck = locked.status === "completed" || locked.status === "locked";
+        if (recheck) {
+          throw new RouteError(403, { error: "This stocktake is completed or locked. Count data cannot be deleted." });
+        }
         // Delete operational data in correct order (children first)
         await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
         await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
@@ -138,12 +154,19 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: transition.error }, { status: 400 });
     }
 
-    await db.update(stocktakeEvents)
+    // Conditional on the status we validated, so a concurrent change isn't overwritten
+    const updated = await db.update(stocktakeEvents)
       .set({ status, updatedAt: new Date().toISOString() })
-      .where(eq(stocktakeEvents.id, eid));
+      .where(and(eq(stocktakeEvents.id, eid), eq(stocktakeEvents.status, existing.status)))
+      .returning({ id: stocktakeEvents.id });
+    if (updated.length === 0) {
+      return NextResponse.json({ error: "Event status changed meanwhile. Reload and try again." }, { status: 409 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    const routeError = routeErrorResponse(error);
+    if (routeError) return routeError;
     console.error("Status update error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
@@ -159,39 +182,7 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const { eventId } = await request.json();
-    const eid = Number(eventId);
-
-    const events = await db
-      .select()
-      .from(stocktakeEvents)
-      .where(eq(stocktakeEvents.id, eid));
-
-    const [event] = events;
-
-    if (!event) {
-      return NextResponse.json({ error: "Event not found" }, { status: 404 });
-    }
-
-    // Cascade delete all related data in a transaction for atomicity
-    await db.transaction(async (tx) => {
-      await tx.delete(execMessages).where(eq(execMessages.eventId, eid));
-      await tx.delete(verificationAssignments).where(eq(verificationAssignments.eventId, eid));
-      await tx.delete(auditLog).where(eq(auditLog.eventId, eid));
-      await tx.delete(serialDiscrepancies).where(eq(serialDiscrepancies.eventId, eid));
-      await tx.delete(breakdownMessages).where(sql`breakdown_id IN (SELECT id FROM breakdowns WHERE event_id = ${eid})`);
-      await tx.delete(breakdowns).where(eq(breakdowns.eventId, eid));
-      await tx.delete(queryMessages).where(sql`query_id IN (SELECT id FROM queries WHERE event_id = ${eid})`);
-      await tx.delete(queries).where(eq(queries.eventId, eid));
-      await tx.delete(counts).where(eq(counts.eventId, eid));
-      await tx.delete(teamAssignments).where(eq(teamAssignments.eventId, eid));
-      await tx.delete(items).where(eq(items.eventId, eid));
-      await tx.delete(supervisors).where(eq(supervisors.eventId, eid));
-      await tx.delete(teams).where(eq(teams.eventId, eid));
-      await tx.update(stocktakeEvents).set({ uploadId: null }).where(eq(stocktakeEvents.id, eid));
-      await tx.delete(stocktakeEvents).where(eq(stocktakeEvents.id, eid));
-    });
-
-    return NextResponse.json({ success: true });
+    return await deleteEventCascade(Number(eventId));
   } catch (error) {
     console.error("Delete event error:", error);
     return NextResponse.json(

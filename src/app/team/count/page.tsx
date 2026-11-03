@@ -27,17 +27,40 @@ import { reportUnknownSerials, useCountSubmission, useVerificationSubmission } f
 import { BinSelectionView } from "@/components/count/bin-selection-view";
 import { CountingView, CountCompleteView, RecountView, ReviewView } from "@/components/count/counting-views";
 import { SerialVerificationView, VerificationCountingView } from "@/components/count/verification-views";
+import { RejectedSyncBanner } from "@/components/count/rejected-sync-banner";
+import {
+  cacheTeamItems,
+  getCachedItemsScope,
+  getLocalItems,
+  getUnsyncedCounts,
+  isServiceWorkerOffline,
+  overlayPendingCounts,
+  type OfflineCount,
+  type OfflineScope,
+} from "@/stores/offline-db";
+
+interface TeamItemsPayload {
+  items?: CountItem[];
+  verificationItems?: VerificationItem[];
+  serialVerificationTasks?: SerialVerificationTask[];
+  members?: string[];
+}
 
 export default function CountingPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { settings, updateSettings } = useSettings();
   const er = settings.easyRead;
   const sessionKey = `stocktake-last-bin-${user?.id ?? "unknown"}`;
+  // When offline the session cannot be re-validated (user is null); fall back to
+  // the session that owns the local item cache so offline work stays scoped.
+  const [cachedScope, setCachedScope] = useState<OfflineScope | null>(null);
+  const userEventId = user?.type === "team" ? user.eventId ?? null : null;
+  const userTeamId = user?.type === "team" ? user.id : null;
   // Tag offline records with the owning session so they never sync under another team/event
-  const offlineScope = useMemo(
-    () => (user?.type === "team" && user.eventId != null ? { eventId: user.eventId, teamId: user.id } : {}),
-    [user]
-  );
+  const offlineScope = useMemo<Partial<OfflineScope>>(() => {
+    if (userEventId != null && userTeamId != null) return { eventId: userEventId, teamId: userTeamId };
+    return cachedScope ?? {};
+  }, [userEventId, userTeamId, cachedScope]);
 
   useEffect(() => {
     markNotificationSeen("verifications");
@@ -102,27 +125,80 @@ export default function CountingPage() {
   const [resumeBin, setResumeBin] = useState<{ binName: string; remaining: number } | null>(null);
 
   // ---------- Load items ----------
+  // Server first; on failure / offline fall back to this session's IndexedDB
+  // cache. Either way, overlay this device's unsynced counts so items counted
+  // locally never show as "not counted".
   const loadItems = useCallback(async () => {
+    const userScope: OfflineScope | null =
+      userEventId != null && userTeamId != null ? { eventId: userEventId, teamId: userTeamId } : null;
+    let data: TeamItemsPayload | null = null;
+    let fromCache = false;
+    let offline = typeof navigator !== "undefined" && navigator.onLine === false;
     try {
       const res = await fetch("/api/team/items");
       if (res.ok) {
-        const data = await res.json();
-        setItems(data.items || []);
-        setStats(data.stats || { total: 0, counted: 0, progressPercent: 0 });
-        setVerificationItems(data.verificationItems || []);
-        setSerialVerificationTasks(data.serialVerificationTasks || []);
-        if (data.members) setMembers(data.members);
+        data = (await res.json()) as TeamItemsPayload;
+        if (userScope) cacheTeamItems(data, userScope).catch(() => { /* IndexedDB unavailable */ });
+      } else if (isServiceWorkerOffline(res)) {
+        offline = true;
       }
     } catch {
-      toast.error("Failed to load items");
-    } finally {
-      setPageState("bin-selection");
+      offline = true;
     }
-  }, []);
+
+    // Read scope: the logged-in team, or (offline, session not re-validated)
+    // the session that owns the cache.
+    let scope = userScope;
+    if (!scope && offline) {
+      try { scope = await getCachedItemsScope(); } catch { /* IndexedDB unavailable */ }
+      if (scope) setCachedScope(scope);
+    }
+
+    if (!data && scope) {
+      try {
+        const local = await getLocalItems(scope);
+        if (local) {
+          data = { items: local.items as unknown as CountItem[], ...local.extras } as TeamItemsPayload;
+          fromCache = true;
+        }
+      } catch {
+        // IndexedDB unavailable
+      }
+    }
+
+    if (!data) {
+      if (userScope || offline) toast.error("Failed to load items");
+      setPageState("bin-selection");
+      return;
+    }
+
+    let pending: OfflineCount[] = [];
+    if (scope) {
+      try { pending = await getUnsyncedCounts(scope); } catch { /* IndexedDB unavailable */ }
+    }
+    const loaded = overlayPendingCounts(data.items || [], pending);
+    const pendingVerificationIds = new Set(pending.filter((c) => c.verificationId).map((c) => c.verificationId));
+
+    setItems(loaded);
+    const counted = loaded.filter((i) => i.countId !== null).length;
+    setStats({
+      total: loaded.length,
+      counted,
+      progressPercent: loaded.length > 0 ? Math.round((counted / loaded.length) * 100) : 0,
+    });
+    setVerificationItems(
+      (data.verificationItems || []).filter((v) => !pendingVerificationIds.has(v.verificationId))
+    );
+    setSerialVerificationTasks(data.serialVerificationTasks || []);
+    if (data.members) setMembers(data.members);
+    if (fromCache) toast.info("Offline — showing items saved on this device");
+    setPageState("bin-selection");
+  }, [userEventId, userTeamId]);
 
   useEffect(() => {
+    if (authLoading) return; // need the session to scope the offline cache
     loadItems();
-  }, [loadItems]);
+  }, [loadItems, authLoading]);
 
   // ---------- Check for resume bin on bin-selection load ----------
   useEffect(() => {
@@ -483,6 +559,14 @@ export default function CountingPage() {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [pageState, qtyValue, search, recountItem, currentItem, currentEntry]);
+
+  const itemLabel = useCallback(
+    (itemId: number) => {
+      const it = items.find((i) => i.id === itemId);
+      return it ? (it.serialNumber ? `${it.itemCode} (${it.serialNumber})` : it.itemCode) : undefined;
+    },
+    [items]
+  );
 
   // ---------- Core functions ----------
   const { handleCount } = useCountSubmission({ items, offlineScope, setItems, setStats });
@@ -899,6 +983,8 @@ export default function CountingPage() {
   // ---------- Bin Selection ----------
   if (pageState === "bin-selection") {
     return (
+      <>
+      <RejectedSyncBanner scope={offlineScope} itemLabel={itemLabel} onChanged={loadItems} />
       <BinSelectionView
         er={er}
         binViewMode={settings.binViewMode}
@@ -951,6 +1037,7 @@ export default function CountingPage() {
           setPageState("serial-verification");
         }}
       />
+      </>
     );
   }
 

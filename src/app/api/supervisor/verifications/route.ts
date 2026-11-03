@@ -71,25 +71,31 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check no existing pending verification for the same items
+    // Block a new recount while an earlier one is still open: either in
+    // progress ("pending") or submitted but awaiting the supervisor's decision
+    // ("completed"). Otherwise two verifications compete for the same count.
     const itemIds = targetCounts.map((c) => c.itemId);
     const existingVerifications = await db
-      .select({ itemId: verificationAssignments.itemId })
+      .select({ itemId: verificationAssignments.itemId, status: verificationAssignments.status })
       .from(verificationAssignments)
       .where(
         and(
           inArray(verificationAssignments.itemId, itemIds),
           eq(verificationAssignments.eventId, user.eventId),
-          eq(verificationAssignments.status, "pending")
+          inArray(verificationAssignments.status, ["pending", "completed"])
         )
       );
 
     if (existingVerifications.length > 0) {
-      const existingItemIds = existingVerifications.map((v) => v.itemId);
+      const pendingIds = existingVerifications.filter((v) => v.status === "pending").map((v) => v.itemId);
+      const undecidedIds = existingVerifications.filter((v) => v.status !== "pending").map((v) => v.itemId);
+      const parts: string[] = [];
+      if (pendingIds.length > 0) parts.push(`pending verification for item(s): ${pendingIds.join(", ")}`);
+      if (undecidedIds.length > 0) {
+        parts.push(`completed verification awaiting a decision (keep original or accept verified) for item(s): ${undecidedIds.join(", ")}`);
+      }
       return NextResponse.json(
-        {
-          error: `Pending verification already exists for item(s): ${existingItemIds.join(", ")}`,
-        },
+        { error: `Cannot assign a new verification: ${parts.join("; ")}` },
         { status: 409 }
       );
     }

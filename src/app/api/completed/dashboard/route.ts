@@ -4,6 +4,7 @@ import { stocktakeEvents, items, counts, teams } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
 import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
 import { countInt, sumFloat } from "@/lib/db/aggregates";
+import { pickDefaultReportEventId } from "../default-event";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["supervisor", "admin", "auditor"], status: 401 });
@@ -15,14 +16,10 @@ export async function GET(request: NextRequest) {
   const eventIdParam = request.nextUrl.searchParams.get("eventId");
   let eventId = user.type === "admin" && eventIdParam ? Number(eventIdParam) : user.eventId;
 
-  // Admin has eventId=0, find the latest active/completed event
+  // Admin has eventId=0: prefer the active event, then the most recent
+  // completed/locked one. Setup events are never picked.
   if (!eventId || eventId === 0) {
-    const [latest] = await db
-      .select()
-      .from(stocktakeEvents)
-      .orderBy(sql`id DESC`)
-      .limit(1);
-    if (latest) eventId = latest.id;
+    eventId = (await pickDefaultReportEventId()) ?? 0;
   }
 
   // Get event info
@@ -103,10 +100,18 @@ export async function GET(request: NextRequest) {
       .from(items)
       .where(and(eq(items.eventId, eventId), eq(items.teamId, team.id), warehouseFilter(warehouses)));
 
+    // Counted = items currently assigned to this team that have an initial
+    // count (by whichever team). Counting counts.teamId instead would let
+    // counted exceed total after an item is reassigned.
     const [teamCounted] = await db
       .select({ count: countInt() })
-      .from(counts)
-      .where(and(eq(counts.eventId, eventId), eq(counts.teamId, team.id), initialOnly, cwf));
+      .from(items)
+      .where(and(
+        eq(items.eventId, eventId),
+        eq(items.teamId, team.id),
+        warehouseFilter(warehouses),
+        sql`EXISTS (SELECT 1 FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} AND c.count_type = 'initial')`,
+      ));
 
     const [teamMatched] = await db
       .select({ count: countInt() })

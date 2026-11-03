@@ -171,7 +171,16 @@ function CompletedDashboardContent() {
         </div>
         <div className="flex items-center gap-2">
           {isAdmin && events.length > 1 && (
-            <Select value={selectedEventId || String(event.id)} onValueChange={setSelectedEventId}>
+            <Select
+              value={selectedEventId || String(event.id)}
+              onValueChange={(v) => {
+                setSelectedEventId(v);
+                // Keep ?eventId= in the URL so the layout's Export link targets this event
+                const url = new URL(window.location.href);
+                url.searchParams.set("eventId", v);
+                window.history.replaceState(null, "", url);
+              }}
+            >
               <SelectTrigger className="w-56">
                 <SelectValue placeholder="Switch event..." />
               </SelectTrigger>

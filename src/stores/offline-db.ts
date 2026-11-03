@@ -22,6 +22,8 @@ export interface OfflineItem {
   isMatch: boolean | number | null;
   comment: string | null;
   countedAt: string | null;
+  checkStatus?: string | null; // absent on items cached before it was stored
+  hasPendingVerification?: boolean;
 }
 
 export interface OfflineCount {
@@ -49,13 +51,21 @@ export const SYNCED_PENDING = 0;
 export const SYNCED_DONE = 1;
 export const SYNCED_REJECTED = 2;
 
+/** HTTP status the team write routes use while the event is not active (setup/completed/locked). */
+export const EVENT_NOT_ACTIVE_STATUS = 423;
+
+// 401 (re-login), 408 (timeout), 413 (payload too large: proxy/body limits can
+// change), 423 (event temporarily not active — e.g. cancelled back to setup and
+// later reactivated) and 429 (rate limited) are transient.
+const RETRYABLE_4XX = new Set([401, 408, 413, EVENT_NOT_ACTIVE_STATUS, 429]);
+
 /**
  * True when an HTTP status means the server definitively rejected the request
- * (retrying will never succeed). 401 (re-login), 408 and 429 are retryable;
- * 5xx (including the service worker's offline 503) are retryable.
+ * (retrying will never succeed). Transient 4xx (see RETRYABLE_4XX) and all 5xx
+ * (including the service worker's offline 503) are retryable.
  */
 export function isDefinitiveRejection(status: number): boolean {
-  return status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429;
+  return status >= 400 && status < 500 && !RETRYABLE_4XX.has(status);
 }
 
 /** True when the response was synthesized by the service worker because the network is unreachable. */
@@ -158,62 +168,123 @@ class StocktakeOfflineDB extends Dexie {
 
 export const offlineDb = new StocktakeOfflineDB();
 
+const ITEMS_SCOPE_KEY = "itemsScope";
+const ITEMS_EXTRAS_KEY = "itemsExtras";
+
+function scopeKey(scope: OfflineScope): string {
+  return `${scope.eventId}:${scope.teamId}`;
+}
+
+/** Non-item parts of the /api/team/items payload cached for offline reloads. */
+export interface CachedTeamExtras {
+  verificationItems: unknown[];
+  serialVerificationTasks: unknown[];
+  members: string[];
+}
+
+// ─── Cache a /api/team/items payload in IndexedDB ───────────────────────────
+// Tagged with the session scope so another team/event never reads it.
+export async function cacheTeamItems(
+  data: { items?: unknown[]; verificationItems?: unknown[]; serialVerificationTasks?: unknown[]; members?: string[] },
+  scope: OfflineScope
+): Promise<number> {
+  const serverItems: OfflineItem[] = ((data.items || []) as Array<Record<string, unknown>>).map(
+    (item: Record<string, unknown>) => ({
+      id: item.id as number,
+      itemCode: item.itemCode as string,
+      description: item.description as string | null,
+      brand: item.brand as string | null,
+      category: item.category as string | null,
+      binNumber: item.binNumber as string | null,
+      binInternalId: item.binInternalId as string | null,
+      warehouse: item.warehouse as string | null,
+      division: item.division as string | null,
+      onHand: (item.onHand as number) || 0,
+      avgCost: (item.avgCost as number) || 0,
+      totalValue: (item.totalValue as number) || 0,
+      stockStatus: item.stockStatus as string | null,
+      serialNumber: item.serialNumber as string | null,
+      isSerialized: item.isSerialized as boolean | number | null,
+      countId: item.countId as number | null,
+      countedQty: item.countedQty as number | null,
+      variance: item.variance as number | null,
+      isMatch: item.isMatch as boolean | number | null,
+      comment: item.comment as string | null,
+      countedAt: item.countedAt as string | null,
+      checkStatus: (item.checkStatus as string | null) ?? null,
+      hasPendingVerification: !!item.hasPendingVerification,
+    })
+  );
+
+  const extras: CachedTeamExtras = {
+    verificationItems: data.verificationItems || [],
+    serialVerificationTasks: data.serialVerificationTasks || [],
+    members: data.members || [],
+  };
+
+  await offlineDb.transaction("rw", offlineDb.items, offlineDb.meta, async () => {
+    await offlineDb.items.clear();
+    await offlineDb.items.bulkPut(serverItems);
+    await offlineDb.meta.bulkPut([
+      { key: ITEMS_SCOPE_KEY, value: scopeKey(scope) },
+      { key: ITEMS_EXTRAS_KEY, value: JSON.stringify(extras) },
+      { key: "lastSync", value: new Date().toISOString() },
+    ]);
+  });
+
+  return serverItems.length;
+}
+
 // ─── Preload team items into IndexedDB ──────────────────────────────────────
-export async function preloadItems(): Promise<number> {
+// Without a scope nothing is cached (the cache could not be attributed to a session).
+export async function preloadItems(scope?: OfflineScope | null): Promise<number> {
+  if (!scope) return 0;
   try {
     const res = await fetch("/api/team/items");
     if (!res.ok) return 0;
-
-    const data = await res.json();
-    const serverItems: OfflineItem[] = (data.items || []).map(
-      (item: Record<string, unknown>) => ({
-        id: item.id as number,
-        itemCode: item.itemCode as string,
-        description: item.description as string | null,
-        brand: item.brand as string | null,
-        category: item.category as string | null,
-        binNumber: item.binNumber as string | null,
-        binInternalId: item.binInternalId as string | null,
-        warehouse: item.warehouse as string | null,
-        division: item.division as string | null,
-        onHand: (item.onHand as number) || 0,
-        avgCost: (item.avgCost as number) || 0,
-        totalValue: (item.totalValue as number) || 0,
-        stockStatus: item.stockStatus as string | null,
-        serialNumber: item.serialNumber as string | null,
-        isSerialized: item.isSerialized as boolean | number | null,
-        countId: item.countId as number | null,
-        countedQty: item.countedQty as number | null,
-        variance: item.variance as number | null,
-        isMatch: item.isMatch as boolean | number | null,
-        comment: item.comment as string | null,
-        countedAt: item.countedAt as string | null,
-      })
-    );
-
-    await offlineDb.transaction("rw", offlineDb.items, async () => {
-      await offlineDb.items.clear();
-      await offlineDb.items.bulkPut(serverItems);
-    });
-
-    await offlineDb.meta.put({
-      key: "lastSync",
-      value: new Date().toISOString(),
-    });
-
-    return serverItems.length;
+    return await cacheTeamItems(await res.json(), scope);
   } catch {
     return 0;
   }
 }
 
 // ─── Save a count locally ───────────────────────────────────────────────────
-export async function saveCountLocally(count: Omit<OfflineCount, "synced" | "seq">): Promise<void> {
+// Resolves to the comment to send with this count. A normal count saved with
+// comment === undefined ("keep the existing comment") inherits the latest
+// comment set by a still-unsynced earlier count for the same item, which the
+// server has not seen yet and would otherwise be lost.
+export async function saveCountLocally(
+  count: Omit<OfflineCount, "synced" | "seq">
+): Promise<string | null | undefined> {
+  let effectiveComment = count.comment;
   // Allocate the next save sequence inside the write transaction so it stays
   // monotonic even across tabs.
   await offlineDb.transaction("rw", offlineDb.counts, async () => {
+    if (effectiveComment === undefined && !count.verificationId) {
+      const older = (
+        await offlineDb.counts
+          .where("itemId")
+          .equals(count.itemId)
+          .filter(
+            (c) =>
+              c.synced === SYNCED_PENDING &&
+              !c.verificationId &&
+              c.eventId === count.eventId &&
+              c.teamId === count.teamId
+          )
+          .toArray()
+      ).sort(compareCountsBySaveOrder);
+      for (let i = older.length - 1; i >= 0; i--) {
+        if (older[i].comment !== undefined) {
+          effectiveComment = older[i].comment || null;
+          break;
+        }
+      }
+    }
     const last = await offlineDb.counts.orderBy("seq").last();
-    await offlineDb.counts.put({ ...count, synced: SYNCED_PENDING, seq: (last?.seq ?? 0) + 1 });
+    const record: OfflineCount = { ...count, synced: SYNCED_PENDING, seq: (last?.seq ?? 0) + 1 };
+    if (effectiveComment !== undefined) record.comment = effectiveComment;
+    await offlineDb.counts.put(record);
   });
 
   // Update the local item record
@@ -226,11 +297,32 @@ export async function saveCountLocally(count: Omit<OfflineCount, "synced" | "seq
     ...(count.comment !== undefined ? { comment: count.comment || null } : {}),
     countedAt: count.countedAt,
   });
+  return effectiveComment;
 }
 
 // ─── Mark a single count as synced ──────────────────────────────────────────
+// For a normal count, earlier still-pending counts for the same item (same
+// session) are superseded by it: the server applies counts in arrival order,
+// so resending them afterwards would overwrite the newer value.
 export async function markCountSynced(clientId: string): Promise<void> {
-  await offlineDb.counts.update(clientId, { synced: SYNCED_DONE });
+  await offlineDb.transaction("rw", offlineDb.counts, async () => {
+    const c = await offlineDb.counts.get(clientId);
+    if (!c) return;
+    await offlineDb.counts.update(clientId, { synced: SYNCED_DONE });
+    if (c.verificationId) return;
+    await offlineDb.counts
+      .where("itemId")
+      .equals(c.itemId)
+      .filter(
+        (o) =>
+          o.synced === SYNCED_PENDING &&
+          !o.verificationId &&
+          o.eventId === c.eventId &&
+          o.teamId === c.teamId &&
+          compareCountsBySaveOrder(o, c) < 0
+      )
+      .modify({ synced: SYNCED_DONE });
+  });
 }
 
 // ─── Mark counts as definitively rejected by the server ─────────────────────
@@ -305,6 +397,40 @@ async function rejectionReason(res: Response): Promise<string> {
   return `Rejected by server (HTTP ${res.status})`;
 }
 
+/**
+ * Collapse pending normal (non-verification) counts to the latest per item.
+ * `counts` must be sorted oldest first. A queued count with `comment ===
+ * undefined` means "keep the existing comment", so when the kept entry has no
+ * comment of its own, the most recent older entry that set one (including an
+ * explicit clear) is carried onto it instead of being silently dropped.
+ */
+export function collapseQueuedCounts(counts: OfflineCount[]): {
+  kept: OfflineCount[];
+  supersededIds: string[];
+  carriedComments: Map<string, string | null>;
+} {
+  const latestByItem = new Map<number, OfflineCount>();
+  // Latest defined comment per item seen so far (oldest-first walk)
+  const lastCommentByItem = new Map<number, string | null>();
+  const supersededIds: string[] = [];
+  for (const c of counts) {
+    if (c.verificationId) continue;
+    const prev = latestByItem.get(c.itemId);
+    if (prev) supersededIds.push(prev.clientId);
+    latestByItem.set(c.itemId, c);
+    if (c.comment !== undefined) lastCommentByItem.set(c.itemId, c.comment || null);
+  }
+
+  const carriedComments = new Map<string, string | null>();
+  const kept = Array.from(latestByItem.values()).map((c) => {
+    if (c.comment !== undefined || !lastCommentByItem.has(c.itemId)) return c;
+    const comment = lastCommentByItem.get(c.itemId)!;
+    carriedComments.set(c.clientId, comment);
+    return { ...c, comment };
+  });
+  return { kept, supersededIds, carriedComments };
+}
+
 // ─── Sync queue - push unsynced counts to server ────────────────────────────
 export async function syncToServer(scope?: OfflineScope | null): Promise<{
   synced: number;
@@ -320,16 +446,16 @@ export async function syncToServer(scope?: OfflineScope | null): Promise<{
 
   // Collapse normal counts to the latest per item (list is sorted oldest first);
   // older superseded entries are marked synced without being sent.
-  const latestByItem = new Map<number, OfflineCount>();
-  for (const c of unsyncedCounts) {
-    if (!c.verificationId) latestByItem.set(c.itemId, c);
-  }
-  const normalCounts = Array.from(latestByItem.values());
-  const supersededIds = unsyncedCounts
-    .filter((c) => !c.verificationId && latestByItem.get(c.itemId) !== c)
-    .map((c) => c.clientId);
-  if (supersededIds.length > 0) {
-    await markSynced(supersededIds);
+  const { kept: normalCounts, supersededIds, carriedComments } = collapseQueuedCounts(unsyncedCounts);
+  if (supersededIds.length > 0 || carriedComments.size > 0) {
+    // Persist carried comments before dropping the superseded rows so a failed
+    // send does not lose them on the next attempt.
+    await offlineDb.transaction("rw", offlineDb.counts, async () => {
+      for (const [clientId, comment] of carriedComments) {
+        await offlineDb.counts.update(clientId, { comment });
+      }
+      if (supersededIds.length > 0) await markSynced(supersededIds);
+    });
   }
   const verificationCounts = unsyncedCounts.filter((c) => !!c.verificationId);
 
@@ -465,8 +591,163 @@ export async function syncToServer(scope?: OfflineScope | null): Promise<{
 }
 
 // ─── Get local items (for offline mode) ─────────────────────────────────────
-export async function getLocalItems(): Promise<OfflineItem[]> {
-  return offlineDb.items.orderBy("binNumber").toArray();
+// Returns the cached item list only when it was cached for this session;
+// null when there is no cache for it (never another team's/event's items).
+export async function getLocalItems(scope: OfflineScope): Promise<{
+  items: OfflineItem[];
+  extras: CachedTeamExtras;
+} | null> {
+  const owner = await offlineDb.meta.get(ITEMS_SCOPE_KEY);
+  if (!owner || owner.value !== scopeKey(scope)) return null;
+  const items = await offlineDb.items.toArray();
+  let extras: CachedTeamExtras = { verificationItems: [], serialVerificationTasks: [], members: [] };
+  try {
+    const raw = await offlineDb.meta.get(ITEMS_EXTRAS_KEY);
+    if (raw) extras = { ...extras, ...JSON.parse(raw.value) };
+  } catch {
+    // corrupt extras: items alone are still usable
+  }
+  return { items, extras };
+}
+
+/**
+ * The session the item cache belongs to, if any. Lets an offline reload (where
+ * the logged-in user cannot be re-validated) keep working on the last
+ * session's data. The cache is cleared on logout.
+ */
+export async function getCachedItemsScope(): Promise<OfflineScope | null> {
+  const owner = await offlineDb.meta.get(ITEMS_SCOPE_KEY);
+  const m = owner?.value.match(/^(\d+):(\d+)$/);
+  return m ? { eventId: Number(m[1]), teamId: Number(m[2]) } : null;
+}
+
+/** Minimal item shape the pending-count overlay needs. */
+interface OverlayItem {
+  id: number;
+  onHand: number | null;
+  countId: number | null;
+  countedQty: number | null;
+  variance: number | null;
+  isMatch: boolean | number | null;
+  comment: string | null;
+  countedAt: string | null;
+  checkStatus?: string | null;
+}
+
+/**
+ * Apply this device's pending (unsynced) normal counts on top of item rows
+ * loaded from the server or the cache, so the UI shows what was recorded
+ * locally. `pending` must be sorted oldest first (getUnsyncedCounts order).
+ * Verification counts are ignored; items accepted by a supervisor are left as
+ * the server has them (the server will reject the pending count).
+ */
+export function overlayPendingCounts<T extends OverlayItem>(rows: T[], pending: OfflineCount[]): T[] {
+  const byItem = new Map<number, { count: OfflineCount; comment: string | null | undefined }>();
+  for (const c of pending) {
+    if (c.verificationId) continue;
+    const prev = byItem.get(c.itemId);
+    byItem.set(c.itemId, {
+      count: c,
+      comment: c.comment !== undefined ? c.comment || null : prev?.comment,
+    });
+  }
+  if (byItem.size === 0) return rows;
+  return rows.map((row) => {
+    const p = byItem.get(row.id);
+    if (!p || row.checkStatus === "accepted") return row;
+    return {
+      ...row,
+      countId: row.countId ?? -1,
+      countedQty: p.count.countedQty,
+      variance: p.count.countedQty - (row.onHand ?? 0),
+      isMatch: p.count.isMatch,
+      comment: p.comment === undefined ? row.comment : p.comment,
+      countedAt: p.count.countedAt,
+    };
+  });
+}
+
+// ─── Records the server definitively rejected (shown to the user) ───────────
+export interface RejectedRecords {
+  counts: OfflineCount[];
+  discrepancies: OfflineSerialDiscrepancy[];
+}
+
+export async function getRejectedRecords(scope?: OfflineScope | null): Promise<RejectedRecords> {
+  const counts = await offlineDb.counts
+    .where("synced")
+    .equals(SYNCED_REJECTED)
+    .filter((c) => inScope(c, scope))
+    .toArray();
+  const discrepancies = await offlineDb.serialDiscrepancies
+    .where("synced")
+    .equals(SYNCED_REJECTED)
+    .filter((d) => inScope(d, scope))
+    .toArray();
+  return { counts: counts.sort(compareCountsBySaveOrder), discrepancies };
+}
+
+/**
+ * Re-queue rejected records for another sync attempt. A rejected normal count
+ * that a later local count for the same item has superseded is not resent (it
+ * would overwrite the newer value) and is dropped instead.
+ */
+export async function retryRejectedRecords(
+  countIds: string[],
+  discrepancyIds: string[] = []
+): Promise<{ requeued: number; dropped: number }> {
+  let requeued = 0;
+  let dropped = 0;
+  await offlineDb.transaction("rw", offlineDb.counts, offlineDb.serialDiscrepancies, async () => {
+    for (const id of countIds) {
+      const c = await offlineDb.counts.get(id);
+      if (!c || c.synced !== SYNCED_REJECTED) continue;
+      if (!c.verificationId) {
+        const newer = await offlineDb.counts
+          .where("itemId")
+          .equals(c.itemId)
+          .filter(
+            (o) =>
+              o.clientId !== c.clientId &&
+              !o.verificationId &&
+              o.eventId === c.eventId &&
+              o.teamId === c.teamId &&
+              compareCountsBySaveOrder(o, c) > 0
+          )
+          .count();
+        if (newer > 0) {
+          await offlineDb.counts.delete(id);
+          dropped++;
+          continue;
+        }
+      }
+      await offlineDb.counts.update(id, { synced: SYNCED_PENDING, syncError: undefined });
+      requeued++;
+    }
+    for (const id of discrepancyIds) {
+      const d = await offlineDb.serialDiscrepancies.get(id);
+      if (!d || d.synced !== SYNCED_REJECTED) continue;
+      await offlineDb.serialDiscrepancies.update(id, { synced: SYNCED_PENDING, syncError: undefined });
+      requeued++;
+    }
+  });
+  return { requeued, dropped };
+}
+
+/** Permanently discard rejected records the user has acknowledged. */
+export async function dismissRejectedRecords(countIds: string[], discrepancyIds: string[] = []): Promise<void> {
+  await offlineDb.transaction("rw", offlineDb.counts, offlineDb.serialDiscrepancies, async () => {
+    if (countIds.length > 0) {
+      await offlineDb.counts.where("clientId").anyOf(countIds).filter((c) => c.synced === SYNCED_REJECTED).delete();
+    }
+    if (discrepancyIds.length > 0) {
+      await offlineDb.serialDiscrepancies
+        .where("clientId")
+        .anyOf(discrepancyIds)
+        .filter((d) => d.synced === SYNCED_REJECTED)
+        .delete();
+    }
+  });
 }
 
 // ─── Get pending sync count ─────────────────────────────────────────────────

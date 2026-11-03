@@ -71,6 +71,8 @@ export default function SupervisorLayout({
 
   const execMessageCount = counts.execMessages ?? 0;
   const isExecutive = user?.type === "executive";
+  // eventStatus comes from /api/auth/me, which reads the live status from the
+  // DB (not the login-time token) and is refreshed in the background.
   const isReadOnly = user?.eventStatus === "completed" || user?.eventStatus === "locked";
 
   // Executive viewing supervisor pages: show minimal header with back link

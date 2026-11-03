@@ -284,6 +284,8 @@ export const serialDiscrepancies = pgTable("serial_discrepancies", {
   verificationStatus: text("verification_status"), // "pending" | "completed"
   verificationCompletedAt: text("verification_completed_at"),
   verifiedSerials: text("verified_serials"), // JSON: [{serial, status: "confirmed"|"not_found"}]
+  // Offline sync dedup; unique per team (uq_serial_disc_client_id_team, see migrate.ts)
+  clientId: text("client_id"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`now()`),

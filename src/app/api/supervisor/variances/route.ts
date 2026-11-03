@@ -1,9 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { items, counts, teams, auditLog, verificationAssignments, serialDiscrepancies } from "@/lib/db/schema";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, sql, inArray, asc, desc } from "drizzle-orm";
 import { requireUser, resolveEventId, checkEventActive, getEventWarehouses, warehouseFilter, buildItemRefMap, isRefOutsideWarehouses } from "@/lib/api-auth";
 import { safeJsonParse } from "@/lib/utils";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Status accept_original / accept_verification give an assignment once the supervisor has decided. */
+const VERIFICATION_DECIDED = "accepted";
+
+const PENDING_VERIFICATION_MSG =
+  "A recount is still pending for this count. Wait for the verification team to submit it, then keep the original or accept the verified qty.";
+
+/**
+ * Verification assignments for these counts that are still open: "pending"
+ * (recount in progress) or "completed" (recount submitted, no decision yet).
+ * Rows are locked so a concurrent team submission can't slip in between.
+ */
+async function getUndecidedVerifications(tx: Tx, countIds: number[], eventId: number) {
+  return tx
+    .select({ id: verificationAssignments.id, countId: verificationAssignments.countId, status: verificationAssignments.status })
+    .from(verificationAssignments)
+    .where(
+      and(
+        inArray(verificationAssignments.countId, countIds),
+        eq(verificationAssignments.eventId, eventId),
+        inArray(verificationAssignments.status, ["pending", "completed"])
+      )
+    )
+    .for("update");
+}
+
+/** Mark completed-but-undecided assignments as decided (the supervisor chose a qty directly). */
+async function closeCompletedVerifications(tx: Tx, open: { id: number; status: string }[]) {
+  const ids = open.filter((v) => v.status === "completed").map((v) => v.id);
+  if (ids.length === 0) return;
+  await tx.update(verificationAssignments)
+    .set({ status: VERIFICATION_DECIDED })
+    .where(inArray(verificationAssignments.id, ids));
+}
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["supervisor", "auditor", "executive"], status: 401 });
@@ -26,6 +62,7 @@ export async function GET(request: NextRequest) {
     description: items.description,
     brand: items.brand,
     binNumber: items.binNumber,
+    warehouse: items.warehouse,
     onHand: items.onHand,
     avgCost: items.avgCost,
     countedQty: counts.countedQty,
@@ -97,7 +134,9 @@ export async function GET(request: NextRequest) {
       })
       .from(verificationAssignments)
       .innerJoin(teams, eq(verificationAssignments.assignedTeamId, teams.id))
-      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, eventId)));
+      .where(and(inArray(verificationAssignments.countId, countIds), eq(verificationAssignments.eventId, eventId)))
+      // Ascending id: the loop below keeps the last row per count, i.e. the latest assignment
+      .orderBy(asc(verificationAssignments.id));
 
     // For completed verifications, fetch the verification count records
     const verificationIds = verifications
@@ -349,37 +388,68 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "countIds array is required" }, { status: 400 });
       }
 
-      // Verify all counts belong to this event
-      const validCounts = await db
-        .select({ id: counts.id })
-        .from(counts)
-        .where(and(inArray(counts.id, countIds), eq(counts.eventId, user.eventId)));
+      // Accept every selected count of this event, except those with a recount
+      // still in progress. Completed-but-undecided verifications on the accepted
+      // counts are closed so "Accept Verified" can't later overwrite the decision.
+      const bulkResult = await db.transaction(async (tx) => {
+        const validCounts = await tx
+          .select({ id: counts.id })
+          .from(counts)
+          .where(and(inArray(counts.id, countIds), eq(counts.eventId, user.eventId)));
 
-      const validIds = validCounts.map((c) => c.id);
-      if (validIds.length === 0) {
+        const validIds = validCounts.map((c) => c.id);
+        if (validIds.length === 0) return null;
+
+        const open = await getUndecidedVerifications(tx, validIds, user.eventId);
+        const pendingCountIds = new Set(open.filter((v) => v.status === "pending").map((v) => v.countId));
+        const acceptIds = validIds.filter((id) => !pendingCountIds.has(id));
+        const closeIds = open
+          .filter((v) => v.status === "completed" && !pendingCountIds.has(v.countId))
+          .map((v) => v.id);
+
+        if (acceptIds.length > 0) {
+          await tx.update(counts)
+            .set({ checkStatus: "accepted" })
+            .where(inArray(counts.id, acceptIds));
+
+          if (closeIds.length > 0) {
+            await tx.update(verificationAssignments)
+              .set({ status: VERIFICATION_DECIDED })
+              .where(inArray(verificationAssignments.id, closeIds));
+          }
+
+          await tx.insert(auditLog).values(
+            acceptIds.map((id) => ({
+              eventId: user.eventId,
+              userId: user.id,
+              userType: "supervisor",
+              action: "supervisor_accept_variance",
+              tableName: "counts",
+              recordId: id,
+              newValue: JSON.stringify({ checkStatus: "accepted", bulk: true }),
+            }))
+          );
+        }
+
+        return { acceptIds, skipped: validIds.length - acceptIds.length };
+      });
+
+      if (!bulkResult) {
         return NextResponse.json({ error: "No valid counts found" }, { status: 404 });
       }
+      if (bulkResult.acceptIds.length === 0) {
+        return NextResponse.json(
+          { error: `${PENDING_VERIFICATION_MSG} (${bulkResult.skipped} skipped)`, skippedPendingVerification: bulkResult.skipped },
+          { status: 409 }
+        );
+      }
 
-      await db.update(counts)
-        .set({ checkStatus: "accepted" })
-        .where(inArray(counts.id, validIds));
-
-      // Audit log entries
-      await Promise.all(
-        validIds.map((id) =>
-          db.insert(auditLog).values({
-            eventId: user.eventId,
-            userId: user.id,
-            userType: "supervisor",
-            action: "supervisor_accept_variance",
-            tableName: "counts",
-            recordId: id,
-            newValue: JSON.stringify({ checkStatus: "accepted", bulk: true }),
-          })
-        )
-      );
-
-      return NextResponse.json({ success: true, acceptedCount: validIds.length });
+      return NextResponse.json({
+        success: true,
+        acceptedCount: bulkResult.acceptIds.length,
+        acceptedIds: bulkResult.acceptIds,
+        skippedPendingVerification: bulkResult.skipped,
+      });
     }
 
     // Handle verification acceptance actions
@@ -670,20 +740,54 @@ export async function PATCH(request: NextRequest) {
 
       const newStatus = action === "accept_variance" ? "accepted" : "pending";
 
-      await db.update(counts)
-        .set({ checkStatus: newStatus })
-        .where(eq(counts.id, countId));
+      const accResult = await db.transaction(async (tx) => {
+        if (action === "accept_variance") {
+          const open = await getUndecidedVerifications(tx, [countId], user.eventId);
+          if (open.some((v) => v.status === "pending")) return { blocked: true as const };
+          await closeCompletedVerifications(tx, open);
+        } else {
+          // Reopening a count settled by a recount: put the latest decided
+          // verification back to "completed" so the supervisor chooses between
+          // the original and verified qty again. The counted qty is left as-is
+          // (it holds the verified qty if that was accepted), and "Accept
+          // Verified" re-applies the verification count row either way.
+          const [latest] = await tx
+            .select({ id: verificationAssignments.id, status: verificationAssignments.status })
+            .from(verificationAssignments)
+            .where(and(eq(verificationAssignments.countId, countId), eq(verificationAssignments.eventId, user.eventId)))
+            .orderBy(desc(verificationAssignments.id))
+            .limit(1)
+            .for("update");
+          if (latest?.status === VERIFICATION_DECIDED) {
+            await tx.update(verificationAssignments)
+              .set({ status: "completed" })
+              .where(eq(verificationAssignments.id, latest.id));
+            await tx.update(counts)
+              .set({ checkStatus: "pending" })
+              .where(and(eq(counts.verificationId, latest.id), eq(counts.countType, "verification")));
+          }
+        }
 
-      await db.insert(auditLog)
-        .values({
-          eventId: user.eventId,
-          userId: user.id,
-          userType: "supervisor",
-          action: action === "accept_variance" ? "supervisor_accept_variance" : "supervisor_reopen_variance",
-          tableName: "counts",
-          recordId: countId,
-          newValue: JSON.stringify({ checkStatus: newStatus }),
-        });
+        await tx.update(counts)
+          .set({ checkStatus: newStatus })
+          .where(eq(counts.id, countId));
+
+        await tx.insert(auditLog)
+          .values({
+            eventId: user.eventId,
+            userId: user.id,
+            userType: "supervisor",
+            action: action === "accept_variance" ? "supervisor_accept_variance" : "supervisor_reopen_variance",
+            tableName: "counts",
+            recordId: countId,
+            newValue: JSON.stringify({ checkStatus: newStatus }),
+          });
+        return { blocked: false as const };
+      });
+
+      if (accResult.blocked) {
+        return NextResponse.json({ error: PENDING_VERIFICATION_MSG }, { status: 409 });
+      }
 
       return NextResponse.json({ success: true, action });
     }
@@ -740,36 +844,47 @@ export async function PATCH(request: NextRequest) {
     const varianceValue = variance * avgCost;
     const isMatch = variance === 0;
 
-    // Update the count
-    await db.update(counts)
-      .set({
-        countedQty: newQty,
-        variance,
-        varianceValue,
-        isMatch,
-        checkStatus: "accepted",
-      })
-      .where(eq(counts.id, countId));
+    const editResult = await db.transaction(async (tx) => {
+      const open = await getUndecidedVerifications(tx, [countId], user.eventId);
+      if (open.some((v) => v.status === "pending")) return { blocked: true as const };
+      await closeCompletedVerifications(tx, open);
 
-    // Audit log
-    await db.insert(auditLog)
-      .values({
-        eventId: user.eventId,
-        userId: user.id,
-        userType: "supervisor",
-        action: "supervisor_edit_count",
-        tableName: "counts",
-        recordId: countId,
-        oldValue: JSON.stringify({
-          countedQty: existing.countedQty,
-          variance: existing.variance,
-        }),
-        newValue: JSON.stringify({
+      // Update the count
+      await tx.update(counts)
+        .set({
           countedQty: newQty,
           variance,
-          ...(reason ? { reason } : {}),
-        }),
-      });
+          varianceValue,
+          isMatch,
+          checkStatus: "accepted",
+        })
+        .where(eq(counts.id, countId));
+
+      // Audit log
+      await tx.insert(auditLog)
+        .values({
+          eventId: user.eventId,
+          userId: user.id,
+          userType: "supervisor",
+          action: "supervisor_edit_count",
+          tableName: "counts",
+          recordId: countId,
+          oldValue: JSON.stringify({
+            countedQty: existing.countedQty,
+            variance: existing.variance,
+          }),
+          newValue: JSON.stringify({
+            countedQty: newQty,
+            variance,
+            ...(reason ? { reason } : {}),
+          }),
+        });
+      return { blocked: false as const };
+    });
+
+    if (editResult.blocked) {
+      return NextResponse.json({ error: PENDING_VERIFICATION_MSG }, { status: 409 });
+    }
 
     return NextResponse.json({
       success: true,

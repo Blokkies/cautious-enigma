@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { counts, items, teams, stocktakeEvents } from "@/lib/db/schema";
-import { eq, and, sql, isNotNull } from "drizzle-orm";
+import { eq, and, sql, isNotNull, gt, asc } from "drizzle-orm";
 import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter } from "@/lib/api-auth";
 import { countInt } from "@/lib/db/aggregates";
 
@@ -15,7 +15,10 @@ export async function GET(request: NextRequest) {
   }
 
   const eventId = auth.user.eventId;
-  let lastCheckTime = new Date().toISOString();
+  // Cursor on counts.id (serial, monotonic): countedAt is client-supplied and
+  // can arrive out of order, so a timestamp cursor skips rows.
+  let lastCountId = 0;
+  const BATCH_SIZE = 50;
 
   const MAX_DURATION_MS = 30 * 60 * 1000; // 30 minutes max connection
   const POLL_INTERVAL_MS = 10_000; // 10 seconds between polls
@@ -54,14 +57,34 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      // Cleanup on close. Registered before any await so an abort during
+      // setup is not missed.
+      request.signal.addEventListener("abort", stop);
+      if (request.signal.aborted) stop();
+
       // Send initial heartbeat
       sendEvent("connected", { time: new Date().toISOString() });
 
       const warehouses = await getEventWarehouses(eventId).catch(() => null);
       const cwf = countsWarehouseFilter(eventId, warehouses);
 
+      // Start after the newest existing count: only stream counts made from now on.
+      const [maxRow] = await db
+        .select({ maxId: sql<number | null>`max(${counts.id})` })
+        .from(counts)
+        .where(eq(counts.eventId, eventId))
+        .catch(() => [{ maxId: null }]);
+      lastCountId = Number(maxRow?.maxId ?? 0);
+
+      // The client may have gone away while we were awaiting above: stop() has
+      // already run, so creating the interval now would leak it.
+      if (closed) return;
+
       interval = setInterval(async () => {
-        if (closed) return;
+        if (closed) {
+          if (interval) clearInterval(interval);
+          return;
+        }
         try {
           // Auto-close after max duration
           if (Date.now() - startTime > MAX_DURATION_MS) {
@@ -83,6 +106,7 @@ export async function GET(request: NextRequest) {
           // Check for new counts since last check
           const newCounts = await db
             .select({
+              id: counts.id,
               teamName: teams.name,
               itemCode: items.itemCode,
               countedQty: counts.countedQty,
@@ -97,17 +121,17 @@ export async function GET(request: NextRequest) {
               and(
                 eq(counts.eventId, eventId),
                 eq(counts.countType, "initial"),
-                sql`${counts.countedAt}::timestamptz > ${lastCheckTime}::timestamptz`,
+                gt(counts.id, lastCountId),
                 warehouseFilter(warehouses)
               )
             )
-            .orderBy(sql`${counts.countedAt}::timestamptz DESC`)
-            .limit(10);
+            .orderBy(asc(counts.id))
+            .limit(BATCH_SIZE);
 
           if (newCounts.length > 0) {
             sendEvent("counts", newCounts);
-            // Use the max countedAt from results to avoid missing slow-committing counts
-            lastCheckTime = newCounts[0].countedAt;
+            // Advance to the last id sent; anything beyond the batch comes next tick.
+            lastCountId = newCounts[newCounts.length - 1].id;
           }
 
           // Overall progress (only assigned items in the event's selected warehouses)
@@ -134,9 +158,6 @@ export async function GET(request: NextRequest) {
           // DB error, skip this tick
         }
       }, POLL_INTERVAL_MS);
-
-      // Cleanup on close
-      request.signal.addEventListener("abort", stop);
     },
     cancel() {
       stop();

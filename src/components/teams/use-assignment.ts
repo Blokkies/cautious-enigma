@@ -3,15 +3,23 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import {
+  binKey,
   naturalCompare,
+  toBinRef,
   type BalanceMode,
   type BinInfo,
   type BinItem,
+  type BinRef,
   type BinSortMode,
   type TeamDetail,
 } from "./assign-types";
 
 export type BinSearchMode = "contains" | "starts" | "exact" | "range";
+
+/** Tie-break bins with the same number by warehouse so the order is stable. */
+function byWarehouse(a: BinInfo, b: BinInfo): number {
+  return (a.warehouse ?? "").localeCompare(b.warehouse ?? "");
+}
 
 /**
  * State + handlers for the bin assignment page, shared by /admin/teams/assign and
@@ -23,7 +31,7 @@ export function useAssignment(eventId: string) {
   const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
   const [loading, setLoading] = useState(true);
 
-  // Bin selection (unassigned)
+  // Bin selection (unassigned). Bin Sets / caches in this hook are keyed by binKey(bin).
   const [selectedBins, setSelectedBins] = useState<Set<string>>(new Set());
   const [binSearch, setBinSearch] = useState("");
   const [binSearchMode, setBinSearchMode] = useState<BinSearchMode>("contains");
@@ -83,13 +91,13 @@ export function useAssignment(eventId: string) {
   const binComparator = useMemo(() => {
     switch (binSort) {
       case "natural":
-        return (a: BinInfo, b: BinInfo) => naturalCompare(a.bin_number, b.bin_number);
+        return (a: BinInfo, b: BinInfo) => naturalCompare(a.bin_number, b.bin_number) || byWarehouse(a, b);
       case "alpha":
-        return (a: BinInfo, b: BinInfo) => a.bin_number.localeCompare(b.bin_number);
+        return (a: BinInfo, b: BinInfo) => a.bin_number.localeCompare(b.bin_number) || byWarehouse(a, b);
       case "items-desc":
-        return (a: BinInfo, b: BinInfo) => b.item_count - a.item_count || naturalCompare(a.bin_number, b.bin_number);
+        return (a: BinInfo, b: BinInfo) => b.item_count - a.item_count || naturalCompare(a.bin_number, b.bin_number) || byWarehouse(a, b);
       case "value-desc":
-        return (a: BinInfo, b: BinInfo) => b.total_value - a.total_value || naturalCompare(a.bin_number, b.bin_number);
+        return (a: BinInfo, b: BinInfo) => b.total_value - a.total_value || naturalCompare(a.bin_number, b.bin_number) || byWarehouse(a, b);
     }
   }, [binSort]);
 
@@ -150,11 +158,11 @@ export function useAssignment(eventId: string) {
     return groupOrder.map((prefix) => [prefix, groups[prefix]] as [string, BinInfo[]]);
   }, [unassignedBins, binSearch, binSearchMode, binComparator, binSort, rangeFrom, rangeTo]);
 
-  const toggleBin = (binNumber: string) => {
+  const toggleBin = (key: string) => {
     setSelectedBins((prev) => {
       const next = new Set(prev);
-      if (next.has(binNumber)) next.delete(binNumber);
-      else next.add(binNumber);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -162,11 +170,11 @@ export function useAssignment(eventId: string) {
   const selectGroup = (bins: BinInfo[]) => {
     setSelectedBins((prev) => {
       const next = new Set(prev);
-      const allSelected = bins.every((b) => next.has(b.bin_number));
+      const allSelected = bins.every((b) => next.has(binKey(b)));
       if (allSelected) {
-        bins.forEach((b) => next.delete(b.bin_number));
+        bins.forEach((b) => next.delete(binKey(b)));
       } else {
-        bins.forEach((b) => next.add(b.bin_number));
+        bins.forEach((b) => next.add(binKey(b)));
       }
       return next;
     });
@@ -175,7 +183,7 @@ export function useAssignment(eventId: string) {
   const selectAll = () => {
     // Use the already-filtered bins from groupedBins
     const allFiltered = groupedBins.flatMap(([, bins]) => bins);
-    setSelectedBins(new Set(allFiltered.map((b) => b.bin_number)));
+    setSelectedBins(new Set(allFiltered.map(binKey)));
   };
 
   const clearSelection = () => {
@@ -199,29 +207,31 @@ export function useAssignment(eventId: string) {
   };
 
   // Bin items expansion
-  const toggleBinExpand = async (binNumber: string) => {
+  const toggleBinExpand = async (bin: BinInfo) => {
+    const key = binKey(bin);
     setExpandedBins((prev) => {
       const next = new Set(prev);
-      if (next.has(binNumber)) next.delete(binNumber);
-      else next.add(binNumber);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
 
-    if (!binItemsCache[binNumber]) {
-      setLoadingBinItems((prev) => new Set(prev).add(binNumber));
+    if (!binItemsCache[key]) {
+      setLoadingBinItems((prev) => new Set(prev).add(key));
       try {
-        const params = new URLSearchParams({ eventId, binNumber });
+        const params = new URLSearchParams({ eventId, binNumber: bin.bin_number, warehouse: bin.warehouse ?? "" });
+        if (brandFilter) params.set("brand", brandFilter);
         const res = await fetch(`/api/admin/assign?${params}`);
         if (res.ok) {
           const data = await res.json();
-          setBinItemsCache((prev) => ({ ...prev, [binNumber]: data.binItems || [] }));
+          setBinItemsCache((prev) => ({ ...prev, [key]: data.binItems || [] }));
         }
       } catch {
         toast.error("Failed to load bin items");
       } finally {
         setLoadingBinItems((prev) => {
           const next = new Set(prev);
-          next.delete(binNumber);
+          next.delete(key);
           return next;
         });
       }
@@ -268,7 +278,7 @@ export function useAssignment(eventId: string) {
     setBalancing(true);
     try {
       // Sort bins naturally so physically adjacent bins stay together
-      const sorted = [...binsToBalance].sort((a, b) => naturalCompare(a.bin_number, b.bin_number));
+      const sorted = [...binsToBalance].sort((a, b) => naturalCompare(a.bin_number, b.bin_number) || byWarehouse(a, b));
 
       // Build team trackers sorted by existing load (least loaded first)
       const teamTotals = targetTeams.map((t) => ({
@@ -276,7 +286,7 @@ export function useAssignment(eventId: string) {
         name: t.name,
         currentBins: t.bins.length,
         currentItems: t.itemCount,
-        bins: [] as string[],
+        bins: [] as BinRef[],
       }));
 
       // Sort teams by current load so the least-loaded teams get bins first
@@ -296,7 +306,7 @@ export function useAssignment(eventId: string) {
           const remaining = n - t;
           const chunkSize = Math.ceil((totalBins - idx) / remaining);
           for (let j = 0; j < chunkSize && idx < totalBins; j++, idx++) {
-            teamTotals[t].bins.push(sorted[idx].bin_number);
+            teamTotals[t].bins.push(toBinRef(sorted[idx]));
           }
         }
       } else {
@@ -310,7 +320,7 @@ export function useAssignment(eventId: string) {
           let runningItems = teamTotals[t].currentItems;
           while (idx < sorted.length) {
             if (!isLast && runningItems >= targetPerTeam && teamTotals[t].bins.length > 0) break;
-            teamTotals[t].bins.push(sorted[idx].bin_number);
+            teamTotals[t].bins.push(toBinRef(sorted[idx]));
             runningItems += sorted[idx].item_count;
             teamTotals[t].currentItems += sorted[idx].item_count;
             idx++;
@@ -329,6 +339,8 @@ export function useAssignment(eventId: string) {
           eventId: Number(eventId),
           action: "auto-balance",
           assignments,
+          // Only the filtered brand's items are distributed
+          ...(brandFilter ? { brand: brandFilter } : {}),
         }),
       });
 
@@ -347,6 +359,9 @@ export function useAssignment(eventId: string) {
         setSelectedBins(new Set());
         setBalanceTeams(new Set());
         loadData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Auto-balance failed");
       }
     } catch {
       toast.error("Auto-balance failed");
@@ -357,11 +372,11 @@ export function useAssignment(eventId: string) {
 
   // ── Team bin selection (for bulk removal) ───────────────────────────────────
 
-  const toggleTeamBin = (teamId: number, binNumber: string) => {
+  const toggleTeamBin = (teamId: number, key: string) => {
     setSelectedTeamBins((prev) => {
       const teamSet = new Set(prev[teamId] || []);
-      if (teamSet.has(binNumber)) teamSet.delete(binNumber);
-      else teamSet.add(binNumber);
+      if (teamSet.has(key)) teamSet.delete(key);
+      else teamSet.add(key);
       return { ...prev, [teamId]: teamSet };
     });
   };
@@ -369,11 +384,11 @@ export function useAssignment(eventId: string) {
   const toggleAllTeamBins = (teamId: number, bins: BinInfo[]) => {
     setSelectedTeamBins((prev) => {
       const teamSet = new Set(prev[teamId] || []);
-      const allSelected = bins.every((b) => teamSet.has(b.bin_number));
+      const allSelected = bins.every((b) => teamSet.has(binKey(b)));
       if (allSelected) {
         return { ...prev, [teamId]: new Set() };
       } else {
-        return { ...prev, [teamId]: new Set(bins.map((b) => b.bin_number)) };
+        return { ...prev, [teamId]: new Set(bins.map(binKey)) };
       }
     });
   };
@@ -381,7 +396,7 @@ export function useAssignment(eventId: string) {
   const selectFilteredTeamBins = (teamId: number, filteredBins: BinInfo[]) => {
     setSelectedTeamBins((prev) => ({
       ...prev,
-      [teamId]: new Set(filteredBins.map((b) => b.bin_number)),
+      [teamId]: new Set(filteredBins.map(binKey)),
     }));
   };
 
@@ -394,12 +409,14 @@ export function useAssignment(eventId: string) {
   };
 
   // DELETE /api/admin/assign; if the bins have counts (409), confirm and retry with clearCounts
-  const sendUnassign = async (payload: { teamId: number; bins?: string[] }): Promise<boolean> => {
+  const sendUnassign = async (payload: { teamId: number; bins?: BinRef[] }): Promise<boolean> => {
+    // With a brand filter active, removing bins only removes that brand's items (what is shown)
+    const brand = payload.bins && brandFilter ? { brand: brandFilter } : {};
     const send = (clearCounts: boolean) =>
       fetch("/api/admin/assign", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ eventId: Number(eventId), ...payload, ...(clearCounts ? { clearCounts: true } : {}) }),
+        body: JSON.stringify({ eventId: Number(eventId), ...payload, ...brand, ...(clearCounts ? { clearCounts: true } : {}) }),
       });
     let res = await send(false);
     if (res.status === 409) {
@@ -420,7 +437,7 @@ export function useAssignment(eventId: string) {
   };
 
   const handleBulkUnassign = async (teamId: number) => {
-    const bins = Array.from(selectedTeamBins[teamId] || []);
+    const bins = getSelectedBinsForReassign(teamId);
     if (bins.length === 0) return;
     try {
       if (await sendUnassign({ teamId, bins })) {
@@ -448,7 +465,9 @@ export function useAssignment(eventId: string) {
         body: JSON.stringify({
           eventId: Number(eventId),
           teamId: Number(assignToTeam),
-          bins: Array.from(selectedBins),
+          bins: unassignedBins.filter((b) => selectedBins.has(binKey(b))).map(toBinRef),
+          // Only the filtered brand's items in these bins are assigned
+          ...(brandFilter ? { brand: brandFilter } : {}),
         }),
       });
       if (res.ok) {
@@ -458,6 +477,9 @@ export function useAssignment(eventId: string) {
         setBinItemsCache({});
         setExpandedBins(new Set());
         loadData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || "Assignment failed");
       }
     } catch {
       toast.error("Assignment failed");
@@ -466,7 +488,7 @@ export function useAssignment(eventId: string) {
     }
   };
 
-  const handleUnassignBins = async (teamId: number, bins: string[]) => {
+  const handleUnassignBins = async (teamId: number, bins: BinRef[]) => {
     try {
       if (await sendUnassign({ teamId, bins })) {
         toast.success(`Removed ${bins.length} bin(s)`);
@@ -499,26 +521,26 @@ export function useAssignment(eventId: string) {
     });
   };
 
-  // Selected bins of a team, in the team's bin order (re-assign uses this)
-  const getSelectedBinsForReassign = (teamId: number): string[] => {
+  // Selected bins of a team, in the team's bin order (re-assign and bulk removal use this)
+  function getSelectedBinsForReassign(teamId: number): BinRef[] {
     const team = teamDetails.find(t => t.id === teamId);
     if (!team) return [];
     const selected = selectedTeamBins[teamId] || new Set<string>();
     return team.bins
-      .filter(b => selected.has(b.bin_number))
-      .map(b => b.bin_number);
-  };
+      .filter(b => selected.has(binKey(b)))
+      .map(toBinRef);
+  }
 
   const hasCountedBinsInSelection = (teamId: number): boolean => {
     const team = teamDetails.find(t => t.id === teamId);
     if (!team) return false;
     const selected = selectedTeamBins[teamId] || new Set<string>();
-    return team.bins.some(b => selected.has(b.bin_number) && (b.counted_items ?? 0) > 0);
+    return team.bins.some(b => selected.has(binKey(b)) && (b.counted_items ?? 0) > 0);
   };
 
   const selectedItemCount = useMemo(() => {
     return unassignedBins
-      .filter((b) => selectedBins.has(b.bin_number))
+      .filter((b) => selectedBins.has(binKey(b)))
       .reduce((sum, b) => sum + b.item_count, 0);
   }, [unassignedBins, selectedBins]);
 

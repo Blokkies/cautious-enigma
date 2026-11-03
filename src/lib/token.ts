@@ -8,7 +8,8 @@ if (!process.env.JWT_SECRET && process.env.NODE_ENV === "production") {
 }
 const JWT_SECRET = new TextEncoder().encode(jwtSecretValue);
 
-const TOKEN_EXPIRY = "72h";
+/** Session lifetime. /api/auth/me renews the token once less than half remains. */
+export const TOKEN_MAX_AGE_SECONDS = 60 * 60 * 72; // 72 hours
 
 export interface TokenPayload {
   id: number;
@@ -17,14 +18,29 @@ export interface TokenPayload {
   eventId: number;
   eventName: string;
   eventStatus?: string;
+  /** Standard JWT claims, present on verified tokens (seconds since epoch). */
+  iat?: number;
+  exp?: number;
 }
 
 export async function createToken(payload: TokenPayload): Promise<string> {
-  return new SignJWT(payload as unknown as Record<string, unknown>)
+  // Never carry over claims from a previous token; jose sets fresh ones.
+  const { iat: _iat, exp: _exp, ...claims } = payload;
+  void _iat;
+  void _exp;
+  const now = Math.floor(Date.now() / 1000);
+  return new SignJWT(claims as unknown as Record<string, unknown>)
     .setProtectedHeader({ alg: "HS256" })
-    .setExpirationTime(TOKEN_EXPIRY)
-    .setIssuedAt()
+    .setIssuedAt(now)
+    .setExpirationTime(now + TOKEN_MAX_AGE_SECONDS)
     .sign(JWT_SECRET);
+}
+
+/** True once less than half of the token's lifetime remains. */
+export function shouldRenewToken(payload: Pick<TokenPayload, "exp">, nowMs = Date.now()): boolean {
+  if (typeof payload.exp !== "number") return false;
+  const remaining = payload.exp - Math.floor(nowMs / 1000);
+  return remaining < TOKEN_MAX_AGE_SECONDS / 2;
 }
 
 export async function verifyToken(

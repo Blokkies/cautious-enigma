@@ -1311,7 +1311,8 @@ Continue and delete existing counts?`)) {
                       readiness?.hasSupervisors && (
                         <Button
                           onClick={handleActivate}
-                          disabled={activating}
+                          disabled={activating || !readiness.allItemsAssigned}
+                          title={readiness.allItemsAssigned ? undefined : "Assign all items to teams before activating"}
                           className="gap-1"
                         >
                           <Play className="h-4 w-4" />

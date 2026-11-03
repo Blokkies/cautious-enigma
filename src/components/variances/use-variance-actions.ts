@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { toast } from "sonner";
-import type { AcceptAction, Team, VarianceItem } from "./types";
+import { closeVerification, type AcceptAction, type Team, type VarianceItem } from "./types";
 import type { VariancesData } from "./use-variances-data";
 import { distributeVerifications } from "@/lib/verification-distribution";
 
@@ -99,6 +99,7 @@ export function useVarianceEditing(data: VariancesData, setSaving: SetBool) {
             variance: count.variance,
             varianceValue: count.varianceValue,
             checkStatus: "accepted",
+            verificationStatus: closeVerification(editingItem.verificationStatus),
           },
           ...prev,
         ]);
@@ -114,6 +115,7 @@ export function useVarianceEditing(data: VariancesData, setSaving: SetBool) {
                   variance: count.variance,
                   varianceValue: count.varianceValue,
                   checkStatus: "accepted",
+                  verificationStatus: closeVerification(v.verificationStatus),
                 }
               : v
           )
@@ -137,6 +139,7 @@ export function useVarianceEditing(data: VariancesData, setSaving: SetBool) {
             variance: count.variance,
             varianceValue: count.varianceValue,
             checkStatus: "accepted",
+            verificationStatus: closeVerification(editingItem.verificationStatus),
           },
           ...prev,
         ]);
@@ -308,7 +311,7 @@ export function useVarianceRowActions(data: VariancesData, setSaving: SetBool) {
         prev.filter((item) => item.countId !== v.countId)
       );
       setAcceptedVariances((prev) => [
-        { ...v, checkStatus: "accepted" },
+        { ...v, checkStatus: "accepted", verificationStatus: closeVerification(v.verificationStatus) },
         ...prev,
       ]);
       toast.success(`${v.itemCode} variance accepted`);
@@ -340,7 +343,11 @@ export function useVarianceRowActions(data: VariancesData, setSaving: SetBool) {
         prev.filter((item) => item.countId !== v.countId)
       );
       setActiveVariances((prev) => [
-        { ...v, checkStatus: "pending" },
+        {
+          ...v,
+          checkStatus: "pending",
+          verificationStatus: v.verificationStatus === "accepted" ? "completed" : v.verificationStatus,
+        },
         ...prev,
       ]);
       toast.success(`${v.itemCode} moved back to active`);
@@ -600,16 +607,23 @@ export function useVarianceSelection(
         return;
       }
       const data = await res.json();
-      // Optimistic move from active to accepted
-      const acceptedIds = new Set(ids);
+      // Optimistic move from active to accepted. The server skips counts with a
+      // recount still pending and returns the ids it actually accepted.
+      const acceptedIds = new Set<number>(Array.isArray(data.acceptedIds) ? data.acceptedIds : ids);
       const moved = activeVariances.filter((v) => acceptedIds.has(v.countId));
       setActiveVariances((prev) => prev.filter((v) => !acceptedIds.has(v.countId)));
       setAcceptedVariances((prev) => [
-        ...moved.map((v) => ({ ...v, checkStatus: "accepted" })),
+        ...moved.map((v) => ({ ...v, checkStatus: "accepted", verificationStatus: closeVerification(v.verificationStatus) })),
         ...prev,
       ]);
-      setSelectedCountIds(new Set());
-      toast.success(`${data.acceptedCount} variance${data.acceptedCount !== 1 ? "s" : ""} accepted`);
+      setSelectedCountIds((prev) => new Set(Array.from(prev).filter((id) => !acceptedIds.has(id))));
+      const accepted = `${data.acceptedCount} variance${data.acceptedCount !== 1 ? "s" : ""} accepted`;
+      const skipped: number = data.skippedPendingVerification ?? 0;
+      if (skipped > 0) {
+        toast.warning(`${accepted}; ${skipped} skipped because a recount is still pending (they remain selected)`);
+      } else {
+        toast.success(accepted);
+      }
     } catch {
       toast.error("Failed to accept — check your connection");
     } finally {

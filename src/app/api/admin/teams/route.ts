@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { teams, supervisors, items, counts, queries, queryMessages, breakdowns, breakdownMessages, teamAssignments, verificationAssignments, serialDiscrepancies, execMessages } from "@/lib/db/schema";
-import { eq, and, sql, isNotNull } from "drizzle-orm";
+import { eq, and, ne, sql, isNotNull } from "drizzle-orm";
 import { hashPin } from "@/lib/auth";
 import { requireUser, resolveEventId, getEventWarehouses, warehouseFilter } from "@/lib/api-auth";
 import { checkEventWritable } from "../event-guard";
@@ -187,15 +187,46 @@ export async function DELETE(request: NextRequest) {
       if (user.type === "supervisor") {
         return NextResponse.json({ error: "Supervisors cannot delete other supervisors" }, { status: 403 });
       }
+      const supId = Number(id);
+      const [sup] = await db.select({ eventId: supervisors.eventId }).from(supervisors).where(eq(supervisors.id, supId));
+      if (!sup) {
+        return NextResponse.json({ error: "Supervisor not found" }, { status: 404 });
+      }
+      // Never on a completed/locked stocktake: the supervisor's actions are part of its record
+      const guard = await checkEventWritable(sup.eventId, user.type, true);
+      if (guard) return NextResponse.json({ error: guard }, { status: 403 });
+
+      // verification_assignments.assigned_by is NOT NULL, so finished verifications can't be
+      // detached from the supervisor who ordered them. Keep that history: refuse the delete.
+      const [history] = await db
+        .select({ count: countInt() })
+        .from(verificationAssignments)
+        .where(and(eq(verificationAssignments.assignedBy, supId), ne(verificationAssignments.status, "pending")));
+      const historyCount = history?.count || 0;
+      if (historyCount > 0) {
+        return NextResponse.json(
+          {
+            error: `This supervisor ordered ${historyCount} verification${historyCount === 1 ? "" : "s"} that ${historyCount === 1 ? "has" : "have"} already been completed. Deleting them would erase that verification history.`,
+            verificationHistoryCount: historyCount,
+          },
+          { status: 409 }
+        );
+      }
+
       await db.transaction(async (tx) => {
         // Clear FK references before deleting supervisor
-        await tx.delete(execMessages).where(eq(execMessages.supervisorId, id));
-        await tx.delete(verificationAssignments).where(eq(verificationAssignments.assignedBy, id));
-        await tx.update(queries).set({ respondedBy: null }).where(eq(queries.respondedBy, id));
-        await tx.update(breakdowns).set({ approvedBy: null }).where(eq(breakdowns.approvedBy, id));
-        await tx.update(serialDiscrepancies).set({ resolvedBy: null }).where(eq(serialDiscrepancies.resolvedBy, id));
-        await tx.update(serialDiscrepancies).set({ verificationAssignedBy: null }).where(eq(serialDiscrepancies.verificationAssignedBy, id));
-        await tx.delete(supervisors).where(eq(supervisors.id, id));
+        await tx.delete(execMessages).where(eq(execMessages.supervisorId, supId));
+        // Only still-pending verifications they ordered (completed ones were refused above;
+        // the status condition also keeps any that completed in the meantime, making the
+        // supervisor delete fail on the FK rather than erase them)
+        await tx.delete(verificationAssignments).where(
+          and(eq(verificationAssignments.assignedBy, supId), eq(verificationAssignments.status, "pending"))
+        );
+        await tx.update(queries).set({ respondedBy: null }).where(eq(queries.respondedBy, supId));
+        await tx.update(breakdowns).set({ approvedBy: null }).where(eq(breakdowns.approvedBy, supId));
+        await tx.update(serialDiscrepancies).set({ resolvedBy: null }).where(eq(serialDiscrepancies.resolvedBy, supId));
+        await tx.update(serialDiscrepancies).set({ verificationAssignedBy: null }).where(eq(serialDiscrepancies.verificationAssignedBy, supId));
+        await tx.delete(supervisors).where(eq(supervisors.id, supId));
       });
     } else {
       const [team] = await db.select({ eventId: teams.eventId }).from(teams).where(eq(teams.id, Number(id)));

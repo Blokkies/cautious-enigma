@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { queries, items, queryMessages, supervisors, auditLog } from "@/lib/db/schema";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
-import { requireUser, checkEventActive } from "@/lib/api-auth";
+import { requireUser } from "@/lib/api-auth";
+import { teamEventGate } from "../_lib/event-gate";
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["team"], status: 401 });
@@ -87,10 +88,8 @@ export async function POST(request: NextRequest) {
   if (auth.response) return auth.response;
   const { user } = auth;
 
-  const lockError = await checkEventActive(user.eventId);
-  if (lockError) {
-    return NextResponse.json({ error: lockError }, { status: 403 });
-  }
+  const gate = await teamEventGate(user.eventId);
+  if (gate) return gate;
 
   try {
     const { queryType, message, itemId } = await request.json();
@@ -149,10 +148,8 @@ export async function PATCH(request: NextRequest) {
   if (auth.response) return auth.response;
   const { user } = auth;
 
-  const lockError = await checkEventActive(user.eventId);
-  if (lockError) {
-    return NextResponse.json({ error: lockError }, { status: 403 });
-  }
+  const gate = await teamEventGate(user.eventId);
+  if (gate) return gate;
 
   try {
     const { queryId, message } = await request.json();

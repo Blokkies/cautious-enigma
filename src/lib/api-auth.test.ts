@@ -31,6 +31,7 @@ import {
   getEventWarehouses,
   getSerialDiscrepancyOverStats,
   isRefOutsideWarehouses,
+  mergeUnknownsIntoApproved,
   pickItemRefs,
   principalExists,
   requireUser,
@@ -198,6 +199,31 @@ describe("isRefOutsideWarehouses", () => {
   it("is true only when the ref's warehouse is not selected", () => {
     expect(isRefOutsideWarehouses({ warehouse: "JHB" }, ["CPT"])).toBe(true);
     expect(isRefOutsideWarehouses({ warehouse: "CPT" }, ["CPT"])).toBe(false);
+  });
+});
+
+describe("mergeUnknownsIntoApproved", () => {
+  it("moves unknowns into approved so a resolved-approved discrepancy keeps its value", () => {
+    const merged = mergeUnknownsIntoApproved(JSON.stringify(["U1", "U2"]), JSON.stringify(["A1"]));
+    expect(merged).toEqual({ unknownSerials: "[]", approvedSerials: JSON.stringify(["A1", "U1", "U2"]) });
+    expect(getCountableDiscrepancySerials({ status: "resolved", ...merged })).toEqual({
+      unknowns: [],
+      approved: ["A1", "U1", "U2"],
+    });
+  });
+
+  it("deduplicates serials already approved", () => {
+    expect(mergeUnknownsIntoApproved(JSON.stringify(["A1", "U1"]), JSON.stringify(["A1"])).approvedSerials).toBe(
+      JSON.stringify(["A1", "U1"])
+    );
+  });
+
+  it("handles null / malformed input", () => {
+    expect(mergeUnknownsIntoApproved(null, null)).toEqual({ unknownSerials: "[]", approvedSerials: "[]" });
+    expect(mergeUnknownsIntoApproved(JSON.stringify(["U1"]), "{bad")).toEqual({
+      unknownSerials: "[]",
+      approvedSerials: JSON.stringify(["U1"]),
+    });
   });
 });
 

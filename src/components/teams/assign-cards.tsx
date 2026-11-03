@@ -27,9 +27,19 @@ import {
   ArrowRightLeft,
   Lock,
 } from "lucide-react";
-import { naturalCompare, type BalanceMode, type BinSortMode, type TeamDetail } from "./assign-types";
+import { binKey, naturalCompare, toBinRef, type BalanceMode, type BinSortMode, type TeamDetail } from "./assign-types";
 import type { AssignedBinFilters, AssignmentState } from "./use-assignment";
 import type { ReassignState } from "./reassign-dialog";
+
+/** Warehouse of a bin: bins with the same number in different warehouses are different bins. */
+function WarehouseTag({ warehouse }: { warehouse: string | null }) {
+  if (!warehouse) return null;
+  return (
+    <span className="text-[10px] uppercase tracking-wide text-muted-foreground border rounded px-1 leading-4">
+      {warehouse}
+    </span>
+  );
+}
 
 export function AssignProgressCard({ assign }: { assign: AssignmentState }) {
   const { stats, assignedPercent } = assign;
@@ -132,8 +142,8 @@ export function TeamAssignmentsCard({ assign, readOnly = false, filters, reassig
             const isBalanceSelected = balanceTeams.has(team.id);
             const selectedCount = getSelectedTeamBinCount(team.id);
             const teamBinSet = selectedTeamBins[team.id] || new Set<string>();
-            const allBinsSelected = team.bins.length > 0 && team.bins.every((b) => teamBinSet.has(b.bin_number));
-            const someBinsSelected = team.bins.some((b) => teamBinSet.has(b.bin_number));
+            const allBinsSelected = team.bins.length > 0 && team.bins.every((b) => teamBinSet.has(binKey(b)));
+            const someBinsSelected = team.bins.some((b) => teamBinSet.has(binKey(b)));
 
             return (
               <div key={team.id} className={`border rounded-lg ${isBalanceSelected ? "border-blue-300 bg-blue-50/30" : ""}`}>
@@ -318,18 +328,19 @@ function SimpleTeamBinList({ assign, team, teamBinSet, allBinsSelected, someBins
       </div>
       {team.bins.map((bin) => (
         <div
-          key={bin.bin_number}
+          key={binKey(bin)}
           className="flex items-center justify-between text-sm py-1"
         >
           <div className="flex items-center gap-2">
             <input
               type="checkbox"
-              checked={teamBinSet.has(bin.bin_number)}
-              onChange={() => toggleTeamBin(team.id, bin.bin_number)}
+              checked={teamBinSet.has(binKey(bin))}
+              onChange={() => toggleTeamBin(team.id, binKey(bin))}
               className="rounded"
             />
             <Package className="h-3 w-3 text-muted-foreground" />
             <span className="font-mono">{bin.bin_number}</span>
+            <WarehouseTag warehouse={bin.warehouse} />
             <span className="text-muted-foreground">
               ({bin.item_count} items)
             </span>
@@ -338,7 +349,7 @@ function SimpleTeamBinList({ assign, team, teamBinSet, allBinsSelected, someBins
             variant="ghost"
             size="sm"
             className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-            onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
+            onClick={() => handleUnassignBins(team.id, [toBinRef(bin)])}
           >
             Remove
           </Button>
@@ -537,20 +548,21 @@ function FilterableTeamBinList({
         const isCounted = (bin.counted_items ?? 0) > 0;
         return (
           <div
-            key={bin.bin_number}
+            key={binKey(bin)}
             className="flex items-center justify-between text-sm py-1"
           >
             <div className="flex items-center gap-2">
               {!readOnly && (
                 <input
                   type="checkbox"
-                  checked={teamBinSet.has(bin.bin_number)}
-                  onChange={() => toggleTeamBin(team.id, bin.bin_number)}
+                  checked={teamBinSet.has(binKey(bin))}
+                  onChange={() => toggleTeamBin(team.id, binKey(bin))}
                   className="rounded"
                 />
               )}
               <Package className="h-3 w-3 text-muted-foreground" />
               <span className="font-mono">{bin.bin_number}</span>
+            <WarehouseTag warehouse={bin.warehouse} />
               <span className="text-muted-foreground">
                 ({bin.item_count} items)
               </span>
@@ -569,7 +581,7 @@ function FilterableTeamBinList({
                     size="sm"
                     className="h-6 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                     onClick={() => {
-                      reassign.openReassign({ fromTeamId: team.id, bins: [bin.bin_number], hasCountedBins: isCounted });
+                      reassign.openReassign({ fromTeamId: team.id, bins: [toBinRef(bin)], hasCountedBins: isCounted });
                     }}
                     title="Re-assign to another team"
                   >
@@ -580,7 +592,7 @@ function FilterableTeamBinList({
                   variant="ghost"
                   size="sm"
                   className="h-6 px-2 text-xs text-destructive hover:text-destructive"
-                  onClick={() => handleUnassignBins(team.id, [bin.bin_number])}
+                  onClick={() => handleUnassignBins(team.id, [toBinRef(bin)])}
                 >
                   Remove
                 </Button>
@@ -753,10 +765,10 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
           ) : (
             groupedBins.map(([prefix, bins]) => {
               const allSelected = bins.every((b) =>
-                selectedBins.has(b.bin_number)
+                selectedBins.has(binKey(b))
               );
               const someSelected = bins.some((b) =>
-                selectedBins.has(b.bin_number)
+                selectedBins.has(binKey(b))
               );
               const groupItemCount = bins.reduce(
                 (s, b) => s + b.item_count,
@@ -794,23 +806,23 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
                   {/* Individual bins */}
                   <div className="ml-6 space-y-0.5 mt-1">
                     {bins.map((bin) => (
-                      <div key={bin.bin_number}>
+                      <div key={binKey(bin)}>
                         <div className="flex items-center justify-between py-0.5 px-2 rounded hover:bg-gray-50 text-sm">
                           <div className="flex items-center gap-2">
                             {!readOnly && (
                               <input
                                 type="checkbox"
-                                checked={selectedBins.has(bin.bin_number)}
-                                onChange={() => toggleBin(bin.bin_number)}
+                                checked={selectedBins.has(binKey(bin))}
+                                onChange={() => toggleBin(binKey(bin))}
                                 className="rounded"
                               />
                             )}
                             <button
                               type="button"
-                              onClick={() => toggleBinExpand(bin.bin_number)}
+                              onClick={() => toggleBinExpand(bin)}
                               className="flex items-center gap-1 hover:text-blue-600"
                             >
-                              {expandedBins.has(bin.bin_number) ? (
+                              {expandedBins.has(binKey(bin)) ? (
                                 <ChevronDown className="h-3 w-3" />
                               ) : (
                                 <ChevronRight className="h-3 w-3" />
@@ -819,19 +831,20 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
                                 {bin.bin_number}
                               </span>
                             </button>
+                            <WarehouseTag warehouse={bin.warehouse} />
                           </div>
                           <span className="text-xs text-muted-foreground">
                             {bin.item_count} items
                           </span>
                         </div>
-                        {expandedBins.has(bin.bin_number) && (
+                        {expandedBins.has(binKey(bin)) && (
                           <div className="ml-10 mb-1 border-l-2 border-gray-200 pl-2">
-                            {loadingBinItems.has(bin.bin_number) ? (
+                            {loadingBinItems.has(binKey(bin)) ? (
                               <div className="text-xs text-muted-foreground py-1 flex items-center gap-1">
                                 <Loader2 className="h-3 w-3 animate-spin" /> Loading...
                               </div>
-                            ) : binItemsCache[bin.bin_number]?.length ? (
-                              binItemsCache[bin.bin_number].map((item) => (
+                            ) : binItemsCache[binKey(bin)]?.length ? (
+                              binItemsCache[binKey(bin)].map((item) => (
                                 <div key={item.id} className="text-xs py-0.5 flex items-center justify-between text-muted-foreground">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <span className="font-mono shrink-0">{item.item_code}</span>

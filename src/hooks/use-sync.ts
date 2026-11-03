@@ -90,16 +90,17 @@ export function useSync() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Preload items on mount
+  // Preload items on mount (once the team session is known, so the cache is
+  // tagged with — and only ever read back by — this team/event)
   useEffect(() => {
-    if (isOnline && !state.preloaded) {
-      preloadItems().then((count) => {
+    if (isOnline && scope && !state.preloaded) {
+      preloadItems(scope).then((count) => {
         if (count > 0) {
           setState((prev) => ({ ...prev, preloaded: true }));
         }
       });
     }
-  }, [isOnline, state.preloaded]);
+  }, [isOnline, scope, state.preloaded]);
 
   // Auto-sync when coming online (or once the team session is known)
   useEffect(() => {

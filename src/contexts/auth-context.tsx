@@ -22,6 +22,26 @@ interface AuthContextType {
   logout: () => Promise<boolean>;
 }
 
+const LAST_USER_KEY = "stocktake:lastUser";
+
+function rememberUser(u: User | null) {
+  try {
+    if (u) localStorage.setItem(LAST_USER_KEY, JSON.stringify(u));
+    else localStorage.removeItem(LAST_USER_KEY);
+  } catch {
+    // storage unavailable
+  }
+}
+
+function recallUser(): User | null {
+  try {
+    const raw = localStorage.getItem(LAST_USER_KEY);
+    return raw ? (JSON.parse(raw) as User) : null;
+  } catch {
+    return null;
+  }
+}
+
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -33,12 +53,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch("/api/auth/me");
       if (res.ok) {
         const data = await res.json();
+        rememberUser(data.user);
         setUser(data.user);
-      } else {
+      } else if (res.status === 401 || res.status === 403) {
+        rememberUser(null);
         setUser(null);
+      } else {
+        // Server/SW unreachable (e.g. offline 503): reuse the last known session
+        // so a team can keep counting offline after a reload.
+        setUser(recallUser());
       }
     } catch {
-      setUser(null);
+      setUser(recallUser());
     } finally {
       setLoading(false);
     }
@@ -47,6 +73,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  // Background refresh while signed in: picks up the live event status and
+  // lets /api/auth/me renew the session cookie before it expires. Only an
+  // explicit 401 signs the user out; network errors (offline counting) are
+  // ignored so a team is never dropped mid-count.
+  const signedIn = user !== null;
+  useEffect(() => {
+    if (!signedIn) return;
+    const refresh = async () => {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) {
+          const data = await res.json();
+          // Keep the same object when nothing changed so effects keyed on
+          // `user` don't re-run on every refresh.
+          setUser((prev) => (JSON.stringify(prev) === JSON.stringify(data.user) ? prev : data.user));
+        } else if (res.status === 401) {
+          rememberUser(null);
+          setUser(null);
+        }
+      } catch {
+        // offline — keep the current session
+      }
+    };
+    const interval = setInterval(refresh, 10 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [signedIn]);
 
   const login = async (type: string, id: number, pin: string, eventId?: number) => {
     try {
@@ -57,6 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (data.success) {
+        rememberUser(data.user);
         setUser(data.user);
         return { success: true };
       }
@@ -75,6 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (data.success) {
+        rememberUser(data.user);
         setUser(data.user);
         return { success: true };
       }
@@ -93,6 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (data.success) {
+        rememberUser(data.user);
         setUser(data.user);
         return { success: true };
       }
@@ -128,6 +191,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    rememberUser(null);
     setUser(null);
     return true;
   };

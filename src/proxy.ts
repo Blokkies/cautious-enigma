@@ -111,9 +111,8 @@ export async function proxy(request: NextRequest) {
   // Header values must be Latin-1; encode so names with any Unicode character work.
   requestHeaders.set("x-user-name", encodeURIComponent(payload.name));
   requestHeaders.set("x-event-id", String(payload.eventId));
-  if (payload.eventStatus) {
-    requestHeaders.set("x-event-status", payload.eventStatus);
-  }
+  // No x-event-status: the token's status is a login-time snapshot and goes
+  // stale. Handlers that care read the live status (checkEventActive).
 
   return NextResponse.next({ request: { headers: requestHeaders } });
 }

@@ -11,8 +11,45 @@ import {
   serialDiscrepancies,
 } from "@/lib/db/schema";
 import { eq, and, sql, isNotNull } from "drizzle-orm";
-import { requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter, getSerialDiscrepancyOverStats } from "@/lib/api-auth";
+import {
+  requireUser, getEventWarehouses, warehouseFilter, countsWarehouseFilter,
+  buildItemRefMap, isRefOutsideWarehouses, getCountableDiscrepancySerials,
+} from "@/lib/api-auth";
 import { countInt, sumFloat } from "@/lib/db/aggregates";
+
+/**
+ * Serial-discrepancy surplus (unknown + approved serials) grouped by the
+ * warehouse of the source item. Same rules as getSerialDiscrepancyOverStats,
+ * so the per-warehouse rows add up to the event's overCount/overValue.
+ */
+async function getSerialOverByWarehouse(eventId: number, warehouses: string[] | null) {
+  const byWarehouse = new Map<string, { overCount: number; overValue: number }>();
+  const discRows = await db
+    .select({
+      itemCode: serialDiscrepancies.itemCode,
+      unknownSerials: serialDiscrepancies.unknownSerials,
+      approvedSerials: serialDiscrepancies.approvedSerials,
+      status: serialDiscrepancies.status,
+    })
+    .from(serialDiscrepancies)
+    .where(eq(serialDiscrepancies.eventId, eventId));
+  if (discRows.length === 0) return byWarehouse;
+
+  const refMap = await buildItemRefMap(eventId, discRows.map((d) => d.itemCode), warehouses);
+  for (const disc of discRows) {
+    const ref = refMap.get(disc.itemCode);
+    if (isRefOutsideWarehouses(ref, warehouses)) continue;
+    const { unknowns, approved } = getCountableDiscrepancySerials(disc);
+    const n = unknowns.length + approved.length;
+    if (n === 0) continue;
+    const key = ref?.warehouse || "Unknown";
+    const entry = byWarehouse.get(key) ?? { overCount: 0, overValue: 0 };
+    entry.overCount += n;
+    entry.overValue += n * (ref?.avgCost ?? 0);
+    byWarehouse.set(key, entry);
+  }
+  return byWarehouse;
+}
 
 export async function GET(request: NextRequest) {
   const auth = await requireUser(request, { roles: ["executive", "admin"], status: 401 });
@@ -21,7 +58,7 @@ export async function GET(request: NextRequest) {
   const eventList = await db
     .select()
     .from(stocktakeEvents)
-    .where(sql`${stocktakeEvents.status} IN ('active', 'completed')`);
+    .where(sql`${stocktakeEvents.status} IN ('active', 'completed', 'locked')`);
 
   if (eventList.length === 0) {
     return NextResponse.json({ events: [] });
@@ -86,15 +123,31 @@ export async function GET(request: NextRequest) {
       .groupBy(items.warehouse)
       .orderBy(sql`sum(abs(${counts.varianceValue})) DESC`);
 
-    const warehouseStats = warehouseStatsRows.map((r) => ({
-      warehouse: r.warehouse || "Unknown",
-      overCount: r.overCount,
-      overValue: r.overValue,
-      underCount: r.underCount,
-      underValue: r.underValue,
-    }));
-
-    const serialOverStats = await getSerialDiscrepancyOverStats(event.id, warehouses);
+    // Merge count-based rows with serial-discrepancy overs per warehouse so the
+    // rows sum to the event totals (which include the discrepancy overs).
+    const serialOverByWarehouse = await getSerialOverByWarehouse(event.id, warehouses);
+    const warehouseMap = new Map<string, { warehouse: string; overCount: number; overValue: number; underCount: number; underValue: number }>();
+    for (const r of warehouseStatsRows) {
+      const key = r.warehouse || "Unknown";
+      const entry = warehouseMap.get(key) ?? { warehouse: key, overCount: 0, overValue: 0, underCount: 0, underValue: 0 };
+      entry.overCount += r.overCount;
+      entry.overValue += r.overValue;
+      entry.underCount += r.underCount;
+      entry.underValue += r.underValue;
+      warehouseMap.set(key, entry);
+    }
+    const serialOverStats = { overCount: 0, overValue: 0 };
+    for (const [key, s] of serialOverByWarehouse) {
+      const entry = warehouseMap.get(key) ?? { warehouse: key, overCount: 0, overValue: 0, underCount: 0, underValue: 0 };
+      entry.overCount += s.overCount;
+      entry.overValue += s.overValue;
+      warehouseMap.set(key, entry);
+      serialOverStats.overCount += s.overCount;
+      serialOverStats.overValue += s.overValue;
+    }
+    const warehouseStats = Array.from(warehouseMap.values()).sort(
+      (a, b) => b.overValue + b.underValue - (a.overValue + a.underValue)
+    );
 
     const totalItems = totalItemsRow?.count ?? 0;
     const countedItems = countedItemsRow?.count ?? 0;

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { ClipboardCheck, ChevronRight, ChevronDown, Check, RotateCcw, X as XIcon, Pencil, MessageSquare } from "lucide-react";
 import { groupSerializedVariances, type SerializedGroupRow } from "@/lib/variance-grouping";
-import type { AcceptAction, VarianceItem } from "./types";
+import { isRecountPending, type AcceptAction, type VarianceItem } from "./types";
 
 interface VarianceTableProps {
   items: VarianceItem[];
@@ -502,6 +502,10 @@ function VerificationStatus({ v, props, showOriginalLine }: { v: VarianceItem; p
 /** Last column: accept / reopen / edit buttons (not shown for serial rows). */
 function RowActionsCell({ v, props }: { v: VarianceItem; props: RowProps }) {
   const { showAcceptButton, showReopenButton, onAcceptVariance, onReopenVariance, onEdit, isSaving } = props;
+  // The server rejects accept/edit while a recount is in progress: the recount
+  // result would otherwise compete with the supervisor's decision.
+  const recountPending = isRecountPending(v);
+  const blockedTitle = "Recount pending — wait for the verification team to submit";
   return (
     <TableCell>
       {!v.isUnknownSerial && !v.isApprovedSerial && (
@@ -512,8 +516,8 @@ function RowActionsCell({ v, props }: { v: VarianceItem; props: RowProps }) {
               size="sm"
               className="h-7 text-xs px-2 text-green-700 border-green-300 hover:bg-green-50"
               onClick={() => onAcceptVariance?.(v)}
-              disabled={isSaving}
-              title="Accept variance"
+              disabled={isSaving || recountPending}
+              title={recountPending ? blockedTitle : "Accept variance"}
             >
               <Check className="h-3.5 w-3.5" />
             </Button>
@@ -535,6 +539,8 @@ function RowActionsCell({ v, props }: { v: VarianceItem; props: RowProps }) {
             size="sm"
             className="h-7 text-xs"
             onClick={() => onEdit?.(v)}
+            disabled={recountPending}
+            title={recountPending ? blockedTitle : undefined}
           >
             Edit
           </Button>

@@ -152,14 +152,62 @@ const NORMALIZED_COLUMN_MAP: Record<string, keyof ImportedItem> = Object.fromEnt
   Object.entries(COLUMN_MAP).map(([key, field]) => [normalizeColumnName(key), field])
 );
 
+/** Warehouse value stored for items imported with a blank warehouse, so they stay visible to warehouse filters. */
+export const NO_WAREHOUSE = "(No warehouse)";
+
+/** Normalize an imported warehouse value: blank/whitespace becomes NO_WAREHOUSE. */
+export function normalizeWarehouse(val: string | null | undefined): string {
+  const trimmed = (val ?? "").trim();
+  return trimmed.length > 0 ? trimmed : NO_WAREHOUSE;
+}
+
 /**
- * Parse a numeric cell. Text cells may use thousands separators ("1,234",
- * "1 234.5"); separators are stripped, decimals kept. Unparseable -> 0.
+ * Parse a numeric cell. Text cells may carry a currency marker ("R 12.50", "ZAR 5")
+ * and thousands separators ("1,234", "1 234.5", "1,234.50"). Spaces and a leading
+ * "R"/"ZAR" marker are stripped; commas are always thousands separators. Unparseable -> 0.
  */
 export function parseNumericCell(val: unknown): number {
   if (typeof val === "number") return Number.isFinite(val) ? val : 0;
-  const cleaned = String(val).replace(/[,\s]/g, "");
-  return parseFloat(cleaned) || 0;
+  let s = String(val ?? "").replace(/\s/g, ""); // \s includes non-breaking spaces
+  let sign = "";
+  if (s.startsWith("-")) {
+    sign = "-";
+    s = s.slice(1);
+  }
+  s = s.replace(/^(ZAR|R)/i, "");
+  if (!sign && s.startsWith("-")) {
+    sign = "-";
+    s = s.slice(1);
+  }
+  const n = parseFloat(sign + s.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+export interface SpreadsheetSource {
+  /** Original file name; a ".csv" extension selects strict comma-separated parsing. */
+  filename?: string;
+  /** MIME type of the upload, if known. */
+  mimeType?: string;
+}
+
+/** True if the upload is a CSV file (by extension or MIME type). */
+export function isCsvSource(source?: SpreadsheetSource): boolean {
+  if (!source) return false;
+  if (source.filename && /\.csv$/i.test(source.filename.trim())) return true;
+  const mime = (source.mimeType || "").toLowerCase();
+  return mime === "text/csv" || mime === "application/csv";
+}
+
+/**
+ * Read an uploaded workbook. CSV files are always split on commas (SheetJS would
+ * otherwise sniff ";" or tab as the separator) and keep their cells as text, so quoted
+ * values like "1,234" and item codes like "0500" survive; numbers are parsed later.
+ */
+export function readWorkbook(buffer: ArrayBuffer, source?: SpreadsheetSource): XLSX.WorkBook {
+  if (isCsvSource(source)) {
+    return XLSX.read(buffer, { type: "array", FS: ",", raw: true });
+  }
+  return XLSX.read(buffer, { type: "array" });
 }
 
 /** Strip leading formula-injection characters from imported cell values */
@@ -169,17 +217,19 @@ function sanitizeCellValue(val: string): string {
   return val.replace(/^[=@\t\r]+/, "");
 }
 
-export function parseExcel(buffer: ArrayBuffer): {
+export function parseExcel(buffer: ArrayBuffer, source?: SpreadsheetSource): {
   items: ImportedItem[];
   headers: string[];
   mappedFields: string[];
   unmappedHeaders: string[];
   rowCount: number;
 } {
-  const workbook = XLSX.read(buffer, { type: "array" });
+  const workbook = readWorkbook(buffer, source);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
+  // defval keeps a key for every header column even when a row's cell is blank;
+  // without it, a blank cell in the first data row would hide the whole column.
+  const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
 
   if (rawData.length === 0) {
     return {
@@ -227,7 +277,7 @@ export function parseExcel(buffer: ArrayBuffer): {
 
     for (const [header, field] of Object.entries(headerMapping)) {
       const val = row[header];
-      if (val === undefined || val === null) continue;
+      if (val === undefined || val === null || val === "") continue;
 
       if (field === "onHand" || field === "avgCost" || field === "totalValue") {
         item[field] = parseNumericCell(val);

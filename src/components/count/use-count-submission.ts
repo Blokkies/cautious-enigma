@@ -11,6 +11,7 @@ import {
   markCountsRejected,
   isDefinitiveRejection,
   isServiceWorkerOffline,
+  EVENT_NOT_ACTIVE_STATUS,
   saveDiscrepancyLocally,
   markDiscrepancySynced,
   type OfflineScope,
@@ -102,9 +103,13 @@ export function useCountSubmission({
       const isMatch = variance === 0;
       const countedAt = new Date().toISOString();
 
+      // Comment to send: an undefined comment may inherit one from an earlier
+      // unsynced count for this item (see saveCountLocally)
+      let sendComment: string | null | undefined = countComment;
+
       // Save to IndexedDB FIRST so data survives network failures / browser close
       try {
-        await saveCountLocally({
+        sendComment = await saveCountLocally({
           clientId,
           itemId,
           countedQty: qty,
@@ -162,7 +167,7 @@ export function useCountSubmission({
             itemId,
             countedQty: qty,
             isMatch,
-            comment: countComment,
+            comment: sendComment,
             clientId,
             countedAt,
           }),
@@ -176,6 +181,8 @@ export function useCountSubmission({
               toast.info("Saved offline — will sync when back online");
             } else if (res.status === 401) {
               toast.warning("Session expired — count saved on this device, log in again to sync");
+            } else if (res.status === EVENT_NOT_ACTIVE_STATUS) {
+              toast.warning("Stocktake is not active — count saved on this device and will sync once it is reactivated");
             } else {
               toast.info("Server busy — count saved and will retry automatically");
             }

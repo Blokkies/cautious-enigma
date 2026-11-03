@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -20,6 +21,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadAllAsZip } from "@/lib/download-all-zip";
+import { useAuth } from "@/contexts/auth-context";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface ExportStats {
   total: number;
@@ -29,15 +38,69 @@ interface ExportStats {
   progressPercent: number;
 }
 
-export default function ExportPage() {
+interface EventOption {
+  id: number;
+  name: string;
+  status: string;
+}
+
+/** Default event for the admin: active first, then the most recent completed/locked. */
+function pickDefaultEvent(events: EventOption[]): EventOption | undefined {
+  const reportable = events.filter((e) => e.status !== "setup");
+  return (
+    reportable.find((e) => e.status === "active") ??
+    [...reportable].sort((a, b) => b.id - a.id)[0]
+  );
+}
+
+// Shared by /supervisor/export and /admin/export. Supervisors are pinned to
+// their own event; the admin (eventId 0) picks one, defaulting to ?eventId=.
+function ExportPageContent() {
+  const { user, loading: authLoading } = useAuth();
+  const isAdmin = user?.type === "admin";
+  const searchParams = useSearchParams();
+  const urlEventId = Number(searchParams.get("eventId")) || null;
+
   const [stats, setStats] = useState<ExportStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [zipping, setZipping] = useState(false);
   const [zipProgress, setZipProgress] = useState("");
+  const [events, setEvents] = useState<EventOption[]>([]);
+  const [eventsLoaded, setEventsLoaded] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(urlEventId);
+
+  // Admin: load the event list and resolve a default when none was given.
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/events");
+        if (!res.ok) return;
+        const data = await res.json();
+        const list: EventOption[] = data.events || [];
+        if (cancelled) return;
+        setEvents(list);
+        setSelectedEventId((cur) => cur ?? pickDefaultEvent(list)?.id ?? null);
+      } catch {
+        // offline
+      } finally {
+        if (!cancelled) setEventsLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  // Query string for the selected event (admin only; supervisors use their token).
+  const eventParam = isAdmin && selectedEventId ? `&eventId=${selectedEventId}` : "";
+  const adminWaiting = isAdmin && !selectedEventId;
 
   const loadStats = useCallback(async () => {
+    if (authLoading || adminWaiting) return;
     try {
-      const res = await fetch("/api/supervisor/dashboard");
+      const res = await fetch(`/api/supervisor/dashboard${eventParam ? `?${eventParam.slice(1)}` : ""}`);
       if (res.ok) {
         const data = await res.json();
         setStats({
@@ -53,7 +116,7 @@ export default function ExportPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authLoading, adminWaiting, eventParam]);
 
   useEffect(() => {
     loadStats();
@@ -62,7 +125,7 @@ export default function ExportPage() {
   const handleDownload = async (type: string, format: string) => {
     try {
       const res = await fetch(
-        `/api/supervisor/export?type=${type}&format=${format}`
+        `/api/supervisor/export?type=${type}&format=${format}${eventParam}`
       );
       if (!res.ok) {
         if (res.status === 404) {
@@ -96,7 +159,8 @@ export default function ExportPage() {
     setZipping(true);
     setZipProgress("Fetching exports...");
     try {
-      await downloadAllAsZip(undefined, "stocktake_all_exports.zip", (done, total) => {
+      const eventId = isAdmin && selectedEventId ? selectedEventId : undefined;
+      await downloadAllAsZip(eventId, "stocktake_all_exports.zip", (done, total) => {
         setZipProgress(`Fetching exports... ${done}/${total}`);
       });
       toast.success("ZIP download started");
@@ -108,13 +172,45 @@ export default function ExportPage() {
     }
   };
 
+  if (isAdmin && eventsLoaded && !selectedEventId) {
+    return <div className="text-center py-12 text-muted-foreground">No active or completed event to export.</div>;
+  }
+
   if (loading) {
     return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
   }
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Export Data</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Export Data</h1>
+        {isAdmin && events.length > 0 && (
+          <Select
+            value={selectedEventId ? String(selectedEventId) : undefined}
+            onValueChange={(v) => {
+              setLoading(true);
+              setSelectedEventId(Number(v));
+            }}
+          >
+            <SelectTrigger className="w-56">
+              <SelectValue placeholder="Select event..." />
+            </SelectTrigger>
+            <SelectContent>
+              {events.map((ev) => (
+                <SelectItem key={ev.id} value={String(ev.id)}>
+                  {ev.name} ({ev.status})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+
+      <p className="text-sm text-muted-foreground">
+        The four up/down variance files are NetSuite adjustment files: they only include
+        accepted counts and approved serials of resolved serial discrepancies. The All
+        Variances export lists every variance with its review status.
+      </p>
 
       {stats && (
         <Card>
@@ -215,7 +311,7 @@ export default function ExportPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Non-serialized items where counted quantity exceeds on-hand (surplus).
+              Non-serialized items where counted quantity exceeds on-hand (surplus, accepted only).
             </p>
             <ExportButtons type="variances_nonserialized_up" onDownload={handleDownload} />
           </CardContent>
@@ -231,7 +327,7 @@ export default function ExportPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Non-serialized items where counted quantity is less than on-hand (shortage).
+              Non-serialized items where counted quantity is less than on-hand (shortage, accepted only).
             </p>
             <ExportButtons type="variances_nonserialized_down" onDownload={handleDownload} />
           </CardContent>
@@ -250,7 +346,7 @@ export default function ExportPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Unknown serials reported during count (not in system). Includes approved serials.
+              Accepted serialized over-counts plus approved serials from resolved discrepancies.
             </p>
             <ExportButtons type="variances_serialized_up" onDownload={handleDownload} />
           </CardContent>
@@ -269,7 +365,7 @@ export default function ExportPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Expected serialized items that were not found during the count.
+              Expected serialized items that were not found during the count (accepted only).
             </p>
             <ExportButtons type="variances_serialized_down" onDownload={handleDownload} />
           </CardContent>
@@ -416,6 +512,15 @@ export default function ExportPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+// useSearchParams() needs a Suspense boundary for static prerendering.
+export default function ExportPage() {
+  return (
+    <Suspense fallback={null}>
+      <ExportPageContent />
+    </Suspense>
   );
 }
 

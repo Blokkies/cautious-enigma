@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { isCsvSource, type SpreadsheetSource } from "./excel";
 
 export interface ParsedTeam {
   name: string;
@@ -67,14 +68,30 @@ function normalizeColumnName(col: string): string {
 }
 
 /**
+ * Text for a PIN cell: prefer the formatted text (keeps leading zeros of text or "0000"-formatted
+ * cells); fall back to the raw number when the formatted text isn't plain digits.
+ */
+function pinText(formatted: string, raw: unknown): string {
+  if (/^\d+$/.test(formatted)) return formatted;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) return String(raw);
+  return formatted;
+}
+
+/**
  * Parse an uploaded Excel file into team data.
  * Validates names, PINs, and checks for duplicates.
  */
-export function parseTeamExcel(buffer: ArrayBuffer): TeamParseResult {
-  const workbook = XLSX.read(buffer, { type: "array", raw: true });
+export function parseTeamExcel(buffer: ArrayBuffer, source?: SpreadsheetSource): TeamParseResult {
+  // raw: true keeps CSV cells as text (PIN "0500" stays "0500"); CSVs are always comma-separated.
+  const workbook = XLSX.read(buffer, { type: "array", raw: true, ...(isCsvSource(source) ? { FS: "," } : {}) });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { raw: false });
+  // defval keeps every header column even when the first data row leaves it blank.
+  // Formatted text (raw: false) keeps PINs typed as text or formatted "0000" intact;
+  // the raw values are used as a fallback when the formatted text isn't plain digits
+  // (e.g. "1.23E+11" for a long numeric PIN in a General-format cell).
+  const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { raw: false, defval: "" });
+  const rawValues = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { raw: true, defval: "" });
 
   const errors: { row: number; message: string }[] = [];
   const validTeams: ParsedTeam[] = [];
@@ -119,7 +136,7 @@ export function parseTeamExcel(buffer: ArrayBuffer): TeamParseResult {
       const strVal = String(val).trim();
 
       if (field === "name") name = strVal;
-      else if (field === "pin") pin = strVal;
+      else if (field === "pin") pin = pinText(strVal, rawValues[i]?.[header]);
       else if (field === "members") membersRaw = strVal;
     }
 

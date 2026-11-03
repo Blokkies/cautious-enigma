@@ -281,6 +281,37 @@ export function getCountableDiscrepancySerials(disc: {
 }
 
 /**
+ * Approving a whole discrepancy: move every unknown serial into the approved
+ * list (deduplicated, approved order kept) and clear the unknowns, the same
+ * end state as approving each serial individually on the variances page.
+ * Without this, a resolved discrepancy's unknowns stop counting and their
+ * value disappears.
+ */
+export function mergeUnknownsIntoApproved(
+  unknownSerials: string | null,
+  approvedSerials: string | null
+): { unknownSerials: string; approvedSerials: string } {
+  const approved = safeJsonParse<string[]>(approvedSerials, []);
+  const unknowns = safeJsonParse<string[]>(unknownSerials, []);
+  const merged = Array.from(new Set([...approved, ...unknowns]));
+  return { unknownSerials: "[]", approvedSerials: JSON.stringify(merged) };
+}
+
+/**
+ * Drop serial discrepancies whose source item lies outside the event's selected
+ * warehouses (same rule the variances page uses). No-op without a filter.
+ */
+export async function filterDiscrepanciesToWarehouses<T extends { itemCode: string }>(
+  eventId: number,
+  discrepancies: T[],
+  warehouses: string[] | null
+): Promise<T[]> {
+  if (!warehouses || warehouses.length === 0 || discrepancies.length === 0) return discrepancies;
+  const refMap = await buildItemRefMap(eventId, discrepancies.map((d) => d.itemCode), warehouses);
+  return discrepancies.filter((d) => !isRefOutsideWarehouses(refMap.get(d.itemCode), warehouses));
+}
+
+/**
  * Compute serial discrepancy "over" stats for an event.
  * Unknown + approved serials are surplus items (variance > 0).
  * Returns { overCount, overValue } to be added to dashboard totals.

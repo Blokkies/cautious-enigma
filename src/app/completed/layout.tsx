@@ -44,7 +44,15 @@ export default function CompletedLayout({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => router.push(user?.type === "admin" ? "/admin/export" : "/supervisor/export")}
+                onClick={() => {
+                  if (user?.type !== "admin") {
+                    router.push("/supervisor/export");
+                    return;
+                  }
+                  // Carry the summary's selected event over to the export page
+                  const eventId = new URLSearchParams(window.location.search).get("eventId");
+                  router.push(eventId ? `/admin/export?eventId=${encodeURIComponent(eventId)}` : "/admin/export");
+                }}
                 className="gap-1"
               >
                 <Download className="h-4 w-4" />

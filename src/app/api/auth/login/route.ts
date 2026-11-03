@@ -14,6 +14,10 @@ function isPinLoginType(type: unknown): type is PinLoginType {
   return PIN_LOGIN_TYPES.includes(type as PinLoginType);
 }
 
+// Teams may only log into events that are still open for counting, the same
+// statuses /api/auth/list offers them (supervisors/auditors also see completed).
+const TEAM_LOGIN_STATUSES = ["active", "setup"];
+
 async function findPinAccount(
   type: PinLoginType,
   id: number,
@@ -54,7 +58,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Resolve the event: use provided eventId, or fall back to finding active event
+    // Resolve the event: use provided eventId, or fall back to the single active
+    // event. With several active events the client must say which one.
     let event;
     if (eventId) {
       const [result] = await db
@@ -63,11 +68,17 @@ export async function POST(request: NextRequest) {
         .where(eq(stocktakeEvents.id, Number(eventId)));
       event = result;
     } else {
-      const [result] = await db
+      const activeEvents = await db
         .select()
         .from(stocktakeEvents)
         .where(eq(stocktakeEvents.status, "active"));
-      event = result;
+      if (activeEvents.length > 1) {
+        return NextResponse.json(
+          { error: "Several stocktakes are active. Please select an event." },
+          { status: 400 }
+        );
+      }
+      event = activeEvents[0];
     }
 
     if (!event) {
@@ -79,6 +90,13 @@ export async function POST(request: NextRequest) {
 
     if (!isPinLoginType(type)) {
       return NextResponse.json({ error: "Invalid login type" }, { status: 400 });
+    }
+
+    if (type === "team" && !TEAM_LOGIN_STATUSES.includes(event.status)) {
+      return NextResponse.json(
+        { error: `This stocktake is ${event.status}. Teams can no longer log in to it.` },
+        { status: 403 }
+      );
     }
 
     const account = await findPinAccount(type, Number(id), event.id);

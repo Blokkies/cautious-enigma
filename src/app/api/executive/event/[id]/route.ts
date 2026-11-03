@@ -87,10 +87,17 @@ export async function GET(
         .from(items)
         .where(and(eq(items.eventId, eventId), inArray(items.teamId, teamIds), warehouseFilter(warehouses)))
         .groupBy(items.teamId),
-      db.select({ teamId: counts.teamId, count: countInt() })
-        .from(counts)
-        .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), eq(counts.countType, "initial"), cwf))
-        .groupBy(counts.teamId),
+      // Counted = items currently assigned to the team that have an initial
+      // count, so counted never exceeds total after a reassignment.
+      db.select({ teamId: items.teamId, count: countInt() })
+        .from(items)
+        .where(and(
+          eq(items.eventId, eventId),
+          inArray(items.teamId, teamIds),
+          warehouseFilter(warehouses),
+          sql`EXISTS (SELECT 1 FROM counts c WHERE c.item_id = ${items.id} AND c.event_id = ${eventId} AND c.count_type = 'initial')`,
+        ))
+        .groupBy(items.teamId),
       db.select({ teamId: counts.teamId, count: countInt() })
         .from(counts)
         .where(and(eq(counts.eventId, eventId), inArray(counts.teamId, teamIds), eq(counts.countType, "initial"), eq(counts.isMatch, false), cwf))

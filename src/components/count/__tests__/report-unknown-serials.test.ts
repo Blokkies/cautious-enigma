@@ -13,6 +13,7 @@ vi.mock("@/stores/offline-db", () => ({
   markCountsRejected: vi.fn(),
   isDefinitiveRejection: vi.fn(),
   isServiceWorkerOffline: vi.fn(),
+  EVENT_NOT_ACTIVE_STATUS: 423,
 }));
 vi.mock("sonner", () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 

@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
 
     // Parse the Excel file
     const buffer = await file.arrayBuffer();
-    const { validTeams, errors, totalRows } = parseTeamExcel(buffer);
+    const { validTeams, errors, totalRows } = parseTeamExcel(buffer, { filename: file.name, mimeType: file.type });
 
     if (validTeams.length === 0) {
       return NextResponse.json({

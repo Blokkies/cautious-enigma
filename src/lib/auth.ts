@@ -1,9 +1,9 @@
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { verifyToken } from "./token";
+import { verifyToken, TOKEN_MAX_AGE_SECONDS } from "./token";
 
 // Re-export token utilities for API routes
-export { createToken, verifyToken } from "./token";
+export { createToken, verifyToken, shouldRenewToken } from "./token";
 export type { TokenPayload } from "./token";
 
 const TOKEN_NAME = "stocktake-token";
@@ -32,7 +32,7 @@ export function getTokenCookieOptions() {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax" as const,
-    maxAge: 60 * 60 * 72, // 72 hours
+    maxAge: TOKEN_MAX_AGE_SECONDS, // 72 hours
     path: "/",
   };
 }

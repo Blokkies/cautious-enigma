@@ -13,16 +13,17 @@ import {
 import { AlertTriangle, ArrowRightLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { AssignmentState } from "./use-assignment";
+import { binRefLabel, type BinRef } from "./assign-types";
 
 export interface ReassignRequest {
   fromTeamId: number;
-  bins: string[];
+  bins: BinRef[];
   hasCountedBins: boolean;
 }
 
 /** Supervisor-only: move bins from one team to another (PATCH /api/admin/assign). */
 export function useReassign(assign: AssignmentState) {
-  const { eventId, loadData, clearTeamBinSelection } = assign;
+  const { eventId, loadData, clearTeamBinSelection, brandFilter } = assign;
   const [reassignDialog, setReassignDialog] = useState<ReassignRequest | null>(null);
   const [reassignToTeam, setReassignToTeam] = useState<string>("");
   const [reassigning, setReassigning] = useState(false);
@@ -49,6 +50,8 @@ export function useReassign(assign: AssignmentState) {
           fromTeamId: reassignDialog.fromTeamId,
           toTeamId: Number(reassignToTeam),
           bins: reassignDialog.bins,
+          // With a brand filter active only that brand's items move (what the list shows)
+          ...(brandFilter ? { brand: brandFilter } : {}),
           ...(reassignDialog.hasCountedBins ? { clearCounts: true } : {}),
         }),
       });
@@ -104,7 +107,7 @@ export function ReassignDialog({ assign, reassign }: { assign: AssignmentState; 
             </span>
           </div>
           <div className="text-xs text-muted-foreground">
-            Bins: {reassignDialog.bins.join(", ")}
+            Bins: {reassignDialog.bins.map(binRefLabel).join(", ")}
           </div>
           {reassignDialog.hasCountedBins && (
             <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 text-amber-800">

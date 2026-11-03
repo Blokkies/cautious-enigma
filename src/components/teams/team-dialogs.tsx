@@ -12,6 +12,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Plus, Loader2, X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertCircle } from "lucide-react";
 import { PIN_MAX_LENGTH, PIN_MIN_LENGTH, sanitizePinInput } from "./pin";
+import { plural } from "@/lib/format";
 
 type NamePinForm = { name: string; pin: string };
 
@@ -228,7 +229,11 @@ export function BulkCreateDialog({
               <label className="text-sm font-medium mb-1 block">Count</label>
               <Input
                 type="number"
-                placeholder="e.g. 13"
+                inputMode="numeric"
+                min={1}
+                max={50}
+                step={1}
+                placeholder="e.g. 10"
                 value={count}
                 onChange={(e) => setCount(e.target.value)}
                 disabled={!!progress}
@@ -247,7 +252,7 @@ export function BulkCreateDialog({
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            Creates {prefix} 1, {prefix} 2, ... {prefix} {count} with sequential PINs starting from {pin || "____"}.
+            Creates {prefix} 1, {prefix} 2, ... {prefix} {count.trim() || "N"} (up to 50) with sequential PINs starting from {pin || "____"}.
           </p>
 
           {progress && (
@@ -340,7 +345,7 @@ export function ImportTeamsDialog({
                 <div className="flex items-start gap-2 p-3 bg-green-50 text-green-800 rounded-lg text-sm">
                   <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
                   <div>
-                    <div className="font-medium">{importResult.teamsCreated} team(s) created successfully</div>
+                    <div className="font-medium">{plural(importResult.teamsCreated, "team")} created successfully</div>
                     {importResult.teamsSkipped > 0 && (
                       <div className="text-green-600">{importResult.teamsSkipped} skipped (already exist)</div>
                     )}

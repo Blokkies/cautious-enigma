@@ -27,7 +27,7 @@ import {
   ArrowRightLeft,
   Lock,
 } from "lucide-react";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, plural } from "@/lib/format";
 import { binKey, naturalCompare, toBinRef, type BalanceMode, type BinSortMode, type TeamDetail } from "./assign-types";
 import type { AssignedBinFilters, AssignmentState } from "./use-assignment";
 import type { ReassignState } from "./reassign-dialog";
@@ -58,7 +58,7 @@ export function AssignProgressCard({ assign }: { assign: AssignmentState }) {
         {stats.unassigned > 0 && (
           <div className="flex items-center gap-1 text-sm text-amber-600">
             <AlertTriangle className="h-4 w-4" />
-            {stats.unassigned.toLocaleString()} items unassigned
+            {plural(stats.unassigned, "item")} unassigned
           </div>
         )}
       </CardContent>
@@ -172,10 +172,10 @@ export function TeamAssignmentsCard({ assign, readOnly = false, filters, reassig
                       <div>
                         <span className="font-medium">{team.name}</span>
                         <span className="text-sm text-muted-foreground ml-2">
-                          {team.itemCount.toLocaleString()} items
+                          {plural(team.itemCount, "item")}
                         </span>
                         <span className="text-sm text-muted-foreground ml-2">
-                          {team.bins.length} bins
+                          {plural(team.bins.length, "bin")}
                         </span>
                       </div>
                     </div>
@@ -265,7 +265,7 @@ export function TeamAssignmentsCard({ assign, readOnly = false, filters, reassig
             <div className="flex items-center gap-2 text-sm">
               <Scale className="h-4 w-4 text-muted-foreground" />
               <span className="font-medium">
-                Auto-balance {unassignedBins.length} bins across {balanceTeams.size} team{balanceTeams.size !== 1 ? "s" : ""}
+                Auto-balance {plural(unassignedBins.length, "bin")} across {plural(balanceTeams.size, "team")}
               </span>
             </div>
             <div className="flex gap-2">
@@ -324,7 +324,7 @@ function SimpleTeamBinList({ assign, team, teamBinSet, allBinsSelected, someBins
             onChange={() => toggleAllTeamBins(team.id, team.bins)}
             className="rounded"
           />
-          Select all {team.bins.length} bins
+          Select all {plural(team.bins.length, "bin")}
         </label>
       </div>
       {team.bins.map((bin) => (
@@ -343,7 +343,7 @@ function SimpleTeamBinList({ assign, team, teamBinSet, allBinsSelected, someBins
             <span className="font-mono">{bin.bin_number}</span>
             <WarehouseTag warehouse={bin.warehouse} />
             <span className="text-muted-foreground">
-              ({bin.item_count} items)
+              ({plural(bin.item_count, "item")})
             </span>
           </div>
           <Button
@@ -565,7 +565,7 @@ function FilterableTeamBinList({
               <span className="font-mono">{bin.bin_number}</span>
             <WarehouseTag warehouse={bin.warehouse} />
               <span className="text-muted-foreground">
-                ({bin.item_count} items)
+                ({plural(bin.item_count, "item")})
               </span>
               {isCounted && (
                 <Badge variant="outline" className="h-5 text-[10px] bg-green-50 text-green-700 border-green-300 gap-0.5">
@@ -650,7 +650,7 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
           </span>
           {selectedBins.size > 0 && (
             <Badge className="bg-blue-100 text-blue-800 shrink-0">
-              {selectedBins.size} bins selected ({selectedItemCount} items)
+              {plural(selectedBins.size, "bin")} selected ({plural(selectedItemCount, "item")})
             </Badge>
           )}
         </CardTitle>
@@ -799,7 +799,7 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
                       )}
                       <span className="font-semibold text-sm">{prefix}</span>
                       <span className="text-xs text-muted-foreground">
-                        {bins.length} bins, {groupItemCount} items
+                        {plural(bins.length, "bin")}, {plural(groupItemCount, "item")}
                       </span>
                     </div>
                   </div>
@@ -835,7 +835,7 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
                             <WarehouseTag warehouse={bin.warehouse} />
                           </div>
                           <span className="text-xs text-muted-foreground">
-                            {bin.item_count} items
+                            {plural(bin.item_count, "item")}
                           </span>
                         </div>
                         {expandedBins.has(binKey(bin)) && (
@@ -881,7 +881,7 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
               <SelectContent>
                 {teamDetails.map((team) => (
                   <SelectItem key={team.id} value={String(team.id)}>
-                    {team.name} ({team.itemCount} items)
+                    {team.name} ({plural(team.itemCount, "item")})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -894,7 +894,7 @@ export function UnassignedBinsCard({ assign, readOnly = false }: { assign: Assig
               <CheckCircle2 className="h-4 w-4" />
               {assigning
                 ? "Assigning..."
-                : `Assign ${selectedBins.size} bins`}
+                : `Assign ${plural(selectedBins.size, "bin")}`}
             </Button>
           </div>
         )}

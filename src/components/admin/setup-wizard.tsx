@@ -7,6 +7,14 @@ import { adminRoutes, SETUP_STEP_LABELS, SETUP_STEPS, type SetupStep } from "@/l
 
 export type WizardStepState = "done" | "current" | "open" | "locked" | "skipped";
 
+const STATE_TEXT: Record<WizardStepState, string> = {
+  done: "Done",
+  skipped: "Skipped",
+  locked: "Not yet",
+  current: "You are here",
+  open: "To do",
+};
+
 /**
  * Clickable wizard stepper. Done and open steps link to their URL; locked steps explain
  * themselves in a tooltip. `eventId` null = the create page (nothing exists yet).
@@ -21,14 +29,57 @@ export function WizardStepper({
   states: Record<SetupStep, WizardStepState>;
 }) {
   const index = SETUP_STEPS.indexOf(current);
+  const stateOf = (s: SetupStep): WizardStepState => (s === current ? "current" : states[s]);
+  const doneCount = SETUP_STEPS.filter((s) => stateOf(s) === "done").length;
   return (
     <nav aria-label="Setup steps" className="mb-6">
-      <p className="mb-2 text-xs text-slate-500 sm:hidden">
-        Step {index + 1} of {SETUP_STEPS.length}: <span className="font-medium text-slate-700">{SETUP_STEP_LABELS[current]}</span>
-      </p>
-      <ol className="flex gap-1 overflow-x-auto pb-1">
+      {/* Mobile: "Step 3 of 6 · Warehouses" over a segmented progress bar (each segment links to its step). */}
+      <div className="sm:hidden">
+        <p className="flex items-baseline justify-between gap-3 text-xs text-slate-500">
+          <span className="min-w-0 truncate">
+            Step {index + 1} of {SETUP_STEPS.length} · <span className="font-medium text-slate-900">{SETUP_STEP_LABELS[current]}</span>
+          </span>
+          <span className="shrink-0 tabular-nums">{doneCount} done</span>
+        </p>
+        <ol className="mt-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${SETUP_STEPS.length}, minmax(0, 1fr))` }}>
+          {SETUP_STEPS.map((s, i) => {
+            const state = stateOf(s);
+            const linkable = eventId !== null && state !== "locked" && state !== "current";
+            const bar = (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "block h-1.5 rounded-full",
+                  state === "current" && "bg-primary",
+                  state === "done" && "bg-emerald-500",
+                  (state === "open" || state === "skipped") && "bg-slate-300",
+                  state === "locked" && "bg-slate-200"
+                )}
+              />
+            );
+            const label = `Step ${i + 1}: ${SETUP_STEP_LABELS[s]} (${STATE_TEXT[state].toLowerCase()})`;
+            return (
+              <li key={s}>
+                {linkable ? (
+                  <Link href={adminRoutes.setup(eventId!, s)} aria-label={label} className="block rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    {bar}
+                  </Link>
+                ) : (
+                  <div className="py-2" aria-current={state === "current" ? "step" : undefined}>
+                    {bar}
+                    <span className="sr-only">{label}</span>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+
+      {/* sm+: labelled steps; scrolls sideways (without a visible scrollbar) if the row runs out of room. */}
+      <ol className="scrollbar-none hidden gap-1 overflow-x-auto overflow-y-hidden pb-1 sm:flex">
         {SETUP_STEPS.map((s, i) => {
-          const state = s === current ? "current" : states[s];
+          const state = stateOf(s);
           const linkable = eventId !== null && state !== "locked" && state !== "current";
           const marker = (
             <span
@@ -49,12 +100,12 @@ export function WizardStepper({
             <span className="min-w-0">
               <span className="block truncate">{SETUP_STEP_LABELS[s]}</span>
               <span className="block text-[11px] font-normal text-slate-400">
-                {state === "done" ? "Done" : state === "skipped" ? "Skipped" : state === "locked" ? "Not yet" : state === "current" ? "You are here" : "To do"}
+                {STATE_TEXT[state]}
               </span>
             </span>
           );
           const cls = cn(
-            "flex min-w-[8.5rem] items-center gap-2 border-t-2 pt-2 text-xs transition-colors",
+            "flex min-w-[7rem] items-center gap-2 border-t-2 pt-2 text-xs transition-colors",
             state === "current" ? "border-primary font-medium text-slate-900" : state === "done" ? "border-emerald-500/60 text-slate-700" : "border-slate-200 text-slate-500"
           );
           return (

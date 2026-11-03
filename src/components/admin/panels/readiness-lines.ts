@@ -1,6 +1,6 @@
 // Go-live checklist lines from the readiness response. Pure (tested).
 
-import { formatNumber } from "@/lib/format";
+import { plural } from "@/lib/format";
 import type { SetupStep } from "@/lib/admin-routes";
 import type { Readiness } from "./use-event-data";
 
@@ -23,7 +23,7 @@ export function readinessLines(r: Readiness): CheckLine[] {
       ok: r.hasItems,
       label: "Stock file imported",
       detail: r.hasItems
-        ? `${items !== undefined ? `${formatNumber(items)} items` : "Items"} in the selected warehouses`
+        ? `${items !== undefined ? plural(items, "item") : "Items"} in the selected warehouses`
         : "No items in the selected warehouses yet",
       step: "items",
     },
@@ -31,7 +31,7 @@ export function readinessLines(r: Readiness): CheckLine[] {
       key: "teams",
       ok: r.hasTeams,
       label: "At least one counting team",
-      detail: r.hasTeams ? (teams !== undefined ? `${teams} team${teams === 1 ? "" : "s"}` : "Teams added") : "No teams yet",
+      detail: r.hasTeams ? (teams !== undefined ? plural(teams, "team") : "Teams added") : "No teams yet",
       step: "people",
     },
     {
@@ -40,7 +40,7 @@ export function readinessLines(r: Readiness): CheckLine[] {
       label: "At least one supervisor",
       detail: r.hasSupervisors
         ? sups !== undefined
-          ? `${sups} supervisor${sups === 1 ? "" : "s"}`
+          ? plural(sups, "supervisor")
           : "Supervisors added"
         : "No supervisor yet",
       step: "people",
@@ -53,7 +53,7 @@ export function readinessLines(r: Readiness): CheckLine[] {
         ? "Import items first"
         : r.allItemsAssigned
           ? "All bins have a team"
-          : `${formatNumber(r.unassignedCount)} item${r.unassignedCount === 1 ? "" : "s"} unassigned`,
+          : `${plural(r.unassignedCount, "item")} unassigned`,
       step: "bins",
     },
   ];

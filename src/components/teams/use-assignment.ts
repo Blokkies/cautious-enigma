@@ -1,5 +1,6 @@
 "use client";
 
+import { plural } from "@/lib/format";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/admin/confirm-dialog";
@@ -281,9 +282,9 @@ export function useAssignment(eventId: string) {
     }
     const data = await res.json().catch(() => ({}));
     const summary = plan
-      .map((t) => `${t.name}: +${t.bins.length} bins (${mode === "equal-bins" ? `${t.totalBins} bins` : `${t.totalItems} items`} total)`)
+      .map((t) => `${t.name}: +${plural(t.bins.length, "bin")} (${mode === "equal-bins" ? plural(t.totalBins, "bin") : plural(t.totalItems, "item")} total)`)
       .join(", ");
-    toast.success(typeof data.assignedCount === "number" ? `Assigned ${data.assignedCount} items. ${summary}` : summary);
+    toast.success(typeof data.assignedCount === "number" ? `Assigned ${plural(data.assignedCount, "item")}. ${summary}` : summary);
     return true;
   };
 
@@ -450,7 +451,7 @@ export function useAssignment(eventId: string) {
     if (bins.length === 0) return;
     try {
       if (await sendUnassign({ teamId, bins })) {
-        toast.success(`Removed ${bins.length} bin(s)`);
+        toast.success(`Removed ${plural(bins.length, "bin")}`);
         setSelectedTeamBins((prev) => ({ ...prev, [teamId]: new Set() }));
         loadData();
       }
@@ -481,7 +482,7 @@ export function useAssignment(eventId: string) {
       });
       if (res.ok) {
         const data = await res.json();
-        toast.success(`Assigned ${data.assignedCount} items`);
+        toast.success(`Assigned ${plural(Number(data.assignedCount) || 0, "item")}`);
         setSelectedBins(new Set());
         setBinItemsCache({});
         setExpandedBins(new Set());
@@ -500,7 +501,7 @@ export function useAssignment(eventId: string) {
   const handleUnassignBins = async (teamId: number, bins: BinRef[]) => {
     try {
       if (await sendUnassign({ teamId, bins })) {
-        toast.success(`Removed ${bins.length} bin(s)`);
+        toast.success(`Removed ${plural(bins.length, "bin")}`);
         loadData();
       }
     } catch {

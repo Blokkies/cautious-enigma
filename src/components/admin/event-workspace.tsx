@@ -64,7 +64,12 @@ export function EventTabs({ eventId }: { eventId: number }) {
   const pathname = usePathname() ?? "";
   const active = activeEventTab(pathname, eventId);
   return (
-    <nav aria-label="Event sections" className="-mx-4 mb-6 overflow-x-auto border-b border-slate-200 px-4 sm:mx-0 sm:px-0">
+    // overflow-y-hidden stops a 1px vertical scrollbar; the baseline is an inset shadow (not a border)
+    // so the active tab's underline is not clipped by the scroll container.
+    <nav
+      aria-label="Event sections"
+      className="scrollbar-none -mx-4 mb-6 overflow-x-auto overflow-y-hidden overscroll-x-contain px-4 shadow-[inset_0_-1px_0_0_rgb(226_232_240)] sm:mx-0 sm:px-0"
+    >
       <ul className="flex min-w-max gap-1">
         {EVENT_TABS.map((tab) => {
           const isActive = tab === active;
@@ -74,7 +79,7 @@ export function EventTabs({ eventId }: { eventId: number }) {
                 href={adminRoutes.event(eventId, tab)}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "-mb-px inline-flex h-10 items-center border-b-2 px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  "inline-flex h-10 items-center whitespace-nowrap border-b-2 px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                   isActive
                     ? "border-primary font-medium text-slate-900"
                     : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-900"
@@ -135,7 +140,7 @@ export function EventWorkspaceFrame({ children, actions }: { children: React.Rea
         breadcrumbs={[{ label: "Events", href: adminRoutes.events }, { label: event.name }]}
         title={
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="break-words">{event.name}</span>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{event.name}</span>
             <StatusBadge status={event.status} />
           </span>
         }

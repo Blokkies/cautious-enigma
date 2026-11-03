@@ -67,7 +67,7 @@ export function GuideBody({ guide, showSummary = true }: { guide: GuideContent; 
       {guide.reference?.map((ref) => (
         <section key={ref.title} className="rounded-md border border-slate-200 bg-slate-50 p-3">
           <h4 className="mb-1.5 text-xs font-semibold text-slate-900">{ref.title}</h4>
-          <ul className="space-y-1 text-xs leading-relaxed text-slate-600">
+          <ul className="space-y-1 break-words text-xs leading-relaxed text-slate-600">
             {ref.items.map((item, i) => (
               <li key={i}>{item}</li>
             ))}

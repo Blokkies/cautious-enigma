@@ -6,7 +6,7 @@ import { CheckCircle2, Loader2, Scale, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { formatNumber } from "@/lib/format";
+import { formatNumber, plural } from "@/lib/format";
 import { adminRoutes } from "@/lib/admin-routes";
 import { useAssignment, useAssignedBinFilters } from "@/components/teams/use-assignment";
 import { TeamAssignmentsCard, UnassignedBinsCard } from "@/components/teams/assign-cards";
@@ -64,8 +64,8 @@ export function BinsPanel({ onChanged, peopleHref }: { onChanged?: () => void; p
       description: (
         <>
           <p>
-            Every unassigned bin ({formatNumber(unassigned)} item{unassigned === 1 ? "" : "s"}) is shared across all{" "}
-            {teamCount} team{teamCount === 1 ? "" : "s"} in bin order, so neighbouring bins stay with the same team.
+            Every unassigned bin ({plural(unassigned, "item")}) is shared across all{" "}
+            {plural(teamCount, "team")} in bin order, so neighbouring bins stay with the same team.
             Bins that are already assigned are not moved.
           </p>
           <p>You can adjust the result by hand afterwards.</p>
@@ -110,8 +110,7 @@ export function BinsPanel({ onChanged, peopleHref }: { onChanged?: () => void; p
             </div>
             <Progress value={percent} className="h-2" aria-label={`${percent}% assigned`} />
             <p className="text-xs tabular-nums text-slate-500">
-              {formatNumber(stats.assigned)} of {formatNumber(stats.total)} items assigned ({percent}%) across {teamCount} team
-              {teamCount === 1 ? "" : "s"}
+              {formatNumber(stats.assigned)} of {formatNumber(stats.total)} items assigned ({percent}%) across {plural(teamCount, "team")}
             </p>
           </div>
         </div>
@@ -133,7 +132,7 @@ export function BinsPanel({ onChanged, peopleHref }: { onChanged?: () => void; p
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900">Recommended: auto-balance</h3>
                   <p className="text-sm text-slate-600">
-                    Share all unassigned bins across all {teamCount} teams in one click. Choose how to even them out:
+                    Share all unassigned bins across all {plural(teamCount, "team")} in one click. Choose how to even them out:
                   </p>
                 </div>
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center">

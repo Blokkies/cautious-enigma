@@ -14,6 +14,7 @@ import { AlertTriangle, ArrowRightLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { AssignmentState } from "./use-assignment";
 import { binRefLabel, type BinRef } from "./assign-types";
+import { plural } from "@/lib/format";
 
 export interface ReassignRequest {
   fromTeamId: number;
@@ -57,7 +58,7 @@ export function useReassign(assign: AssignmentState) {
       });
       if (res.ok) {
         const data = await res.json();
-        toast.success(`Re-assigned ${data.movedCount} items (${reassignDialog.bins.length} bins)`);
+        toast.success(`Re-assigned ${plural(Number(data.movedCount) || 0, "item")} (${plural(reassignDialog.bins.length, "bin")})`);
         setReassignDialog(null);
         setReassignToTeam("");
         clearTeamBinSelection(reassignDialog.fromTeamId);
@@ -97,7 +98,7 @@ export function ReassignDialog({ assign, reassign }: { assign: AssignmentState; 
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <ArrowRightLeft className="h-4 w-4" />
-            Re-assign {reassignDialog.bins.length} bin{reassignDialog.bins.length !== 1 ? "s" : ""}
+            Re-assign {plural(reassignDialog.bins.length, "bin")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -127,7 +128,7 @@ export function ReassignDialog({ assign, reassign }: { assign: AssignmentState; 
                 .filter(t => t.id !== reassignDialog.fromTeamId)
                 .map(t => (
                   <SelectItem key={t.id} value={String(t.id)}>
-                    {t.name} ({t.itemCount} items)
+                    {t.name} ({plural(t.itemCount, "item")})
                   </SelectItem>
                 ))}
             </SelectContent>

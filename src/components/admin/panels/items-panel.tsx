@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { formatMoney, formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber, plural } from "@/lib/format";
 import { sampleStockCsv } from "@/lib/sample-stock-csv";
 import { useAdminEvent } from "../event-context";
 import { useConfirm } from "../confirm-dialog";
@@ -86,7 +86,7 @@ export function ItemsPanel({ onChanged }: { onChanged?: () => void }) {
       description: (
         <>
           <p>
-            This stocktake already has {formatNumber(itemCount)} items. Importing replaces all of them:
+            This stocktake already has {plural(itemCount, "item")}. Importing replaces all of them:
           </p>
           <ul className="list-disc space-y-1 pl-5">
             <li>every bin assignment is removed, so bins must be assigned to teams again;</li>
@@ -217,10 +217,10 @@ function CurrentItems({
         data!.upload ? (
           <>
             From <span className="font-medium text-slate-800">{data!.upload.filename}</span> ({fileSize(data!.upload.fileSize)})
-            {warehouseCount > 0 && <>, {warehouseCount} warehouse{warehouseCount === 1 ? "" : "s"}</>}
+            {warehouseCount > 0 && <>, {plural(warehouseCount, "warehouse")}</>}
           </>
         ) : (
-          <>Copied from another stocktake{warehouseCount > 0 && <>, {warehouseCount} warehouse{warehouseCount === 1 ? "" : "s"}</>}</>
+          <>Copied from another stocktake{warehouseCount > 0 && <>, {plural(warehouseCount, "warehouse")}</>}</>
         )
       }
       actions={
@@ -263,14 +263,14 @@ function ImportReportView({ report, onDismiss }: { report: ImportReport; onDismi
               {failed
                 ? "The file was not imported"
                 : report.source === "copy"
-                  ? `Copied ${formatNumber(report.totalItems)} items`
-                  : `Imported ${formatNumber(report.totalItems)} items`}
+                  ? `Copied ${plural(report.totalItems, "item")}`
+                  : `Imported ${plural(report.totalItems, "item")}`}
             </h3>
             <p className="text-sm text-slate-600">
               {failed
                 ? report.error
                 : report.source === "upload"
-                  ? `${report.fileName ?? "File"}${report.rawRowCount !== undefined ? `: ${formatNumber(report.rawRowCount)} rows read` : ""}${skipped > 0 ? `, ${formatNumber(skipped)} skipped because they had no item code` : ""}.`
+                  ? `${report.fileName ?? "File"}${report.rawRowCount !== undefined ? `: ${plural(report.rawRowCount, "row")} read` : ""}${skipped > 0 ? `, ${formatNumber(skipped)} skipped because they had no item code` : ""}.`
                   : "Items were copied without bin assignments. Assign bins to teams again."}
             </p>
           </div>
@@ -386,7 +386,7 @@ function UploadForm({ eventId, confirmReplace, confirmDeleteCounts, onReport, on
           mappedFields: Array.isArray(summary.mappedFields) ? (summary.mappedFields as string[]) : [],
           unmappedHeaders: Array.isArray(summary.unmappedHeaders) ? (summary.unmappedHeaders as string[]) : [],
         });
-        toast.success(`Imported ${formatNumber(Number(summary.totalItems) || 0)} items`);
+        toast.success(`Imported ${plural(Number(summary.totalItems) || 0, "item")}`);
         setFile(null);
         if (inputRef.current) inputRef.current.value = "";
         onDone();
@@ -533,7 +533,7 @@ function CopyForm({ eventId, confirmReplace, confirmDeleteCounts, onReport, onDo
       if (res.ok && data.success) {
         const total = Number(data.summary?.totalItems) || 0;
         onReport({ source: "copy", totalItems: total, mappedFields: [], unmappedHeaders: [] });
-        toast.success(`Copied ${formatNumber(total)} items`);
+        toast.success(`Copied ${plural(total, "item")}`);
         void sources.reload();
         onDone();
       } else if (res.status === 409 && data.requiresConfirm) {
@@ -575,7 +575,7 @@ function CopyForm({ eventId, confirmReplace, confirmDeleteCounts, onReport, onDo
           <SelectContent>
             {options.map((e) => (
               <SelectItem key={e.id} value={String(e.id)}>
-                {e.name} ({formatNumber(e.itemCount)} items, {statusMeta(e.status).label.toLowerCase()})
+                {e.name} ({plural(e.itemCount, "item")}, {statusMeta(e.status).label.toLowerCase()})
               </SelectItem>
             ))}
           </SelectContent>

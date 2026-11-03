@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ClipboardCheck, Eye, EyeOff, Layers, Pencil, Plus, Shield, Trash2, Upload, Users, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { generateTeamTemplate } from "@/lib/team-excel";
-import { formatNumber } from "@/lib/format";
+import { plural } from "@/lib/format";
 import { useConfirm } from "@/components/admin/confirm-dialog";
 import { parseMembers, type SupervisorInfo, type TeamInfo } from "./types";
 import {
@@ -67,7 +67,7 @@ export function TeamsManager({
 
   // Bulk create
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkCount, setBulkCount] = useState("13");
+  const [bulkCount, setBulkCount] = useState("");
   const [bulkPrefix, setBulkPrefix] = useState("Team");
   const [bulkPin, setBulkPin] = useState("");
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
@@ -215,9 +215,9 @@ export function TeamsManager({
   };
 
   const bulkCreateTeams = async () => {
-    const count = parseInt(bulkCount);
-    if (isNaN(count) || count < 1 || count > 50) {
-      toast.error("Enter a valid number (1-50)");
+    const count = Number(bulkCount.trim());
+    if (!bulkCount.trim() || !Number.isInteger(count) || count < 1 || count > 50) {
+      toast.error("Enter how many teams to create (1 to 50)");
       return;
     }
     const basePinError = bulkPin ? pinError(bulkPin) : "Enter a base PIN";
@@ -229,7 +229,7 @@ export function TeamsManager({
     const lastPin = String(parseInt(bulkPin, 10) + count - 1).padStart(bulkPin.length, "0");
     const lastPinError = pinError(lastPin);
     if (lastPinError) {
-      toast.error(`Base PIN too high for ${count} teams: ${lastPinError.toLowerCase()}`);
+      toast.error(`Base PIN too high for ${plural(count, "team")}: ${lastPinError.toLowerCase()}`);
       return;
     }
 
@@ -254,11 +254,12 @@ export function TeamsManager({
       }
       setBulkProgress({ current: i, total: count, created });
     }
-    if (created === count) toast.success(`Created ${created} teams`);
+    if (created === count) toast.success(`Created ${plural(created, "team")}`);
     else toast.error(`Created ${created} of ${count} teams. Check for duplicate names and try the rest again.`);
     setBulkProgress(null);
     setBulkOpen(false);
     setBulkPin("");
+    setBulkCount("");
     loadTeams();
   };
 
@@ -327,7 +328,7 @@ export function TeamsManager({
       }
       setImportResult(data.summary);
       if (data.success) {
-        toast.success(`${data.summary.teamsCreated} team(s) imported`);
+        toast.success(`${plural(Number(data.summary.teamsCreated) || 0, "team")} imported`);
         loadTeams();
       }
     } catch {
@@ -392,7 +393,7 @@ export function TeamsManager({
                     </div>
                   </div>
                   {showPins && <PinChip pin={team.pinPlain} />}
-                  <span className="text-xs tabular-nums text-slate-500">{formatNumber(team.assignedItems)} items</span>
+                  <span className="text-xs tabular-nums text-slate-500">{plural(team.assignedItems, "item")}</span>
                   {!readOnly && (
                     <div className="flex items-center">
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500" onClick={() => openEditDialog(team)} aria-label={`Edit ${team.name}`}>

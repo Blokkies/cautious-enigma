@@ -59,3 +59,18 @@ export function formatDateRange(start: string | null | undefined, end: string | 
   if (e) return `Until ${e}`;
   return "";
 }
+
+/**
+ * A count with the right noun form, numbers grouped like formatNumber:
+ * plural(1, "item") -> "1 item", plural(1234, "item") -> "1 234 items",
+ * plural(2, "query", "queries") -> "2 queries". Non-finite counts read as 0.
+ */
+export function plural(count: number | null | undefined, singular: string, pluralForm?: string): string {
+  const n = typeof count === "number" && Number.isFinite(count) ? count : 0;
+  return `${formatNumber(n)} ${pluralWord(n, singular, pluralForm)}`;
+}
+
+/** Just the noun form for a count: pluralWord(1, "bin") -> "bin", pluralWord(0, "bin") -> "bins". */
+export function pluralWord(count: number | null | undefined, singular: string, pluralForm?: string): string {
+  return count === 1 ? singular : (pluralForm ?? `${singular}s`);
+}

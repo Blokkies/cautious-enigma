@@ -3,10 +3,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Archive,
+  BarChart3,
+  CheckCircle2,
   Download,
+  FileDown,
   FileSpreadsheet,
   FileText,
   Loader2,
@@ -18,10 +20,15 @@ import {
   Package,
   ClipboardCheck,
   ScrollText,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { downloadAllAsZip } from "@/lib/download-all-zip";
 import { useAuth } from "@/contexts/auth-context";
+import { formatNumber } from "@/lib/format";
+import { StatCard } from "@/components/admin/stat-card";
+import { LoadingState } from "@/components/admin/loading-state";
+import { EmptyState } from "@/components/admin/empty-state";
 import {
   Select,
   SelectContent,
@@ -180,379 +187,258 @@ export function ExportPageContent({ eventId }: { eventId?: number } = {}) {
       setZipProgress("");
     }
   };
-
   if (isAdmin && eventsLoaded && !selectedEventId) {
-    return <div className="text-center py-12 text-muted-foreground">No active or completed event to export.</div>;
+    return (
+      <EmptyState
+        icon={FileDown}
+        title="Nothing to export"
+        description="There is no live or completed stocktake to export yet."
+      />
+    );
   }
 
   if (loading) {
-    return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
+    return <LoadingState label="Loading exports…" />;
   }
+
+  // In the admin workspace this sits under the event's own h1, so headings drop a level.
+  const SectionHeading = pinned ? "h3" : "h2";
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        {pinned ? (
-          <h2 className="text-base font-semibold text-slate-900">Export files</h2>
-        ) : (
-          <h1 className="text-2xl font-bold">Export Data</h1>
-        )}
-        {isAdmin && !pinned && events.length > 0 && (
-          <Select
-            value={selectedEventId ? String(selectedEventId) : undefined}
-            onValueChange={(v) => {
-              setLoading(true);
-              setStats(null); // don't show the previous event's numbers
-              setSelectedEventId(Number(v));
-            }}
-          >
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select event..." />
-            </SelectTrigger>
-            <SelectContent>
-              {events.map((ev) => (
-                <SelectItem key={ev.id} value={String(ev.id)}>
-                  {ev.name} ({ev.status})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          {pinned ? (
+            <h2 className="text-base font-semibold text-slate-900">Export files</h2>
+          ) : (
+            <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">Export data</h1>
+          )}
+          {isAdmin && !pinned && events.length > 0 && (
+            <Select
+              value={selectedEventId ? String(selectedEventId) : undefined}
+              onValueChange={(v) => {
+                setLoading(true);
+                setStats(null); // don't show the previous event's numbers
+                setSelectedEventId(Number(v));
+              }}
+            >
+              <SelectTrigger className="w-full bg-white sm:w-56" aria-label="Select event">
+                <SelectValue placeholder="Select event..." />
+              </SelectTrigger>
+              <SelectContent>
+                {events.map((ev) => (
+                  <SelectItem key={ev.id} value={String(ev.id)}>
+                    {ev.name} ({ev.status})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
 
-      <p className="text-sm text-muted-foreground">
-        The four up/down variance files are NetSuite adjustment files: they only include
-        accepted counts and approved serials of resolved serial discrepancies. The All
-        Variances export lists every variance with its review status.
-      </p>
+        <p className="max-w-3xl text-sm text-slate-600">
+          The four up/down variance files are NetSuite adjustment files: they only include
+          accepted counts and approved serials of resolved serial discrepancies. The All
+          Variances export lists every variance with its review status.
+        </p>
+      </div>
 
       {stats && (
-        <Card>
-          <CardContent className="pt-4">
-            <div className="grid grid-cols-4 gap-4 text-center">
-              <div>
-                <div className="text-2xl font-bold">{stats.total.toLocaleString()}</div>
-                <div className="text-xs text-muted-foreground">Total Items</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-primary">
-                  {stats.progressPercent}%
-                </div>
-                <div className="text-xs text-muted-foreground">Completed</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-green-600">
-                  {stats.matched}
-                </div>
-                <div className="text-xs text-muted-foreground">Matched</div>
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-amber-600">
-                  {stats.withVariance}
-                </div>
-                <div className="text-xs text-muted-foreground">Variances</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Total items" value={formatNumber(stats.total)} icon={Package} />
+          <StatCard label="Completed" value={`${stats.progressPercent}%`} hint={`${formatNumber(stats.counted)} counted`} icon={BarChart3} />
+          <StatCard label="Matched" value={formatNumber(stats.matched)} icon={CheckCircle2} tone="positive" />
+          <StatCard
+            label="Variances"
+            value={formatNumber(stats.withVariance)}
+            icon={AlertTriangle}
+            tone={stats.withVariance > 0 ? "warning" : "default"}
+          />
+        </div>
       )}
 
-      {/* Download All as ZIP */}
-      <Button
-        size="lg"
-        className="w-full gap-2"
-        onClick={handleDownloadAll}
-        disabled={zipping}
-      >
-        {zipping ? (
-          <>
-            <Loader2 className="h-5 w-5 animate-spin" />
-            {zipProgress}
-          </>
-        ) : (
-          <>
-            <Archive className="h-5 w-5" />
-            Download All Data (ZIP)
-          </>
-        )}
-      </Button>
-
-      {/* Master Export */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Download className="h-5 w-5" />
-            Master Export
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            All items with count results, variances, team assignments, comments,
-            check status, count type, and serialized flag.
-            Includes unknown and approved serials.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              onClick={() => handleDownload("full", "xlsx")}
-              className="gap-2"
-            >
-              <FileSpreadsheet className="h-4 w-4" />
-              Excel (.xlsx)
-            </Button>
-            <Button
-              onClick={() => handleDownload("full", "csv")}
-              variant="outline"
-              className="gap-2"
-            >
-              <FileText className="h-4 w-4" />
-              CSV
-            </Button>
+      {/* Download all as ZIP */}
+      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
+            <Archive className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-slate-900">Everything in one ZIP</div>
+            <p className="text-sm text-slate-600">Every export below, in Excel and CSV, bundled into a single download.</p>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Variance Exports */}
-      <h2 className="text-lg font-semibold pt-2">Variance Exports</h2>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Non-Serialized Variances UP */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <TrendingUp className="h-5 w-5 text-blue-600" />
-              Non-Serialized Variances UP
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Non-serialized items where counted quantity exceeds on-hand (surplus, accepted only).
-            </p>
-            <ExportButtons type="variances_nonserialized_up" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-
-        {/* Non-Serialized Variances DOWN */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <TrendingDown className="h-5 w-5 text-red-600" />
-              Non-Serialized Variances DOWN
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Non-serialized items where counted quantity is less than on-hand (shortage, accepted only).
-            </p>
-            <ExportButtons type="variances_nonserialized_down" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-
-        {/* Serialized Variances UP */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <div className="relative">
-                <ScanBarcode className="h-5 w-5 text-blue-600" />
-                <TrendingUp className="h-3 w-3 text-blue-600 absolute -bottom-1 -right-1.5" />
-              </div>
-              Serialized Variances UP
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Accepted serialized over-counts plus approved serials from resolved discrepancies.
-            </p>
-            <ExportButtons type="variances_serialized_up" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-
-        {/* Serialized Variances DOWN */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <div className="relative">
-                <ScanBarcode className="h-5 w-5 text-red-600" />
-                <TrendingDown className="h-3 w-3 text-red-600 absolute -bottom-1 -right-1.5" />
-              </div>
-              Serialized Variances DOWN
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Expected serialized items that were not found during the count (accepted only).
-            </p>
-            <ExportButtons type="variances_serialized_down" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
+        </div>
+        <Button className="w-full shrink-0 sm:w-auto" onClick={handleDownloadAll} disabled={zipping}>
+          {zipping ? (
+            <>
+              <Loader2 className="animate-spin" />
+              {zipProgress}
+            </>
+          ) : (
+            <>
+              <Archive />
+              Download all (ZIP)
+            </>
+          )}
+        </Button>
       </div>
 
-      {/* All Variances */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-600" />
-            All Variances
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            All items with discrepancies — serialized and non-serialized, up and
-            down. Includes check status and count type.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              onClick={() => handleDownload("variances_all", "xlsx")}
-              className="gap-2"
-            >
-              <FileSpreadsheet className="h-4 w-4" />
-              Excel (.xlsx)
-            </Button>
-            <Button
-              onClick={() => handleDownload("variances_all", "csv")}
-              variant="outline"
-              className="gap-2"
-            >
-              <FileText className="h-4 w-4" />
-              CSV
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      <ExportGroup heading="Reports" as={SectionHeading}>
+        <ExportRow
+          icon={Download}
+          title="Master export"
+          description="All items with count results, variances, team assignments, comments, check status, count type, and serialized flag. Includes unknown and approved serials."
+          type="full"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={AlertTriangle}
+          title="All variances"
+          description="All items with discrepancies — serialized and non-serialized, up and down. Includes check status and count type."
+          type="variances_all"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={ScanBarcode}
+          title="Serial number report"
+          description="Complete serial number audit — every expected serial with found/not-found status, plus all unknown and approved serials. Includes full item metadata, verification results, and discrepancy resolution details."
+          type="serials"
+          onDownload={handleDownload}
+        />
+      </ExportGroup>
 
-      {/* Serial Export */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ScanBarcode className="h-5 w-5" />
-            Serial Number Report
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Complete serial number audit — every expected serial with found/not-found status,
-            plus all unknown and approved serials. Includes full item metadata, verification
-            results, and discrepancy resolution details.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              onClick={() => handleDownload("serials", "xlsx")}
-              className="gap-2"
-            >
-              <FileSpreadsheet className="h-4 w-4" />
-              Excel (.xlsx)
-            </Button>
-            <Button
-              onClick={() => handleDownload("serials", "csv")}
-              variant="outline"
-              className="gap-2"
-            >
-              <FileText className="h-4 w-4" />
-              CSV
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      <ExportGroup heading="NetSuite variance files" as={SectionHeading}>
+        <ExportRow
+          icon={TrendingUp}
+          title="Non-serialized variances up"
+          description="Non-serialized items where counted quantity exceeds on-hand (surplus, accepted only)."
+          type="variances_nonserialized_up"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={TrendingDown}
+          title="Non-serialized variances down"
+          description="Non-serialized items where counted quantity is less than on-hand (shortage, accepted only)."
+          type="variances_nonserialized_down"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={ScanBarcode}
+          title="Serialized variances up"
+          description="Accepted serialized over-counts plus approved serials from resolved discrepancies."
+          type="variances_serialized_up"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={ScanBarcode}
+          title="Serialized variances down"
+          description="Expected serialized items that were not found during the count (accepted only)."
+          type="variances_serialized_down"
+          onDownload={handleDownload}
+        />
+      </ExportGroup>
 
-      {/* Record-keeping exports */}
-      <h2 className="text-lg font-semibold pt-2">Record Keeping</h2>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Queries */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquare className="h-5 w-5 text-blue-600" />
-              Queries
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              All team-to-supervisor queries with full conversation history,
-              status, and resolution timestamps.
-            </p>
-            <ExportButtons type="queries" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-
-        {/* Breakdowns */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Package className="h-5 w-5 text-purple-600" />
-              Breakdowns
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              All stock movement / breakdown requests with approval status,
-              client names, PO numbers, and conversation history.
-            </p>
-            <ExportButtons type="breakdowns" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-
-        {/* Verification Assignments */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ClipboardCheck className="h-5 w-5 text-emerald-600" />
-              Verification Assignments
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              All recount assignments — original count, verification count,
-              assigned team, status, and completion details.
-            </p>
-            <ExportButtons type="verifications" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-
-        {/* Audit Log */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ScrollText className="h-5 w-5 text-gray-600" />
-              Audit Log
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Complete audit trail of all supervisor actions — edits,
-              approvals, assignments, and status changes with timestamps.
-            </p>
-            <ExportButtons type="audit_log" onDownload={handleDownload} />
-          </CardContent>
-        </Card>
-      </div>
+      <ExportGroup heading="Record keeping" as={SectionHeading}>
+        <ExportRow
+          icon={MessageSquare}
+          title="Queries"
+          description="All team-to-supervisor queries with full conversation history, status, and resolution timestamps."
+          type="queries"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={Package}
+          title="Breakdowns"
+          description="All stock movement / breakdown requests with approval status, client names, PO numbers, and conversation history."
+          type="breakdowns"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={ClipboardCheck}
+          title="Verification assignments"
+          description="All recount assignments — original count, verification count, assigned team, status, and completion details."
+          type="verifications"
+          onDownload={handleDownload}
+        />
+        <ExportRow
+          icon={ScrollText}
+          title="Audit log"
+          description="Complete audit trail of all supervisor actions — edits, approvals, assignments, and status changes with timestamps."
+          type="audit_log"
+          onDownload={handleDownload}
+        />
+      </ExportGroup>
     </div>
+  );
+}
+
+/** A titled list of export rows in one neutral card. */
+function ExportGroup({ heading, as: Heading, children }: { heading: string; as: "h2" | "h3"; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <Heading className="text-base font-semibold text-slate-900">{heading}</Heading>
+      <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">{children}</ul>
+    </section>
+  );
+}
+
+/** One export: what it contains, with Excel and CSV buttons. */
+function ExportRow({
+  icon: Icon,
+  title,
+  description,
+  type,
+  onDownload,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  type: string;
+  onDownload: (type: string, format: string) => void;
+}) {
+  return (
+    <li className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-5">
+      <div className="flex min-w-0 items-start gap-3">
+        <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-slate-900">{title}</div>
+          <p className="mt-0.5 text-sm text-slate-600">{description}</p>
+        </div>
+      </div>
+      <div className="pl-7 sm:pl-0">
+        <ExportButtons type={type} label={title} onDownload={onDownload} />
+      </div>
+    </li>
   );
 }
 
 function ExportButtons({
   type,
+  label,
   onDownload,
 }: {
   type: string;
+  label: string;
   onDownload: (type: string, format: string) => void;
 }) {
   return (
-    <div className="flex gap-2">
+    <div className="flex shrink-0 gap-2">
       <Button
         size="sm"
+        variant="outline"
         onClick={() => onDownload(type, "xlsx")}
-        className="gap-1.5"
+        aria-label={`${label}: download Excel`}
       >
-        <FileSpreadsheet className="h-3.5 w-3.5" />
+        <FileSpreadsheet />
         Excel
       </Button>
       <Button
         size="sm"
         variant="outline"
         onClick={() => onDownload(type, "csv")}
-        className="gap-1.5"
+        aria-label={`${label}: download CSV`}
       >
-        <FileText className="h-3.5 w-3.5" />
+        <FileText />
         CSV
       </Button>
     </div>

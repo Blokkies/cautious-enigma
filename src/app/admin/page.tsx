@@ -25,7 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { downloadAllAsZip } from "@/lib/download-all-zip";
 import { adminRoutes, SETUP_STEP_LABELS, SETUP_STEPS } from "@/lib/admin-routes";
-import { formatMoney, formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber, plural } from "@/lib/format";
 import { PageHeader } from "@/components/admin/page-header";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { StatCard } from "@/components/admin/stat-card";
@@ -390,8 +390,7 @@ function LiveEventCard({ event }: { event: DashboardEvent }) {
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
         <span className="inline-flex items-center gap-1">
           <Users className="h-3.5 w-3.5" aria-hidden="true" />
-          {event.teamCount} {event.teamCount === 1 ? "team" : "teams"}, {event.supervisorCount}{" "}
-          {event.supervisorCount === 1 ? "supervisor" : "supervisors"}
+          {plural(event.teamCount, "team")}, {plural(event.supervisorCount, "supervisor")}
         </span>
         {hasAttention && <span className="text-slate-300" aria-hidden="true">|</span>}
         <Attention icon={MessageSquare} count={event.openQueries} label={event.openQueries === 1 ? "open query" : "open queries"} tone="amber" />
@@ -432,7 +431,7 @@ function SetupEventCard({ event }: { event: DashboardEvent }) {
 
   const detail: Record<(typeof steps)[number], string> = {
     details: "Name and dates",
-    items: counts.itemCount > 0 ? `${formatNumber(counts.itemCount)} items` : "No stock file yet",
+    items: counts.itemCount > 0 ? plural(counts.itemCount, "item") : "No stock file yet",
     warehouses: counts.itemCount > 0 ? "In scope chosen" : "After the stock file",
     people:
       counts.teamCount > 0 || counts.supervisorCount > 0
@@ -443,7 +442,7 @@ function SetupEventCard({ event }: { event: DashboardEvent }) {
         ? "After the stock file"
         : counts.unassignedCount === 0
           ? "All assigned"
-          : `${formatNumber(counts.unassignedCount)} items unassigned`,
+          : `${plural(counts.unassignedCount, "item")} unassigned`,
   };
 
   return (

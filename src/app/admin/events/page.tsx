@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { adminRoutes, SETUP_STEP_LABELS } from "@/lib/admin-routes";
-import { formatDateRange, formatNumber } from "@/lib/format";
+import { formatDateRange, formatNumber, plural } from "@/lib/format";
 import { PageHeader } from "@/components/admin/page-header";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { EmptyState } from "@/components/admin/empty-state";
@@ -163,7 +163,7 @@ function EventsPageBody() {
       ) : (
         <div className="space-y-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div role="radiogroup" aria-label="Filter by status" className="-mx-4 flex gap-1 overflow-x-auto px-4 md:mx-0 md:px-0">
+            <div role="radiogroup" aria-label="Filter by status" className="scrollbar-none -mx-4 flex gap-1 overflow-x-auto px-4 py-0.5 md:mx-0 md:px-0">
               {STATUS_FILTERS.map((f) => {
                 const n = f === "all" ? counts.total : counts[f];
                 const active = status === f;
@@ -284,16 +284,16 @@ function cellInfo(progress: Map<number, DashboardEvent> | null, id: number): Das
 function EventsTable({ events, progress }: { events: EventListItem[]; progress: Map<number, DashboardEvent> | null }) {
   const router = useRouter();
   return (
-    <div className="hidden overflow-hidden rounded-lg border border-slate-200 bg-white md:block">
+    <div className="hidden overflow-x-auto rounded-lg border border-slate-200 bg-white md:block">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-200 bg-slate-50/60 text-left text-xs font-medium text-slate-500">
-            <th scope="col" className="px-4 py-2.5 font-medium">Name</th>
-            <th scope="col" className="hidden px-4 py-2.5 font-medium lg:table-cell">Dates</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
-            <th scope="col" className="px-4 py-2.5 text-right font-medium">Items</th>
-            <th scope="col" className="px-4 py-2.5 text-right font-medium">Teams</th>
-            <th scope="col" className="px-4 py-2.5 font-medium">Progress</th>
+            <th scope="col" className="w-full min-w-[10rem] px-4 py-2.5 font-medium">Name</th>
+            <th scope="col" className="hidden whitespace-nowrap px-4 py-2.5 font-medium xl:table-cell">Dates</th>
+            <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Status</th>
+            <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-right font-medium">Items</th>
+            <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-right font-medium">Teams</th>
+            <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Progress</th>
             <th scope="col" className="w-8 px-2 py-2.5"><span className="sr-only">Open</span></th>
           </tr>
         </thead>
@@ -311,22 +311,24 @@ function EventsTable({ events, progress }: { events: EventListItem[]; progress: 
                 }}
                 className="group cursor-pointer transition-colors hover:bg-slate-50"
               >
-                <td className="max-w-0 px-4 py-3">
+                {/* Name takes the spare width and wraps (max two lines) only when it really runs out of room. */}
+                <td className="min-w-[10rem] px-4 py-3">
                   <Link
                     href={href}
-                    className="block truncate rounded font-medium text-slate-900 group-hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title={e.name}
+                    className="line-clamp-2 break-words rounded font-medium text-slate-900 group-hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {e.name}
                   </Link>
-                  <div className="truncate text-xs text-slate-500">
+                  <div className="line-clamp-1 break-words text-xs text-slate-500">
                     {e.location || <span className="text-slate-400">No location</span>}
-                    <span className="lg:hidden">{dates && `, ${dates}`}</span>
+                    <span className="xl:hidden">{dates && `, ${dates}`}</span>
                   </div>
                 </td>
-                <td className="hidden whitespace-nowrap px-4 py-3 text-slate-600 lg:table-cell">{dates || <span className="text-slate-400">Not set</span>}</td>
-                <td className="px-4 py-3"><StatusBadge status={e.status} size="sm" /></td>
-                <td className="px-4 py-3 text-right tabular-nums text-slate-700">{formatNumber(e.totalItemCount)}</td>
-                <td className="px-4 py-3 text-right tabular-nums text-slate-700">{formatNumber(e.teamCount)}</td>
+                <td className="hidden whitespace-nowrap px-4 py-3 text-slate-600 xl:table-cell">{dates || <span className="text-slate-400">Not set</span>}</td>
+                <td className="whitespace-nowrap px-4 py-3"><StatusBadge status={e.status} size="sm" /></td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-700">{formatNumber(e.totalItemCount)}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-700">{formatNumber(e.teamCount)}</td>
                 <td className="whitespace-nowrap px-4 py-3"><ProgressCell event={e} info={cellInfo(progress, e.id)} /></td>
                 <td className="px-2 py-3 text-slate-300 group-hover:text-slate-500"><ChevronRight className="h-4 w-4" aria-hidden="true" /></td>
               </tr>
@@ -351,14 +353,14 @@ function EventsCards({ events, progress }: { events: EventListItem[]; progress: 
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate font-medium text-slate-900">{e.name}</div>
+                  <div className="line-clamp-2 break-words font-medium text-slate-900">{e.name}</div>
                   <div className="truncate text-xs text-slate-500">{[e.location, dates].filter(Boolean).join(", ") || "No location or dates"}</div>
                 </div>
                 <StatusBadge status={e.status} size="sm" />
               </div>
               <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
                 <span className="tabular-nums">
-                  {formatNumber(e.totalItemCount)} items, {e.teamCount} {e.teamCount === 1 ? "team" : "teams"}
+                  {plural(e.totalItemCount, "item")}, {plural(e.teamCount, "team")}
                 </span>
                 <ProgressCell event={e} info={cellInfo(progress, e.id)} />
               </div>

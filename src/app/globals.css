@@ -46,6 +46,14 @@
   .touch-target {
     @apply min-h-[44px] min-w-[44px];
   }
+  /* Scrollable but without a visible scrollbar (tab bars, step strips). */
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* PWA safe areas */

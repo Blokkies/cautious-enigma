@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
-import { formatMoney, formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber, plural } from "@/lib/format";
 import { useAdminEvent } from "../event-context";
 import { statusMeta } from "../status";
 import { ListSkeleton } from "../loading-state";
@@ -163,8 +163,8 @@ export function WarehousesPanel({
                   <span className={cn("min-w-0 flex-1 truncate text-sm font-medium", on ? "text-slate-900" : "text-slate-500")}>
                     {w.warehouse}
                   </span>
-                  <span className="hidden text-xs tabular-nums text-slate-500 sm:inline">{formatNumber(w.binCount)} bins</span>
-                  <span className="w-24 text-right text-xs tabular-nums text-slate-500">{formatNumber(w.itemCount)} items</span>
+                  <span className="hidden text-xs tabular-nums text-slate-500 sm:inline">{plural(w.binCount, "bin")}</span>
+                  <span className="w-24 text-right text-xs tabular-nums text-slate-500">{plural(w.itemCount, "item")}</span>
                   <span className="hidden w-28 text-right text-xs tabular-nums text-slate-500 sm:inline">
                     {formatMoney(w.totalValue, { decimals: 0 })}
                   </span>

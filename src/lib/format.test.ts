@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatDateRange, formatMoney, formatNumber } from "./format";
+import { formatDate, formatDateRange, formatMoney, formatNumber, plural, pluralWord } from "./format";
 
 describe("formatNumber", () => {
   it.each([
@@ -48,5 +48,27 @@ describe("formatDate / formatDateRange", () => {
     expect(formatDateRange("2026-11-03", null)).toBe("From 3 Nov 2026");
     expect(formatDateRange(null, "2026-11-05")).toBe("Until 5 Nov 2026");
     expect(formatDateRange(null, null)).toBe("");
+  });
+});
+
+describe("plural", () => {
+  it.each([
+    [0, "item", undefined, "0 items"],
+    [1, "item", undefined, "1 item"],
+    [2, "bin", undefined, "2 bins"],
+    [1234, "item", undefined, "1 234 items"],
+    [1, "query", "queries", "1 query"],
+    [3, "query", "queries", "3 queries"],
+    [NaN, "team", undefined, "0 teams"],
+    [null, "team", undefined, "0 teams"],
+    [-1, "item", undefined, "-1 items"],
+  ] as const)("%s %s -> %s", (n, singular, pluralForm, expected) => {
+    expect(plural(n, singular, pluralForm)).toBe(expected);
+  });
+
+  it("pluralWord returns only the noun", () => {
+    expect(pluralWord(1, "bin")).toBe("bin");
+    expect(pluralWord(0, "bin")).toBe("bins");
+    expect(pluralWord(5, "person", "people")).toBe("people");
   });
 });

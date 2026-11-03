@@ -1,10 +1,7 @@
 "use client";
 
-
 import React, { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -17,8 +14,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   Package,
-  DollarSign,
-  Users,
+  Wallet,
+  Scale,
   BarChart3,
   TrendingUp,
   TrendingDown,
@@ -27,6 +24,13 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { groupSerializedVariances } from "@/lib/variance-grouping";
+import { formatDateRange, formatMoney, formatNumber, plural } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { StatCard } from "@/components/admin/stat-card";
+import { StatusBadge } from "@/components/admin/status-badge";
+import { LoadingState } from "@/components/admin/loading-state";
+import { EmptyState } from "@/components/admin/empty-state";
+import { PanelSection } from "@/components/admin/panels/panel-section";
 
 interface DashboardData {
   event: {
@@ -143,38 +147,37 @@ export function CompletedDashboardContent({ eventId }: { eventId?: string } = {}
   }, [selectedEventId]);
 
   if (loading) {
-    return (
-      <div className="text-center py-12 text-muted-foreground">
-        Loading dashboard...
-      </div>
-    );
+    return <LoadingState label="Loading results…" />;
   }
 
   if (!data) {
     return (
-      <div className="text-center py-12 text-muted-foreground">
-        No data available
-      </div>
+      <EmptyState
+        icon={BarChart3}
+        title="No results available"
+        description="There is no count data for this stocktake yet."
+      />
     );
   }
 
   const { event, summary, teamResults, topVariances } = data;
+  const dates = formatDateRange(event.startDate, event.endDate);
+  const net = summary.netVarianceValue;
 
   return (
     <div className="space-y-6 pb-8">
-      {/* Event Header (the admin workspace shows its own header when pinned) */}
+      {/* Event header (the admin workspace shows its own header when pinned) */}
       {!pinned && (
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">{event.name}</h1>
-          <p className="text-muted-foreground">
-            {event.location && `${event.location} · `}
-            {event.startDate && event.endDate
-              ? `${event.startDate} to ${event.endDate}`
-              : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <h1 className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
+              <span className="break-words">{event.name}</span>
+              <StatusBadge status={event.status} />
+            </h1>
+            {(event.location || dates) && (
+              <p className="text-sm text-slate-500">{[event.location, dates].filter(Boolean).join(" · ")}</p>
+            )}
+          </div>
           {isAdmin && !pinned && events.length > 1 && (
             <Select
               value={selectedEventId || String(event.id)}
@@ -186,7 +189,7 @@ export function CompletedDashboardContent({ eventId }: { eventId?: string } = {}
                 window.history.replaceState(null, "", url);
               }}
             >
-              <SelectTrigger className="w-56">
+              <SelectTrigger className="w-full bg-white sm:w-56" aria-label="Switch event">
                 <SelectValue placeholder="Switch event..." />
               </SelectTrigger>
               <SelectContent>
@@ -198,196 +201,161 @@ export function CompletedDashboardContent({ eventId }: { eventId?: string } = {}
               </SelectContent>
             </Select>
           )}
-          <Badge
-            className={
-              event.status === "completed"
-                ? "bg-green-100 text-green-800"
-                : event.status === "locked"
-                ? "bg-gray-100 text-gray-800"
-                : "bg-blue-100 text-blue-800"
-            }
-          >
-            {event.status}
-          </Badge>
-        </div>
-      </div>
+        </header>
       )}
 
-      {/* Completion Overview */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2">
-            <BarChart3 className="h-5 w-5" />
-            Overall Summary
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>Completion</span>
-              <span className="font-medium">
-                {summary.completionPercent}% ({summary.totalCounted.toLocaleString()}{" "}
-                / {summary.totalItems.toLocaleString()})
-              </span>
-            </div>
-            <Progress value={summary.completionPercent} className="h-3" />
+      {/* Overall summary */}
+      <section className="space-y-3" aria-labelledby="results-summary-heading">
+        <h2 id="results-summary-heading" className="text-base font-semibold text-slate-900">
+          Overall summary
+        </h2>
+        <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-5">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className="text-3xl font-semibold tabular-nums tracking-tight text-slate-900">
+              {summary.completionPercent}%
+            </span>
+            <span className="text-sm tabular-nums text-slate-500">
+              {formatNumber(summary.totalCounted)} of {plural(summary.totalItems, "item")} counted
+            </span>
           </div>
+          <Progress value={summary.completionPercent} className="mt-3 h-2" aria-label={`${summary.completionPercent}% counted`} />
+        </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div className="text-center p-3 bg-green-50 rounded-lg">
-              <CheckCircle2 className="h-5 w-5 mx-auto mb-1 text-green-600" />
-              <div className="text-2xl font-bold text-green-700">
-                {summary.matched.toLocaleString()}
-              </div>
-              <div className="text-xs text-green-600">
-                Matched ({summary.matchPercent}%)
-              </div>
-            </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard
+            label="Matched"
+            value={formatNumber(summary.matched)}
+            hint={`${summary.matchPercent}% of counted items`}
+            icon={CheckCircle2}
+            tone="positive"
+          />
+          <StatCard
+            label="Variances"
+            value={formatNumber(summary.variances)}
+            icon={AlertTriangle}
+            tone={summary.variances > 0 ? "warning" : "default"}
+          />
+          <StatCard label="Uncounted" value={formatNumber(summary.uncounted)} icon={Package} />
+          <StatCard
+            label="Total stock value"
+            value={formatMoney(summary.totalStockValue, { decimals: 0 })}
+            hint={formatMoney(summary.totalStockValue)}
+            icon={Wallet}
+          />
+        </div>
 
-            <div className="text-center p-3 bg-amber-50 rounded-lg">
-              <AlertTriangle className="h-5 w-5 mx-auto mb-1 text-amber-600" />
-              <div className="text-2xl font-bold text-amber-700">
-                {summary.variances.toLocaleString()}
-              </div>
-              <div className="text-xs text-amber-600">Variances</div>
-            </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <StatCard
+            label="Over (surplus)"
+            value={formatMoney(summary.overValue, { decimals: 0 })}
+            hint={`${plural(summary.overCount, "item")} over`}
+            icon={TrendingUp}
+            tone={summary.overCount > 0 ? "warning" : "default"}
+          />
+          <StatCard
+            label="Under (shortage)"
+            value={formatMoney(summary.underValue, { decimals: 0 })}
+            hint={`${plural(summary.underCount, "item")} under`}
+            icon={TrendingDown}
+            tone={summary.underCount > 0 ? "negative" : "default"}
+          />
+          <StatCard
+            label="Net variance"
+            value={formatMoney(net, { decimals: 0, signed: true })}
+            hint={`${summary.variancePercent}% of stock value`}
+            icon={Scale}
+            tone={net < 0 ? "negative" : net > 0 ? "warning" : "default"}
+          />
+        </div>
+      </section>
 
-            <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <Package className="h-5 w-5 mx-auto mb-1 text-gray-500" />
-              <div className="text-2xl font-bold text-gray-700">
-                {summary.uncounted.toLocaleString()}
-              </div>
-              <div className="text-xs text-gray-500">Uncounted</div>
-            </div>
-          </div>
-
-          {/* Variance breakdown */}
-          <div className="grid grid-cols-3 gap-4 pt-2">
-            <div className="text-center p-3 bg-amber-50 rounded-lg">
-              <TrendingUp className="h-4 w-4 mx-auto mb-1 text-amber-600" />
-              <div className="text-lg font-bold text-amber-700">
-                R{summary.overValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </div>
-              <div className="text-xs text-amber-600">
-                {summary.overCount} items over
-              </div>
-            </div>
-
-            <div className="text-center p-3 bg-red-50 rounded-lg">
-              <TrendingDown className="h-4 w-4 mx-auto mb-1 text-red-600" />
-              <div className="text-lg font-bold text-red-700">
-                R{summary.underValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </div>
-              <div className="text-xs text-red-600">
-                {summary.underCount} items under
-              </div>
-            </div>
-
-            <div className={`text-center p-3 rounded-lg ${summary.netVarianceValue >= 0 ? "bg-green-50" : "bg-red-50"}`}>
-              <DollarSign className={`h-4 w-4 mx-auto mb-1 ${summary.netVarianceValue >= 0 ? "text-green-600" : "text-red-600"}`} />
-              <div className={`text-lg font-bold ${summary.netVarianceValue >= 0 ? "text-green-700" : "text-red-700"}`}>
-                {summary.netVarianceValue >= 0 ? "" : "-"}R{Math.abs(summary.netVarianceValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </div>
-              <div className={`text-xs ${summary.netVarianceValue >= 0 ? "text-green-600" : "text-red-600"}`}>
-                Net ({summary.variancePercent}% of stock)
-              </div>
-            </div>
-          </div>
-
-          <div className="text-center pt-2 border-t text-sm text-muted-foreground">
-            Total Stock Value: R{summary.totalStockValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Team Results */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Team Results
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      {/* Team results */}
+      <PanelSection title="Team results" bodyClassName="p-0 sm:p-0 pt-3 sm:pt-3">
+        {teamResults.length === 0 ? (
+          <p className="px-4 pb-4 text-sm text-slate-500 sm:px-5">No teams in this stocktake.</p>
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[600px]">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
-                <tr className="border-b text-left">
-                  <th className="px-3 pb-3 font-medium">Team</th>
-                  <th className="px-3 pb-3 font-medium text-right">Items</th>
-                  <th className="px-3 pb-3 font-medium text-right">Counted</th>
-                  <th className="px-3 pb-3 font-medium text-right">Matched</th>
-                  <th className="px-3 pb-3 font-medium text-right">Variances</th>
-                  <th className="px-3 pb-3 font-medium text-right">Variance Value</th>
-                  <th className="px-3 pb-3 font-medium text-center">Done</th>
+                <tr className="border-y border-slate-200 bg-slate-50/60 text-left text-xs font-medium text-slate-500">
+                  <th scope="col" className="px-4 py-2.5 font-medium sm:pl-5">Team</th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Items</th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Counted</th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Matched</th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Variances</th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Variance value</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-right font-medium sm:pr-5">Done</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {teamResults
                   .sort((a, b) => b.completionPercent - a.completionPercent)
                   .map((team) => (
-                    <tr key={team.id} className="border-b last:border-b-0">
-                      <td className="px-3 py-3">
-                        <div className="font-medium">{team.name}</div>
-                        <div className="text-xs text-muted-foreground">
+                    <tr key={team.id}>
+                      <td className="px-4 py-3 sm:pl-5">
+                        <div className="font-medium text-slate-900">{team.name}</div>
+                        <div className="text-xs text-slate-500">
                           {(() => { try { return team.members ? (JSON.parse(team.members) as string[]).join(", ") : ""; } catch { return ""; } })()}
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">{team.total.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">{team.counted.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap text-green-600">
-                        {team.matched.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
+                      <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-slate-700">{formatNumber(team.total)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-slate-700">{formatNumber(team.counted)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums text-emerald-700">{formatNumber(team.matched)}</td>
+                      <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">
                         {team.variances > 0 ? (
-                          <span className="text-amber-600 font-medium">
-                            {team.variances.toLocaleString()}
-                          </span>
+                          <span className="font-medium text-amber-700">{formatNumber(team.variances)}</span>
                         ) : (
-                          <span className="text-green-600">0</span>
+                          <span className="text-slate-500">0</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
+                      <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">
                         {team.varianceValue > 0 ? (
                           <div>
-                            <span className="text-red-600 font-medium">
-                              R{team.varianceValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                            <div className="text-[10px] text-muted-foreground">
-                              <span className="text-amber-600">{team.overCount} over</span>
+                            <span className="font-medium text-red-700">{formatMoney(team.varianceValue)}</span>
+                            <div className="text-[11px] text-slate-500">
+                              <span className="text-amber-700">{formatNumber(team.overCount)} over</span>
                               {" · "}
-                              <span className="text-red-600">{team.underCount} under</span>
+                              <span className="text-red-700">{formatNumber(team.underCount)} under</span>
                             </div>
                           </div>
                         ) : (
-                          <span className="text-green-600">R0.00</span>
+                          <span className="text-slate-500">{formatMoney(0)}</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-center">
-                        <Badge
-                          variant={team.completionPercent === 100 ? "default" : "secondary"}
-                          className={
+                      <td className="whitespace-nowrap px-4 py-3 text-right sm:pr-5">
+                        <span
+                          className={cn(
+                            "inline-flex rounded-full px-2 py-0.5 text-xs font-medium tabular-nums ring-1 ring-inset",
                             team.completionPercent === 100
-                              ? "bg-green-100 text-green-800"
-                              : ""
-                          }
+                              ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                              : "bg-slate-50 text-slate-700 ring-slate-200"
+                          )}
                         >
                           {team.completionPercent}%
-                        </Badge>
+                        </span>
                       </td>
                     </tr>
                   ))}
               </tbody>
             </table>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </PanelSection>
 
-      {/* Top Variances */}
+      {/* Top variances */}
       {topVariances.length > 0 && (
         <TopVariancesTable topVariances={topVariances} />
       )}
     </div>
+  );
+}
+
+function SignedQty({ value }: { value: number }) {
+  return (
+    <span className={cn("text-xs font-medium tabular-nums", value < 0 ? "text-red-700" : "text-amber-700")}>
+      {value > 0 ? "+" : ""}
+      {formatNumber(value, Number.isInteger(value) ? 0 : 2)}
+    </span>
   );
 }
 
@@ -425,124 +393,115 @@ function TopVariancesTable({ topVariances }: { topVariances: DashboardData["topV
   };
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2">
-          <TrendingDown className="h-5 w-5" />
-          Top Variances (by value)
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="divide-y">
-          {displayRows.map((row, rowIdx) => {
-            if (row.type === "single") {
-              const v = row.item;
-              return (
-                <div key={rowIdx} className="py-3 flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-sm font-medium">{v.itemCode}</span>
-                      {v.serialNumber && (
-                        <span className="text-[10px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded font-mono">
-                          S/N: {v.serialNumber}
-                        </span>
-                      )}
-                    </div>
-                    {v.description && (
-                      <div className="text-xs text-muted-foreground truncate mt-0.5">{v.description}</div>
-                    )}
-                    <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                      {v.binNumber && <span>Bin: {v.binNumber}</span>}
-                      <span>{v.onHand} on hand → {v.countedQty} counted</span>
-                      <span>{v.teamName}</span>
-                    </div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <div className="text-sm font-semibold text-red-600">
-                      R{Math.abs(v.varianceValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                    <span className={`text-xs font-medium ${v.variance < 0 ? "text-red-600" : "text-amber-600"}`}>
-                      {v.variance > 0 ? "+" : ""}{v.variance}
-                    </span>
-                  </div>
-                </div>
-              );
-            }
-
-            // Serialized group
-            const groupKey = `${row.itemCode}::${row.binNumber || ""}`;
-            const isExpanded = expandedGroups.has(groupKey);
-
+    <PanelSection
+      title="Top variances"
+      description="The largest differences by value."
+      bodyClassName="px-0 pb-1 pt-2 sm:px-0 sm:pb-1 sm:pt-2"
+    >
+      <div className="divide-y divide-slate-100 border-t border-slate-200">
+        {displayRows.map((row, rowIdx) => {
+          if (row.type === "single") {
+            const v = row.item;
             return (
-              <div key={groupKey}>
-                <div
-                  className="py-3 flex items-start justify-between gap-3 cursor-pointer bg-purple-50/40 hover:bg-purple-50/80 -mx-6 px-6"
-                  onClick={() => toggleGroup(groupKey)}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {isExpanded ? (
-                        <ChevronDown className="h-4 w-4 text-purple-600 flex-shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-purple-600 flex-shrink-0" />
-                      )}
-                      <span className="font-mono text-sm font-medium">{row.itemCode}</span>
-                      <span className="text-[10px] bg-purple-100 text-purple-800 border border-purple-300 px-1.5 py-0.5 rounded">
-                        {row.items.length} serials
+              <div key={rowIdx} className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="break-all font-mono text-sm font-medium text-slate-900">{v.itemCode}</span>
+                    {v.serialNumber && (
+                      <span className="break-all rounded bg-purple-50 px-1.5 py-0.5 font-mono text-[10px] text-purple-700">
+                        S/N: {v.serialNumber}
                       </span>
-                    </div>
-                    {row.description && (
-                      <div className="text-xs text-muted-foreground truncate mt-0.5 ml-6">{row.description}</div>
                     )}
-                    <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground ml-6">
-                      {row.binNumber && <span>Bin: {row.binNumber}</span>}
-                      <span>{row.totalOnHand} on hand → {row.totalCounted} counted</span>
-                      <span>{row.teamName}</span>
-                    </div>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <div className="text-sm font-semibold text-red-600">
-                      R{Math.abs(row.totalVarianceValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                    <span className={`text-xs font-medium ${row.totalVariance < 0 ? "text-red-600" : "text-amber-600"}`}>
-                      {row.totalVariance > 0 ? "+" : ""}{row.totalVariance}
-                    </span>
+                  {v.description && (
+                    <div className="mt-0.5 truncate text-xs text-slate-500">{v.description}</div>
+                  )}
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                    {v.binNumber && <span>Bin: {v.binNumber}</span>}
+                    <span className="tabular-nums">{v.onHand} on hand → {v.countedQty} counted</span>
+                    <span>{v.teamName}</span>
                   </div>
                 </div>
-                {isExpanded && (
-                  <div className="ml-6 divide-y">
-                    {row.items.map((v, subIdx) => (
-                      <div key={`${groupKey}-${subIdx}`} className="py-2 flex items-center justify-between gap-3 pl-4">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {v.serialNumber ? (
-                            <span className="text-[10px] text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded font-mono">
-                              S/N: {v.serialNumber}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground">No S/N</span>
-                          )}
-                          <span className="text-xs text-muted-foreground">
-                            {v.countedQty > 0 ? "Found" : "Not found"}
-                          </span>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <span className={`text-xs font-medium ${v.variance < 0 ? "text-red-600" : "text-amber-600"}`}>
-                            {v.variance > 0 ? "+" : ""}{v.variance}
-                          </span>
-                          <span className="text-xs text-muted-foreground ml-2">
-                            R{Math.abs(v.varianceValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
+                <div className="shrink-0 text-right">
+                  <div className="text-sm font-semibold tabular-nums text-red-700">
+                    {formatMoney(Math.abs(v.varianceValue))}
                   </div>
-                )}
+                  <SignedQty value={v.variance} />
+                </div>
               </div>
             );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+          }
+
+          // Serialized group
+          const groupKey = `${row.itemCode}::${row.binNumber || ""}`;
+          const isExpanded = expandedGroups.has(groupKey);
+
+          return (
+            <div key={groupKey}>
+              <button
+                type="button"
+                aria-expanded={isExpanded}
+                className="flex w-full items-start justify-between gap-3 bg-purple-50/40 px-4 py-3 text-left transition-colors hover:bg-purple-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                onClick={() => toggleGroup(groupKey)}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isExpanded ? (
+                      <ChevronDown className="h-4 w-4 shrink-0 text-purple-600" aria-hidden="true" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 shrink-0 text-purple-600" aria-hidden="true" />
+                    )}
+                    <span className="break-all font-mono text-sm font-medium text-slate-900">{row.itemCode}</span>
+                    <span className="rounded border border-purple-300 bg-purple-100 px-1.5 py-0.5 text-[10px] text-purple-800">
+                      {plural(row.items.length, "serial")}
+                    </span>
+                  </div>
+                  {row.description && (
+                    <div className="ml-6 mt-0.5 truncate text-xs text-slate-500">{row.description}</div>
+                  )}
+                  <div className="ml-6 mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                    {row.binNumber && <span>Bin: {row.binNumber}</span>}
+                    <span className="tabular-nums">{row.totalOnHand} on hand → {row.totalCounted} counted</span>
+                    <span>{row.teamName}</span>
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-sm font-semibold tabular-nums text-red-700">
+                    {formatMoney(Math.abs(row.totalVarianceValue))}
+                  </div>
+                  <SignedQty value={row.totalVariance} />
+                </div>
+              </button>
+              {isExpanded && (
+                <div className="ml-6 divide-y divide-slate-100">
+                  {row.items.map((v, subIdx) => (
+                    <div key={`${groupKey}-${subIdx}`} className="flex items-center justify-between gap-3 py-2 pl-4 pr-4 sm:pr-5">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {v.serialNumber ? (
+                          <span className="break-all rounded bg-purple-50 px-1.5 py-0.5 font-mono text-[10px] text-purple-700">
+                            S/N: {v.serialNumber}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500">No S/N</span>
+                        )}
+                        <span className="text-xs text-slate-500">
+                          {v.countedQty > 0 ? "Found" : "Not found"}
+                        </span>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <SignedQty value={v.variance} />
+                        <span className="ml-2 text-xs tabular-nums text-slate-500">
+                          {formatMoney(Math.abs(v.varianceValue))}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </PanelSection>
   );
 }
-
